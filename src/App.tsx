@@ -1,0 +1,664 @@
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import {
+  AlertCircle,
+  Bot,
+  Check,
+  ChevronRight,
+  CircleStop,
+  Clock3,
+  Cpu,
+  Eye,
+  EyeOff,
+  Globe2,
+  KeyRound,
+  LoaderCircle,
+  Play,
+  Save,
+  Server,
+  Settings2,
+  TerminalSquare,
+  TestTubeDiagonal,
+  X,
+} from "lucide-react";
+import { api, type ModelSettings, type RunEvent, type RunStatus } from "./api";
+import { buildTimelineItems, type TimelineItem } from "./run-events";
+
+type PageName = "run" | "settings";
+type Notice = { kind: "success" | "error"; message: string } | null;
+
+interface ProviderPreset {
+  id: string;
+  name: string;
+  apiType: ModelSettings["apiType"];
+  baseUrl: string;
+  modelPlaceholder: string;
+}
+
+const PROVIDERS: ProviderPreset[] = [
+  {
+    id: "openai",
+    name: "OpenAI",
+    apiType: "openai-responses",
+    baseUrl: "https://api.openai.com/v1",
+    modelPlaceholder: "例如 gpt-5.4",
+  },
+  {
+    id: "deepseek",
+    name: "DeepSeek",
+    apiType: "openai-completions",
+    baseUrl: "https://api.deepseek.com",
+    modelPlaceholder: "例如 deepseek-chat",
+  },
+  {
+    id: "openrouter",
+    name: "OpenRouter",
+    apiType: "openai-completions",
+    baseUrl: "https://openrouter.ai/api/v1",
+    modelPlaceholder: "例如 openai/gpt-5.4",
+  },
+  {
+    id: "anthropic",
+    name: "Anthropic",
+    apiType: "anthropic-messages",
+    baseUrl: "https://api.anthropic.com",
+    modelPlaceholder: "例如 claude-sonnet-4-6",
+  },
+  {
+    id: "google",
+    name: "Google Gemini",
+    apiType: "google-generative-ai",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+    modelPlaceholder: "例如 gemini-3-flash",
+  },
+  {
+    id: "custom",
+    name: "自定义兼容接口",
+    apiType: "openai-completions",
+    baseUrl: "http://127.0.0.1:8000/v1",
+    modelPlaceholder: "输入接口支持的模型 ID",
+  },
+];
+
+const TOOL_LABELS: Record<string, string> = {
+  browser_open: "打开页面",
+  browser_inspect: "读取页面",
+  browser_click: "点击元素",
+  browser_fill: "填写内容",
+  browser_select: "选择选项",
+  browser_press: "发送按键",
+  browser_wait: "等待页面",
+  browser_screenshot: "保存截图",
+  finish_test: "提交结论",
+};
+
+const STATUS_LABELS: Record<RunStatus, string> = {
+  queued: "等待执行",
+  running: "执行中",
+  completed: "已完成",
+  failed: "执行失败",
+  cancelled: "已取消",
+};
+
+function readPage(): PageName {
+  return window.location.hash === "#settings" ? "settings" : "run";
+}
+
+function formatTime(value: string): string {
+  return new Intl.DateTimeFormat("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(new Date(value));
+}
+
+function App() {
+  const [page, setPage] = useState<PageName>(readPage);
+  const [settings, setSettings] = useState<ModelSettings | null>(null);
+  const [settingsError, setSettingsError] = useState("");
+
+  useEffect(() => {
+    const onHashChange = () => setPage(readPage());
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+
+  const refreshSettings = async () => {
+    try {
+      setSettingsError("");
+      setSettings(await api.getSettings());
+    } catch (error) {
+      setSettingsError(error instanceof Error ? error.message : "读取配置失败");
+    }
+  };
+
+  useEffect(() => {
+    void refreshSettings();
+  }, []);
+
+  const navigate = (target: PageName) => {
+    window.location.hash = target === "settings" ? "settings" : "";
+    setPage(target);
+  };
+
+  return (
+    <div className="app-shell">
+      <aside className="sidebar">
+        <div className="brand">
+          <span className="brand-mark" aria-hidden="true">
+            <TestTubeDiagonal size={20} strokeWidth={2} />
+          </span>
+          <span className="brand-name">AI Test Runner</span>
+        </div>
+
+        <nav className="nav-list" aria-label="主导航">
+          <button className={`nav-item ${page === "run" ? "active" : ""}`} onClick={() => navigate("run")}>
+            <Play size={18} />
+            <span>执行用例</span>
+            {page === "run" && <ChevronRight className="nav-chevron" size={16} />}
+          </button>
+          <button className={`nav-item ${page === "settings" ? "active" : ""}`} onClick={() => navigate("settings")}>
+            <Settings2 size={18} />
+            <span>模型设置</span>
+            {page === "settings" && <ChevronRight className="nav-chevron" size={16} />}
+          </button>
+        </nav>
+
+        <div className="sidebar-status">
+          <div className={`connection-dot ${settings?.configured ? "ready" : ""}`} />
+          <div>
+            <span className="sidebar-status-label">模型连接</span>
+            <strong>{settings?.configured ? settings.model : settingsError ? "服务异常" : "未配置"}</strong>
+          </div>
+        </div>
+      </aside>
+
+      <main className="main-content">
+        {page === "run" ? (
+          <RunPage settings={settings} onOpenSettings={() => navigate("settings")} />
+        ) : (
+          <SettingsPage initialSettings={settings} onSaved={refreshSettings} />
+        )}
+      </main>
+    </div>
+  );
+}
+
+function PageHeader({ icon, title, status }: { icon: React.ReactNode; title: string; status?: React.ReactNode }) {
+  return (
+    <header className="page-header">
+      <div className="page-title">
+        <span className="page-icon">{icon}</span>
+        <h1>{title}</h1>
+      </div>
+      {status}
+    </header>
+  );
+}
+
+function RunPage({ settings, onOpenSettings }: { settings: ModelSettings | null; onOpenSettings: () => void }) {
+  const [requirement, setRequirement] = useState("");
+  const [runId, setRunId] = useState<string | null>(null);
+  const [runStatus, setRunStatus] = useState<RunStatus | null>(null);
+  const [events, setEvents] = useState<RunEvent[]>([]);
+  const [notice, setNotice] = useState<Notice>(null);
+  const eventSourceRef = useRef<EventSource | null>(null);
+  const logEndRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    return () => eventSourceRef.current?.close();
+  }, []);
+
+  useEffect(() => {
+    logEndRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [events.length]);
+
+  const result = [...events].reverse().find((event) => event.type === "result");
+  const assistantText = events
+    .filter((event) => event.type === "assistant_delta")
+    .map((event) => event.message || "")
+    .join("");
+  const isActive = runStatus === "queued" || runStatus === "running";
+  const visibleEvents = useMemo(() => buildTimelineItems(events, isActive), [events, isActive]);
+
+  const connectEvents = (id: string) => {
+    eventSourceRef.current?.close();
+    const source = new EventSource(`/api/runs/${id}/events`);
+    eventSourceRef.current = source;
+    source.onmessage = (message) => {
+      const event = JSON.parse(message.data) as RunEvent;
+      setEvents((current) => (current.some((item) => item.id === event.id) ? current : [...current, event]));
+      if (event.type === "run_state" && event.status) {
+        setRunStatus(event.status);
+        if (["completed", "failed", "cancelled"].includes(event.status)) source.close();
+      }
+    };
+    source.onerror = () => {
+      if (runStatus === "running" || runStatus === "queued") {
+        setNotice({ kind: "error", message: "执行事件连接已中断" });
+      }
+    };
+  };
+
+  const execute = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!settings?.configured) {
+      setNotice({ kind: "error", message: "请先完成模型配置" });
+      return;
+    }
+    if (!requirement.trim()) {
+      setNotice({ kind: "error", message: "请输入测试需求" });
+      return;
+    }
+
+    try {
+      setNotice(null);
+      setEvents([]);
+      setRunStatus("queued");
+      const run = await api.createRun(requirement);
+      setRunId(run.id);
+      connectEvents(run.id);
+    } catch (error) {
+      setRunStatus(null);
+      setNotice({ kind: "error", message: error instanceof Error ? error.message : "创建任务失败" });
+    }
+  };
+
+  const cancel = async () => {
+    if (!runId) return;
+    try {
+      await api.cancelRun(runId);
+      setNotice(null);
+    } catch (error) {
+      setNotice({ kind: "error", message: error instanceof Error ? error.message : "取消失败" });
+    }
+  };
+
+  return (
+    <div className="page run-page">
+      <PageHeader
+        icon={<TerminalSquare size={19} />}
+        title="执行用例"
+        status={
+          <div className={`run-status ${runStatus || "idle"}`}>
+            {runStatus === "running" && <LoaderCircle className="spin" size={15} />}
+            {!runStatus && <span className="status-dot" />}
+            <span>{runStatus ? STATUS_LABELS[runStatus] : "就绪"}</span>
+          </div>
+        }
+      />
+
+      {!settings?.configured && (
+        <div className="configuration-alert">
+          <AlertCircle size={18} />
+          <span>模型尚未配置</span>
+          <button onClick={onOpenSettings}>前往设置</button>
+        </div>
+      )}
+
+      {notice && <InlineNotice notice={notice} onClose={() => setNotice(null)} />}
+
+      <div className="run-workspace">
+        <section className="request-pane" aria-labelledby="request-heading">
+          <div className="section-heading">
+            <div>
+              <span className="section-index">01</span>
+              <h2 id="request-heading">测试需求</h2>
+            </div>
+            <span className="model-indicator">
+              <Cpu size={14} />
+              {settings?.configured ? settings.model : "未配置模型"}
+            </span>
+          </div>
+
+          <form className="request-form" onSubmit={execute}>
+            <textarea
+              value={requirement}
+              onChange={(event) => setRequirement(event.target.value)}
+              disabled={isActive}
+              placeholder="访问 http://192.168.1.1，登录设备管理页面，进入系统状态并检查软件版本是否为 1.2.3。"
+              aria-label="测试需求"
+            />
+            <div className="request-actions">
+              <span className="character-count">{requirement.length} 字</span>
+              {isActive ? (
+                <button type="button" className="button secondary danger" onClick={cancel}>
+                  <CircleStop size={17} />
+                  取消执行
+                </button>
+              ) : (
+                <button type="submit" className="button primary" disabled={!settings?.configured}>
+                  <Play size={17} fill="currentColor" />
+                  开始执行
+                </button>
+              )}
+            </div>
+          </form>
+        </section>
+
+        <section className="execution-pane" aria-labelledby="execution-heading">
+          <div className="section-heading">
+            <div>
+              <span className="section-index">02</span>
+              <h2 id="execution-heading">执行过程</h2>
+            </div>
+            {runId && <span className="run-id">{runId.slice(0, 8)}</span>}
+          </div>
+
+          <div className="execution-log" aria-live="polite">
+            {!events.length ? (
+              <div className="empty-state">
+                <Bot size={28} strokeWidth={1.5} />
+                <span>等待任务</span>
+              </div>
+            ) : (
+              <>
+                {result && (
+                  <div className={`result-block ${result.outcome}`}>
+                    {result.outcome === "passed" ? <Check size={20} /> : <AlertCircle size={20} />}
+                    <div>
+                      <strong>{result.outcome === "passed" ? "测试通过" : "测试失败"}</strong>
+                      <p>{result.message}</p>
+                    </div>
+                  </div>
+                )}
+
+                <div className="timeline">
+                  {visibleEvents.map((event) => (
+                    <TimelineEvent key={event.renderKey} event={event} />
+                  ))}
+                  {assistantText && isActive && (
+                    <div className="agent-output">
+                      <Bot size={16} />
+                      <p>{assistantText}</p>
+                    </div>
+                  )}
+                  <div ref={logEndRef} />
+                </div>
+              </>
+            )}
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function TimelineEvent({ event }: { event: TimelineItem }) {
+  const isTool = Boolean(event.toolState);
+  const isError = event.type === "error" || event.toolState === "failed" || (!isTool && event.error);
+  const isInterrupted = event.toolState === "interrupted";
+  const label = isTool ? TOOL_LABELS[event.tool || ""] || event.tool : event.message;
+  const iconClass = event.toolState ? `tool_${event.toolState}` : event.type;
+
+  return (
+    <div className={`timeline-row ${isError ? "error" : ""} ${isInterrupted ? "interrupted" : ""}`}>
+      <span className="timeline-time">{formatTime(event.timestamp)}</span>
+      <span className={`timeline-icon ${iconClass}`}>
+        {isError ? (
+          <AlertCircle size={14} />
+        ) : event.toolState === "running" ? (
+          <LoaderCircle className="spin" size={14} />
+        ) : event.toolState === "completed" ? (
+          <Check size={14} />
+        ) : event.toolState === "interrupted" ? (
+          <CircleStop size={14} />
+        ) : event.type === "result" ? (
+          <TestTubeDiagonal size={14} />
+        ) : (
+          <Clock3 size={14} />
+        )}
+      </span>
+      <div className="timeline-content">
+        <strong>{label || "状态更新"}</strong>
+        {isTool && event.toolState !== "running" && event.message && <p>{event.message}</p>}
+      </div>
+    </div>
+  );
+}
+
+function SettingsPage({
+  initialSettings,
+  onSaved,
+}: {
+  initialSettings: ModelSettings | null;
+  onSaved: () => Promise<void>;
+}) {
+  const [form, setForm] = useState({
+    providerPreset: "openai",
+    apiType: "openai-responses" as ModelSettings["apiType"],
+    model: "",
+    baseUrl: "https://api.openai.com/v1",
+    apiKey: "",
+    userAgent: "codex-tui/0.151.0",
+    reasoningLevel: "medium" as ModelSettings["reasoningLevel"],
+  });
+  const [showKey, setShowKey] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [notice, setNotice] = useState<Notice>(null);
+
+  useEffect(() => {
+    if (!initialSettings) return;
+    setForm({
+      providerPreset: initialSettings.providerPreset,
+      apiType: initialSettings.apiType,
+      model: initialSettings.model,
+      baseUrl: initialSettings.baseUrl,
+      apiKey: "",
+      userAgent: initialSettings.userAgent,
+      reasoningLevel: initialSettings.reasoningLevel,
+    });
+  }, [initialSettings]);
+
+  const selectedProvider = PROVIDERS.find((provider) => provider.id === form.providerPreset) || PROVIDERS[5];
+
+  const selectProvider = (providerId: string) => {
+    const provider = PROVIDERS.find((item) => item.id === providerId) || PROVIDERS[5];
+    setForm((current) => ({
+      ...current,
+      providerPreset: provider.id,
+      apiType: provider.apiType,
+      baseUrl: provider.baseUrl,
+      model: "",
+    }));
+  };
+
+  const save = async (event: FormEvent) => {
+    event.preventDefault();
+    try {
+      setSaving(true);
+      setNotice(null);
+      await api.saveSettings(form);
+      await onSaved();
+      setForm((current) => ({ ...current, apiKey: "" }));
+      setNotice({ kind: "success", message: "模型配置已保存" });
+    } catch (error) {
+      setNotice({ kind: "error", message: error instanceof Error ? error.message : "保存失败" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const testConnection = async () => {
+    try {
+      setTesting(true);
+      setNotice(null);
+      const result = await api.testSettings();
+      setNotice({ kind: "success", message: result.message || "模型连接成功" });
+    } catch (error) {
+      setNotice({ kind: "error", message: error instanceof Error ? error.message : "连接失败" });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  return (
+    <div className="page settings-page">
+      <PageHeader
+        icon={<Settings2 size={19} />}
+        title="模型设置"
+        status={
+          <div className={`run-status ${initialSettings?.configured ? "completed" : "idle"}`}>
+            <span className="status-dot" />
+            <span>{initialSettings?.configured ? "已配置" : "未配置"}</span>
+          </div>
+        }
+      />
+
+      {notice && <InlineNotice notice={notice} onClose={() => setNotice(null)} />}
+
+      <form className="settings-form" onSubmit={save}>
+        <section className="settings-section">
+          <div className="settings-section-title">
+            <Server size={18} />
+            <div>
+              <span className="section-index">01</span>
+              <h2>模型接口</h2>
+            </div>
+          </div>
+
+          <div className="form-grid">
+            <label className="field">
+              <span>服务商</span>
+              <select value={form.providerPreset} onChange={(event) => selectProvider(event.target.value)}>
+                {PROVIDERS.map((provider) => (
+                  <option key={provider.id} value={provider.id}>
+                    {provider.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="field">
+              <span>API 类型</span>
+              <select
+                value={form.apiType}
+                onChange={(event) => setForm((current) => ({ ...current, apiType: event.target.value as ModelSettings["apiType"] }))}
+                disabled={form.providerPreset !== "custom"}
+              >
+                <option value="openai-responses">OpenAI Responses</option>
+                <option value="openai-completions">OpenAI Chat Completions</option>
+                <option value="anthropic-messages">Anthropic Messages</option>
+                <option value="google-generative-ai">Google Generative AI</option>
+              </select>
+            </label>
+
+            <label className="field">
+              <span>模型 ID</span>
+              <div className="input-with-icon">
+                <Cpu size={17} />
+                <input
+                  value={form.model}
+                  onChange={(event) => setForm((current) => ({ ...current, model: event.target.value }))}
+                  placeholder={selectedProvider.modelPlaceholder}
+                  autoComplete="off"
+                />
+              </div>
+            </label>
+
+            <label className="field">
+              <span>推理强度</span>
+              <select
+                value={form.reasoningLevel}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    reasoningLevel: event.target.value as ModelSettings["reasoningLevel"],
+                  }))
+                }
+              >
+                <option value="off">关闭</option>
+                <option value="minimal">最低</option>
+                <option value="low">低</option>
+                <option value="medium">中</option>
+                <option value="high">高</option>
+                <option value="xhigh">极高</option>
+                <option value="max">最大</option>
+              </select>
+            </label>
+
+            <label className="field full-width">
+              <span>API 地址</span>
+              <div className="input-with-icon">
+                <Globe2 size={17} />
+                <input
+                  value={form.baseUrl}
+                  onChange={(event) => setForm((current) => ({ ...current, baseUrl: event.target.value }))}
+                  placeholder="https://api.example.com/v1"
+                  spellCheck={false}
+                />
+              </div>
+            </label>
+
+            <label className="field full-width">
+              <span>User-Agent</span>
+              <div className="input-with-icon">
+                <Bot size={17} />
+                <input
+                  value={form.userAgent}
+                  onChange={(event) => setForm((current) => ({ ...current, userAgent: event.target.value }))}
+                  placeholder="留空则使用 SDK 默认值"
+                  spellCheck={false}
+                  autoComplete="off"
+                />
+              </div>
+            </label>
+          </div>
+        </section>
+
+        <section className="settings-section credentials-section">
+          <div className="settings-section-title">
+            <KeyRound size={18} />
+            <div>
+              <span className="section-index">02</span>
+              <h2>访问凭据</h2>
+            </div>
+          </div>
+
+          <label className="field full-width">
+            <span>API Key</span>
+            <div className="input-with-icon key-input">
+              <KeyRound size={17} />
+              <input
+                type={showKey ? "text" : "password"}
+                value={form.apiKey}
+                onChange={(event) => setForm((current) => ({ ...current, apiKey: event.target.value }))}
+                placeholder={initialSettings?.hasApiKey ? `${initialSettings.maskedApiKey}（留空保持不变）` : "输入 API Key"}
+                autoComplete="new-password"
+              />
+              <button type="button" className="icon-button" onClick={() => setShowKey((current) => !current)} title={showKey ? "隐藏 API Key" : "显示 API Key"}>
+                {showKey ? <EyeOff size={17} /> : <Eye size={17} />}
+              </button>
+            </div>
+          </label>
+        </section>
+
+        <footer className="settings-actions">
+          <button type="button" className="button secondary" onClick={testConnection} disabled={testing || saving || !initialSettings?.configured}>
+            {testing ? <LoaderCircle className="spin" size={17} /> : <Server size={17} />}
+            测试连接
+          </button>
+          <button type="submit" className="button primary" disabled={saving || testing}>
+            {saving ? <LoaderCircle className="spin" size={17} /> : <Save size={17} />}
+            保存配置
+          </button>
+        </footer>
+      </form>
+    </div>
+  );
+}
+
+function InlineNotice({ notice, onClose }: { notice: Exclude<Notice, null>; onClose: () => void }) {
+  return (
+    <div className={`inline-notice ${notice.kind}`} role={notice.kind === "error" ? "alert" : "status"}>
+      {notice.kind === "success" ? <Check size={17} /> : <AlertCircle size={17} />}
+      <span>{notice.message}</span>
+      <button type="button" onClick={onClose} title="关闭提示">
+        <X size={16} />
+      </button>
+    </div>
+  );
+}
+
+export default App;
