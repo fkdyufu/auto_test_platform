@@ -1,30 +1,31 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   AlertCircle,
   Bot,
-  Check,
   ChevronRight,
   CircleStop,
-  Clock3,
   Cpu,
   Eye,
   EyeOff,
   Globe2,
   KeyRound,
   LoaderCircle,
+  ClipboardList,
+  Package,
   Play,
   Save,
   Server,
   Settings2,
   TerminalSquare,
   TestTubeDiagonal,
-  X,
 } from "lucide-react";
 import { api, type ModelSettings, type RunEvent, type RunStatus } from "./api";
-import { buildTimelineItems, type TimelineItem } from "./run-events";
+import { RunMonitor } from "./components/RunMonitor";
+import { InlineNotice, PageHeader, type Notice } from "./components/ui";
+import { ProductsPage } from "./pages/ProductsPage";
+import { TestOrdersPage } from "./pages/TestOrdersPage";
 
-type PageName = "run" | "settings";
-type Notice = { kind: "success" | "error"; message: string } | null;
+type PageName = "products" | "orders" | "run" | "settings";
 
 interface ProviderPreset {
   id: string;
@@ -79,18 +80,6 @@ const PROVIDERS: ProviderPreset[] = [
   },
 ];
 
-const TOOL_LABELS: Record<string, string> = {
-  browser_open: "打开页面",
-  browser_inspect: "读取页面",
-  browser_click: "点击元素",
-  browser_fill: "填写内容",
-  browser_select: "选择选项",
-  browser_press: "发送按键",
-  browser_wait: "等待页面",
-  browser_screenshot: "保存截图",
-  finish_test: "提交结论",
-};
-
 const STATUS_LABELS: Record<RunStatus, string> = {
   queued: "等待执行",
   running: "执行中",
@@ -100,16 +89,8 @@ const STATUS_LABELS: Record<RunStatus, string> = {
 };
 
 function readPage(): PageName {
-  return window.location.hash === "#settings" ? "settings" : "run";
-}
-
-function formatTime(value: string): string {
-  return new Intl.DateTimeFormat("zh-CN", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  }).format(new Date(value));
+  const page = window.location.hash.replace(/^#/, "");
+  return page === "orders" || page === "run" || page === "settings" ? page : "products";
 }
 
 function App() {
@@ -137,7 +118,7 @@ function App() {
   }, []);
 
   const navigate = (target: PageName) => {
-    window.location.hash = target === "settings" ? "settings" : "";
+    window.location.hash = target;
     setPage(target);
   };
 
@@ -152,12 +133,22 @@ function App() {
         </div>
 
         <nav className="nav-list" aria-label="主导航">
-          <button className={`nav-item ${page === "run" ? "active" : ""}`} onClick={() => navigate("run")}>
+          <button className={`nav-item ${page === "products" ? "active" : ""}`} onClick={() => navigate("products")} title="产品管理">
+            <Package size={18} />
+            <span>产品管理</span>
+            {page === "products" && <ChevronRight className="nav-chevron" size={16} />}
+          </button>
+          <button className={`nav-item ${page === "orders" ? "active" : ""}`} onClick={() => navigate("orders")} title="测试单">
+            <ClipboardList size={18} />
+            <span>测试单</span>
+            {page === "orders" && <ChevronRight className="nav-chevron" size={16} />}
+          </button>
+          <button className={`nav-item ${page === "run" ? "active" : ""}`} onClick={() => navigate("run")} title="自由执行">
             <Play size={18} />
-            <span>执行用例</span>
+            <span>自由执行</span>
             {page === "run" && <ChevronRight className="nav-chevron" size={16} />}
           </button>
-          <button className={`nav-item ${page === "settings" ? "active" : ""}`} onClick={() => navigate("settings")}>
+          <button className={`nav-item ${page === "settings" ? "active" : ""}`} onClick={() => navigate("settings")} title="模型设置">
             <Settings2 size={18} />
             <span>模型设置</span>
             {page === "settings" && <ChevronRight className="nav-chevron" size={16} />}
@@ -174,25 +165,17 @@ function App() {
       </aside>
 
       <main className="main-content">
-        {page === "run" ? (
+        {page === "products" ? (
+          <ProductsPage />
+        ) : page === "orders" ? (
+          <TestOrdersPage />
+        ) : page === "run" ? (
           <RunPage settings={settings} onOpenSettings={() => navigate("settings")} />
         ) : (
           <SettingsPage initialSettings={settings} onSaved={refreshSettings} />
         )}
       </main>
     </div>
-  );
-}
-
-function PageHeader({ icon, title, status }: { icon: React.ReactNode; title: string; status?: React.ReactNode }) {
-  return (
-    <header className="page-header">
-      <div className="page-title">
-        <span className="page-icon">{icon}</span>
-        <h1>{title}</h1>
-      </div>
-      {status}
-    </header>
   );
 }
 
@@ -203,23 +186,12 @@ function RunPage({ settings, onOpenSettings }: { settings: ModelSettings | null;
   const [events, setEvents] = useState<RunEvent[]>([]);
   const [notice, setNotice] = useState<Notice>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
-  const logEndRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     return () => eventSourceRef.current?.close();
   }, []);
 
-  useEffect(() => {
-    logEndRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-  }, [events.length]);
-
-  const result = [...events].reverse().find((event) => event.type === "result");
-  const assistantText = events
-    .filter((event) => event.type === "assistant_delta")
-    .map((event) => event.message || "")
-    .join("");
   const isActive = runStatus === "queued" || runStatus === "running";
-  const visibleEvents = useMemo(() => buildTimelineItems(events, isActive), [events, isActive]);
 
   const connectEvents = (id: string) => {
     eventSourceRef.current?.close();
@@ -345,73 +317,8 @@ function RunPage({ settings, onOpenSettings }: { settings: ModelSettings | null;
             {runId && <span className="run-id">{runId.slice(0, 8)}</span>}
           </div>
 
-          <div className="execution-log" aria-live="polite">
-            {!events.length ? (
-              <div className="empty-state">
-                <Bot size={28} strokeWidth={1.5} />
-                <span>等待任务</span>
-              </div>
-            ) : (
-              <>
-                {result && (
-                  <div className={`result-block ${result.outcome}`}>
-                    {result.outcome === "passed" ? <Check size={20} /> : <AlertCircle size={20} />}
-                    <div>
-                      <strong>{result.outcome === "passed" ? "测试通过" : "测试失败"}</strong>
-                      <p>{result.message}</p>
-                    </div>
-                  </div>
-                )}
-
-                <div className="timeline">
-                  {visibleEvents.map((event) => (
-                    <TimelineEvent key={event.renderKey} event={event} />
-                  ))}
-                  {assistantText && isActive && (
-                    <div className="agent-output">
-                      <Bot size={16} />
-                      <p>{assistantText}</p>
-                    </div>
-                  )}
-                  <div ref={logEndRef} />
-                </div>
-              </>
-            )}
-          </div>
+          <RunMonitor events={events} status={runStatus} />
         </section>
-      </div>
-    </div>
-  );
-}
-
-function TimelineEvent({ event }: { event: TimelineItem }) {
-  const isTool = Boolean(event.toolState);
-  const isError = event.type === "error" || event.toolState === "failed" || (!isTool && event.error);
-  const isInterrupted = event.toolState === "interrupted";
-  const label = isTool ? TOOL_LABELS[event.tool || ""] || event.tool : event.message;
-  const iconClass = event.toolState ? `tool_${event.toolState}` : event.type;
-
-  return (
-    <div className={`timeline-row ${isError ? "error" : ""} ${isInterrupted ? "interrupted" : ""}`}>
-      <span className="timeline-time">{formatTime(event.timestamp)}</span>
-      <span className={`timeline-icon ${iconClass}`}>
-        {isError ? (
-          <AlertCircle size={14} />
-        ) : event.toolState === "running" ? (
-          <LoaderCircle className="spin" size={14} />
-        ) : event.toolState === "completed" ? (
-          <Check size={14} />
-        ) : event.toolState === "interrupted" ? (
-          <CircleStop size={14} />
-        ) : event.type === "result" ? (
-          <TestTubeDiagonal size={14} />
-        ) : (
-          <Clock3 size={14} />
-        )}
-      </span>
-      <div className="timeline-content">
-        <strong>{label || "状态更新"}</strong>
-        {isTool && event.toolState !== "running" && event.message && <p>{event.message}</p>}
       </div>
     </div>
   );
@@ -645,18 +552,6 @@ function SettingsPage({
           </button>
         </footer>
       </form>
-    </div>
-  );
-}
-
-function InlineNotice({ notice, onClose }: { notice: Exclude<Notice, null>; onClose: () => void }) {
-  return (
-    <div className={`inline-notice ${notice.kind}`} role={notice.kind === "error" ? "alert" : "status"}>
-      {notice.kind === "success" ? <Check size={17} /> : <AlertCircle size={17} />}
-      <span>{notice.message}</span>
-      <button type="button" onClick={onClose} title="关闭提示">
-        <X size={16} />
-      </button>
     </div>
   );
 }

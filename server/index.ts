@@ -3,6 +3,9 @@ import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express, { type Response } from "express";
+import { catalogRouter } from "./catalog-routes.js";
+import { CatalogError, catalogStore, type CaseRun, type TestOrder, type TestRun } from "./catalog-store.js";
+import { sanitizeToolEvent } from "./event-sanitizer.js";
 import { executePiRun, testModelConnection, type RunnerEvent } from "./pi-runner.js";
 import { resolveRunResult } from "./run-result.js";
 import { readModelSettings, saveModelSettings, toPublicSettings } from "./settings-store.js";
@@ -12,7 +15,7 @@ type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 interface StreamEvent {
   id: number;
   timestamp: string;
-  type: RunnerEvent["type"] | "run_state" | "result" | "error";
+  type: RunnerEvent["type"] | "run_state" | "result" | "error" | "case_state" | "case_result";
   message?: string;
   tool?: string;
   toolCallId?: string;
@@ -20,6 +23,9 @@ interface StreamEvent {
   error?: boolean;
   status?: RunStatus;
   outcome?: "passed" | "failed";
+  testCaseId?: string;
+  caseRunId?: string;
+  caseName?: string;
 }
 
 interface RunRecord {
@@ -33,6 +39,8 @@ interface RunRecord {
   cancelRequested: boolean;
   logPath: string;
   logWrite: Promise<void>;
+  source: "adhoc" | "test_order";
+  testOrderId?: string;
 }
 
 const app = express();
@@ -48,8 +56,9 @@ function writeSse(response: Response, event: StreamEvent): void {
 }
 
 function publish(run: RunRecord, event: Omit<StreamEvent, "id" | "timestamp">): void {
+  const safeEvent = sanitizeToolEvent(event);
   const streamEvent: StreamEvent = {
-    ...event,
+    ...safeEvent,
     id: run.events.length + 1,
     timestamp: new Date().toISOString(),
   };
@@ -72,7 +81,187 @@ function publicRun(run: RunRecord) {
     status: run.status,
     createdAt: run.createdAt,
     events: run.events,
+    source: run.source,
+    testOrderId: run.testOrderId,
   };
+}
+
+async function createRunRecord(
+  requirement: string,
+  metadata: { source?: RunRecord["source"]; testOrderId?: string } = {},
+): Promise<RunRecord> {
+  const runId = randomUUID();
+  const run: RunRecord = {
+    id: runId,
+    requirement,
+    status: "queued",
+    createdAt: new Date().toISOString(),
+    events: [],
+    listeners: new Set(),
+    cancelRequested: false,
+    logPath: path.join(runLogsDirectory, `${runId}.jsonl`),
+    logWrite: Promise.resolve(),
+    source: metadata.source || "adhoc",
+    testOrderId: metadata.testOrderId,
+  };
+  await mkdir(runLogsDirectory, { recursive: true });
+  await writeFile(
+    run.logPath,
+    `${JSON.stringify({ type: "run_created", id: run.id, source: run.source, testOrderId: run.testOrderId, createdAt: run.createdAt })}\n`,
+    { mode: 0o600 },
+  );
+  runs.set(run.id, run);
+  publish(run, { type: "run_state", status: "queued", message: "任务已创建" });
+  return run;
+}
+
+function interpolateSteps(text: string, order: TestOrder): string {
+  return text
+    .replaceAll("{{baseUrl}}", order.targetUrl)
+    .replaceAll("{{targetUrl}}", order.targetUrl)
+    .replaceAll("{{username}}", order.username)
+    .replaceAll("{{password}}", order.password);
+}
+
+function buildCaseRequirement(order: TestOrder, caseRun: CaseRun): string {
+  const credentials = order.username
+    ? `\n登录账号：${order.username}${order.password ? `\n登录密码：${order.password}` : ""}`
+    : "";
+  return `执行产品测试用例。\n\n产品目标：${order.targetUrl}${credentials}\n\n用例名称：${caseRun.caseNameSnapshot}\n\n测试步骤：\n${interpolateSteps(caseRun.stepsSnapshot, order)}\n\n预期结果：\n${interpolateSteps(caseRun.expectedResultSnapshot, order)}\n\n请直接使用浏览器工具执行，并根据实际观察调用 finish_test 提交结论。`;
+}
+
+async function updateStoredCaseRun(runId: string, caseRunId: string, update: Partial<CaseRun>): Promise<void> {
+  await catalogStore.updateTestRun(runId, (storedRun) => {
+    const storedCaseRun = storedRun.caseRuns.find((item) => item.id === caseRunId);
+    if (!storedCaseRun) throw new CatalogError("用例执行记录不存在", 404);
+    Object.assign(storedCaseRun, update);
+  });
+}
+
+async function executeTestOrderRun(run: RunRecord, order: TestOrder, testRun: TestRun): Promise<void> {
+  const settings = await readModelSettings();
+  updateStatus(run, "running", "正在执行测试单");
+  const startedAt = new Date().toISOString();
+  await catalogStore.updateTestRun(testRun.id, (storedRun) => {
+    storedRun.status = "running";
+    storedRun.startedAt = startedAt;
+  });
+
+  let passedCount = 0;
+  let failedCount = 0;
+
+  for (const caseRun of testRun.caseRuns) {
+    if (run.cancelRequested) break;
+
+    const caseStartedAt = new Date().toISOString();
+    await updateStoredCaseRun(testRun.id, caseRun.id, { status: "running", startedAt: caseStartedAt });
+    publish(run, {
+      type: "case_state",
+      status: "running",
+      message: `开始执行：${caseRun.caseNameSnapshot}`,
+      testCaseId: caseRun.testCaseId,
+      caseRunId: caseRun.id,
+      caseName: caseRun.caseNameSnapshot,
+    });
+
+    try {
+      const execution = await executePiRun({
+        runId: caseRun.id,
+        requirement: buildCaseRequirement(order, caseRun),
+        settings,
+        onEvent: (event) =>
+          publish(run, {
+            ...event,
+            testCaseId: caseRun.testCaseId,
+            caseRunId: caseRun.id,
+            caseName: caseRun.caseNameSnapshot,
+          }),
+        onAbortReady: (abort) => {
+          run.abort = abort;
+          if (run.cancelRequested) void abort();
+        },
+      });
+
+      if (run.cancelRequested) {
+        await updateStoredCaseRun(testRun.id, caseRun.id, {
+          status: "cancelled",
+          summary: "任务已取消",
+          finishedAt: new Date().toISOString(),
+        });
+        break;
+      }
+
+      const result = resolveRunResult(execution);
+      if (result.outcome === "passed") passedCount += 1;
+      else failedCount += 1;
+      await updateStoredCaseRun(testRun.id, caseRun.id, {
+        status: "completed",
+        outcome: result.outcome,
+        summary: result.message,
+        finishedAt: new Date().toISOString(),
+      });
+      publish(run, {
+        type: "case_result",
+        status: "completed",
+        outcome: result.outcome,
+        error: result.outcome === "failed",
+        message: `${caseRun.caseNameSnapshot}：${result.message}`,
+        testCaseId: caseRun.testCaseId,
+        caseRunId: caseRun.id,
+        caseName: caseRun.caseNameSnapshot,
+      });
+    } catch (error) {
+      if (run.cancelRequested) {
+        await updateStoredCaseRun(testRun.id, caseRun.id, {
+          status: "cancelled",
+          summary: "任务已取消",
+          finishedAt: new Date().toISOString(),
+        });
+        break;
+      }
+
+      failedCount += 1;
+      const message = error instanceof Error ? error.message : "用例执行失败";
+      await updateStoredCaseRun(testRun.id, caseRun.id, {
+        status: "failed",
+        outcome: "failed",
+        summary: message,
+        finishedAt: new Date().toISOString(),
+      });
+      publish(run, {
+        type: "case_result",
+        status: "failed",
+        outcome: "failed",
+        error: true,
+        message: `${caseRun.caseNameSnapshot}：${message}`,
+        testCaseId: caseRun.testCaseId,
+        caseRunId: caseRun.id,
+        caseName: caseRun.caseNameSnapshot,
+      });
+    }
+  }
+
+  if (run.cancelRequested) {
+    await catalogStore.updateTestRun(testRun.id, (storedRun) => {
+      storedRun.status = "cancelled";
+      storedRun.finishedAt = new Date().toISOString();
+      storedRun.caseRuns.forEach((item) => {
+        if (item.status === "queued" || item.status === "running") item.status = "cancelled";
+      });
+    });
+    updateStatus(run, "cancelled", "测试单执行已取消");
+    return;
+  }
+
+  const outcome = failedCount > 0 ? "failed" : "passed";
+  const message = `测试单执行完成：${passedCount} 个通过，${failedCount} 个失败`;
+  await catalogStore.updateTestRun(testRun.id, (storedRun) => {
+    storedRun.status = "completed";
+    storedRun.outcome = outcome;
+    storedRun.finishedAt = new Date().toISOString();
+  });
+  publish(run, { type: "result", outcome, message });
+  updateStatus(run, "completed", "测试单执行完成");
 }
 
 app.get("/api/health", (_request, response) => {
@@ -111,6 +300,45 @@ app.post("/api/settings/test", async (_request, response, next) => {
   }
 });
 
+app.post("/api/test-orders/:id/runs", async (request, response, next) => {
+  try {
+    const settings = await readModelSettings();
+    if (!toPublicSettings(settings).configured) {
+      response.status(409).json({ error: "请先完成模型配置" });
+      return;
+    }
+
+    const order = await catalogStore.getTestOrder(request.params.id);
+    const selectedCaseId = typeof request.body?.testCaseId === "string" ? request.body.testCaseId : undefined;
+    if (selectedCaseId && !order.caseIds.includes(selectedCaseId)) {
+      response.status(400).json({ error: "所选用例不属于该测试单" });
+      return;
+    }
+
+    const label = selectedCaseId ? "单用例执行" : "整单执行";
+    const run = await createRunRecord(`${order.name} - ${label}`, { source: "test_order", testOrderId: order.id });
+    const testRun = await catalogStore.createTestRun(run.id, order.id, selectedCaseId ? [selectedCaseId] : undefined);
+    response.status(202).json(publicRun(run));
+
+    void executeTestOrderRun(run, order, testRun).catch(async (error) => {
+      const message = error instanceof Error ? error.message : "测试单执行失败";
+      await catalogStore
+        .updateTestRun(testRun.id, (storedRun) => {
+          storedRun.status = "failed";
+          storedRun.outcome = "failed";
+          storedRun.finishedAt = new Date().toISOString();
+        })
+        .catch(() => undefined);
+      publish(run, { type: "error", message, error: true });
+      updateStatus(run, "failed", "测试单执行失败");
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.use("/api", catalogRouter);
+
 app.post("/api/runs", async (request, response, next) => {
   try {
     const requirement = typeof request.body?.requirement === "string" ? request.body.requirement.trim() : "";
@@ -125,26 +353,7 @@ app.post("/api/runs", async (request, response, next) => {
       return;
     }
 
-    const runId = randomUUID();
-    const run: RunRecord = {
-      id: runId,
-      requirement,
-      status: "queued",
-      createdAt: new Date().toISOString(),
-      events: [],
-      listeners: new Set(),
-      cancelRequested: false,
-      logPath: path.join(runLogsDirectory, `${runId}.jsonl`),
-      logWrite: Promise.resolve(),
-    };
-    await mkdir(runLogsDirectory, { recursive: true });
-    await writeFile(
-      run.logPath,
-      `${JSON.stringify({ type: "run_created", id: run.id, requirement, createdAt: run.createdAt })}\n`,
-      { mode: 0o600 },
-    );
-    runs.set(run.id, run);
-    publish(run, { type: "run_state", status: "queued", message: "任务已创建" });
+    const run = await createRunRecord(requirement);
     response.status(202).json(publicRun(run));
 
     void (async () => {
@@ -249,7 +458,7 @@ app.get("/{*path}", (request, response, next) => {
 app.use((error: unknown, _request: express.Request, response: express.Response, _next: express.NextFunction) => {
   const message = error instanceof Error ? error.message : "服务器错误";
   console.error(error);
-  response.status(400).json({ error: message });
+  response.status(error instanceof CatalogError ? error.status : 400).json({ error: message });
 });
 
 app.listen(port, "127.0.0.1", () => {
