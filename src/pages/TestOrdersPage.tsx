@@ -11,11 +11,9 @@ import {
   Play,
   Plus,
   Trash2,
-  Workflow,
 } from "lucide-react";
 import {
   api,
-  type DeviceResource,
   type LabEnvironment,
   type ProductSummary,
   type RunEvent,
@@ -26,7 +24,6 @@ import {
   type TestOrderInput,
   type TestOrderSummary,
   type TestRun,
-  type TestScenario,
 } from "../api";
 import { RunMonitor } from "../components/RunMonitor";
 import { InlineNotice, Modal, PageHeader, type Notice } from "../components/ui";
@@ -42,12 +39,7 @@ const STATUS_LABELS: Record<RunStatus, string> = {
 const EMPTY_ORDER: TestOrderInput = {
   name: "",
   description: "",
-  targetUrl: "",
-  username: "",
-  password: "",
   environmentId: "",
-  scenarioId: "",
-  roleBindings: {},
   caseIds: [],
 };
 
@@ -71,9 +63,7 @@ function StatusBadge({ run }: { run?: TestRun }) {
 
 export function TestOrdersPage({ product }: { product: ProductSummary }) {
   const [orders, setOrders] = useState<TestOrderSummary[]>([]);
-  const [devices, setDevices] = useState<DeviceResource[]>([]);
   const [environments, setEnvironments] = useState<LabEnvironment[]>([]);
-  const [scenarios, setScenarios] = useState<TestScenario[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [detail, setDetail] = useState<TestOrderDetail | null>(null);
   const [dialog, setDialog] = useState<{ id?: string; form: TestOrderInput } | null>(null);
@@ -101,15 +91,11 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
     setActiveRun(null);
     void Promise.all([
       api.getTestOrders(product.id),
-      api.getDeviceResources(product.id),
       api.getLabEnvironments(product.id),
-      api.getTestScenarios(product.id),
     ])
-      .then(([nextOrders, nextDevices, nextEnvironments, nextScenarios]) => {
+      .then(([nextOrders, nextEnvironments]) => {
         setOrders(nextOrders);
-        setDevices(nextDevices);
         setEnvironments(nextEnvironments);
-        setScenarios(nextScenarios);
       })
       .catch((error) => setNotice({ kind: "error", message: error instanceof Error ? error.message : "读取测试单失败" }));
     return () => eventSourceRef.current?.close();
@@ -135,12 +121,7 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
           ? {
               name: order.name,
               description: order.description,
-              targetUrl: order.targetUrl,
-              username: order.username,
-              password: "",
               environmentId: order.environmentId,
-              scenarioId: order.scenarioId,
-              roleBindings: { ...order.roleBindings },
               caseIds: [...order.caseIds],
             }
           : { ...EMPTY_ORDER },
@@ -162,52 +143,11 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
     });
   };
 
-  const dialogEnvironment = environments.find((item) => item.id === dialog?.form.environmentId);
-  const dialogScenario = scenarios.find((item) => item.id === dialog?.form.scenarioId);
-  const environmentDevices = devices.filter((item) => dialogEnvironment?.deviceIds.includes(item.id));
-
-  const matchesRole = (device: DeviceResource, role: TestScenario["roles"][number]) =>
-    device.type.toLowerCase() === role.deviceType.toLowerCase();
-
-  const autoBindRoles = (scenarioId: string, environmentId: string) => {
-    const scenario = scenarios.find((item) => item.id === scenarioId);
-    const environment = environments.find((item) => item.id === environmentId);
-    if (!scenario || !environment) return {};
-    const candidates = devices.filter((item) => environment.deviceIds.includes(item.id));
-    const used = new Set<string>();
-    const bindings: Record<string, string> = {};
-    for (const role of scenario.roles) {
-      const device = candidates.find((item) => !used.has(item.id) && matchesRole(item, role));
-      if (device) {
-        bindings[role.key] = device.id;
-        used.add(device.id);
-      }
-    }
-    return bindings;
-  };
-
   const selectEnvironment = (environmentId: string) => {
     if (!dialog) return;
-    const scenarioId = environmentId ? dialog.form.scenarioId : "";
     setDialog({
       ...dialog,
-      form: { ...dialog.form, environmentId, scenarioId, roleBindings: autoBindRoles(scenarioId, environmentId) },
-    });
-  };
-
-  const selectScenario = (scenarioId: string) => {
-    if (!dialog) return;
-    setDialog({
-      ...dialog,
-      form: { ...dialog.form, scenarioId, roleBindings: autoBindRoles(scenarioId, dialog.form.environmentId) },
-    });
-  };
-
-  const bindRole = (roleKey: string, deviceId: string) => {
-    if (!dialog) return;
-    setDialog({
-      ...dialog,
-      form: { ...dialog.form, roleBindings: { ...dialog.form.roleBindings, [roleKey]: deviceId } },
+      form: { ...dialog.form, environmentId },
     });
   };
 
@@ -316,7 +256,7 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
               <thead>
                 <tr>
                   <th>测试单</th>
-                  <th>环境 / 场景</th>
+                  <th>实验环境</th>
                   <th>用例</th>
                   <th>最近执行</th>
                   <th>更新时间</th>
@@ -329,7 +269,7 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
                     <td className="name-cell">
                       <button className="link-button" onClick={() => setSelectedId(order.id)}>{order.name}</button>
                     </td>
-                    <td>{order.environmentName || "未配置"}<span className="cell-subtext">{order.scenarioName || "无测试场景"}</span></td>
+                    <td>{order.environmentName || "未配置"}</td>
                     <td>{order.caseCount}</td>
                     <td><StatusBadge run={order.latestRun} /></td>
                     <td>{formatDateTime(order.updatedAt)}</td>
@@ -394,34 +334,11 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
           </section>
 
           <dl className="order-meta">
-            <div><dt>目标地址</dt><dd>{detail.targetUrl}</dd></div>
-            <div><dt>登录账号</dt><dd>{detail.username || "未配置"}</dd></div>
             <div><dt>实验环境</dt><dd>{detail.environmentName || "未配置"}</dd></div>
-            <div><dt>测试场景</dt><dd>{detail.scenarioName || "未配置"}</dd></div>
             <div><dt>用例数量</dt><dd>{detail.caseCount}</dd></div>
             <div><dt>最近执行</dt><dd><StatusBadge run={detail.runs[0]} /></dd></div>
+            <div><dt>更新时间</dt><dd>{formatDateTime(detail.updatedAt)}</dd></div>
           </dl>
-
-          {detail.scenario && (
-            <section className="detail-section environment-binding-section">
-              <div className="content-toolbar">
-                <div><Network size={17} /><strong>测试环境</strong></div>
-                <span className="muted-count">{detail.environment?.deviceIds.length || 0} 台设备</span>
-              </div>
-              <div className="binding-summary">
-                <div>
-                  <span>场景要求</span>
-                  <strong>{detail.scenario.setupInstructions}</strong>
-                </div>
-                <div className="role-binding-list">
-                  {detail.scenario.roles.map((role) => {
-                    const device = detail.boundDevices.find((item) => item.id === detail.roleBindings[role.key]);
-                    return <span key={role.id}><b>{role.name}</b><i>→</i>{device?.name || "未绑定"}</span>;
-                  })}
-                </div>
-              </div>
-            </section>
-          )}
 
           <section className="detail-section">
             <div className="content-toolbar">
@@ -523,71 +440,18 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
                 rows={3}
               />
             </label>
-            <label className="field full-width">
-              <span>目标地址</span>
-              <input
-                value={dialog.form.targetUrl}
-                onChange={(event) => setDialog({ ...dialog, form: { ...dialog.form, targetUrl: event.target.value } })}
-                placeholder="http://192.168.1.1"
-              />
-            </label>
-            <label className="field">
-              <span>登录账号</span>
-              <input
-                value={dialog.form.username}
-                onChange={(event) => setDialog({ ...dialog, form: { ...dialog.form, username: event.target.value } })}
-                autoComplete="off"
-              />
-            </label>
-            <label className="field">
-              <span>登录密码</span>
-              <input
-                type="password"
-                value={dialog.form.password}
-                onChange={(event) => setDialog({ ...dialog, form: { ...dialog.form, password: event.target.value } })}
-                placeholder={dialog.id ? "留空保持不变" : "可选"}
-                autoComplete="new-password"
-              />
-            </label>
           </div>
           <div className="order-environment-config">
             <div className="form-list-heading"><div><Network size={16} /><strong>测试环境</strong></div><small>可选</small></div>
             <div className="modal-grid">
-              <label className="field">
+              <label className="field full-width">
                 <span>实验环境</span>
                 <select value={dialog.form.environmentId} onChange={(event) => selectEnvironment(event.target.value)}>
                   <option value="">不使用实验环境</option>
                   {environments.map((environment) => <option key={environment.id} value={environment.id}>{environment.name}</option>)}
                 </select>
               </label>
-              <label className="field">
-                <span>测试场景</span>
-                <select value={dialog.form.scenarioId} disabled={!dialog.form.environmentId} onChange={(event) => selectScenario(event.target.value)}>
-                  <option value="">不使用测试场景</option>
-                  {scenarios.map((scenario) => <option key={scenario.id} value={scenario.id}>{scenario.name} / {scenario.category}</option>)}
-                </select>
-              </label>
             </div>
-            {dialogScenario && (
-              <div className="role-binding-editor">
-                <div className="form-list-heading"><div><Workflow size={16} /><strong>设备角色绑定</strong></div><small>{dialogScenario.roles.length} 个角色</small></div>
-                <div className="role-binding-grid">
-                  {dialogScenario.roles.map((role) => (
-                    <label className="field" key={role.id}>
-                      <span>{role.name} <small>{role.key} / {role.deviceType}</small></span>
-                      <select value={dialog.form.roleBindings[role.key] || ""} onChange={(event) => bindRole(role.key, event.target.value)}>
-                        <option value="">请选择设备</option>
-                        {environmentDevices.map((device) => {
-                          const compatible = matchesRole(device, role);
-                          return <option key={device.id} value={device.id} disabled={!compatible}>{device.name} / {device.type}{compatible ? "" : "（不匹配）"}</option>;
-                        })}
-                      </select>
-                    </label>
-                  ))}
-                </div>
-                {!environmentDevices.length && <div className="form-error">所选实验环境中没有可绑定的设备</div>}
-              </div>
-            )}
           </div>
           <div className="case-picker-heading">
             <span>选择用例</span>

@@ -181,16 +181,10 @@ export interface TestOrderSummary {
   productName: string;
   name: string;
   description: string;
-  targetUrl: string;
-  username: string;
   environmentId: string;
   environmentName: string;
-  scenarioId: string;
-  scenarioName: string;
-  roleBindings: Record<string, string>;
   caseIds: string[];
   caseCount: number;
-  hasPassword: boolean;
   createdAt: string;
   updatedAt: string;
   latestRun?: TestRun;
@@ -200,8 +194,6 @@ export interface TestOrderDetail extends TestOrderSummary {
   cases: TestCase[];
   runs: TestRun[];
   environment?: LabEnvironment;
-  scenario?: TestScenario;
-  boundDevices: DeviceResource[];
 }
 
 export interface ProductInput {
@@ -219,12 +211,7 @@ export interface TestCaseInput {
 export interface TestOrderInput {
   name: string;
   description: string;
-  targetUrl: string;
-  username: string;
-  password: string;
   environmentId: string;
-  scenarioId: string;
-  roleBindings: Record<string, string>;
   caseIds: string[];
 }
 

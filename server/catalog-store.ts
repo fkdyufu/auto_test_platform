@@ -106,16 +106,19 @@ export interface TestOrder {
   productId: string;
   name: string;
   description: string;
-  targetUrl: string;
-  username: string;
-  password: string;
   environmentId: string;
-  scenarioId: string;
-  roleBindings: Record<string, string>;
   caseIds: string[];
   createdAt: string;
   updatedAt: string;
   archivedAt?: string;
+}
+
+interface LegacyTestOrder extends TestOrder {
+  targetUrl?: string;
+  username?: string;
+  password?: string;
+  scenarioId?: string;
+  roleBindings?: Record<string, string>;
 }
 
 export interface CaseRun {
@@ -144,7 +147,7 @@ export interface TestRun {
 }
 
 interface CatalogData {
-  version: 4;
+  version: 5;
   products: Product[];
   testCases: TestCase[];
   deviceResources: DeviceResource[];
@@ -167,12 +170,10 @@ export interface DeviceResourceSummary extends Omit<DeviceResource, "controlInte
   controlInterfaces: PublicControlInterface[];
 }
 
-export interface TestOrderSummary extends Omit<TestOrder, "password"> {
+export interface TestOrderSummary extends TestOrder {
   productName: string;
   environmentName: string;
-  scenarioName: string;
   caseCount: number;
-  hasPassword: boolean;
   latestRun?: TestRun;
 }
 
@@ -180,13 +181,10 @@ export interface TestOrderDetail extends TestOrderSummary {
   cases: TestCase[];
   runs: TestRun[];
   environment?: LabEnvironment;
-  scenario?: TestScenario;
-  boundDevices: DeviceResourceSummary[];
 }
 
 export interface TestOrderExecutionContext {
   environment?: LabEnvironment;
-  scenario?: TestScenario;
   devices: DeviceResource[];
 }
 
@@ -223,16 +221,6 @@ function uniqueName(data: { name: string; archivedAt?: string }[], name: string,
   }
 }
 
-function normalizeTargetUrl(value: unknown): string {
-  const raw = requiredText(value, "目标地址", 2_048);
-  const withProtocol = /^https?:\/\//i.test(raw) ? raw : `http://${raw}`;
-  const url = new URL(withProtocol);
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new CatalogError("目标地址必须使用 http 或 https");
-  }
-  return url.toString().replace(/\/$/, "");
-}
-
 function clone<T>(value: T): T {
   return structuredClone(value);
 }
@@ -240,7 +228,7 @@ function clone<T>(value: T): T {
 function defaultData(): CatalogData {
   const timestamp = new Date().toISOString();
   return {
-    version: 4,
+    version: 5,
     products: ["WKCJ-I", "WKCJ-II"].map((name) => ({
       id: randomUUID(),
       name,
@@ -284,19 +272,18 @@ export class CatalogStore {
     this.initializePromise ??= this.initialize();
     await this.initializePromise;
     const data = JSON.parse(await readFile(this.filePath, "utf8")) as CatalogData & { version: number };
-    if (![1, 2, 3, 4].includes(data.version) || !Array.isArray(data.products) || !Array.isArray(data.testCases)) {
+    if (![1, 2, 3, 4, 5].includes(data.version) || !Array.isArray(data.products) || !Array.isArray(data.testCases)) {
       throw new CatalogError("业务数据文件格式不正确", 500);
     }
-    data.version = 4;
+    data.version = 5;
     data.deviceResources ??= [];
     data.labEnvironments ??= [];
     data.testScenarios ??= [];
     data.testOrders ??= [];
     data.testRuns ??= [];
-    data.testOrders.forEach((order) => {
+    const legacyOrders = data.testOrders as LegacyTestOrder[];
+    legacyOrders.forEach((order) => {
       order.environmentId ??= "";
-      order.scenarioId ??= "";
-      order.roleBindings ??= {};
     });
 
     const productIds = new Set(data.products.map((product) => product.id));
@@ -310,7 +297,7 @@ export class CatalogStore {
       })[0]?.id || data.products[0]?.id || "";
     const environmentOwners = new Map<string, string>();
     const scenarioOwners = new Map<string, string>();
-    data.testOrders.forEach((order) => {
+    legacyOrders.forEach((order) => {
       if (order.environmentId && !environmentOwners.has(order.environmentId)) environmentOwners.set(order.environmentId, order.productId);
       if (order.scenarioId && !scenarioOwners.has(order.scenarioId)) scenarioOwners.set(order.scenarioId, order.productId);
     });
@@ -366,12 +353,19 @@ export class CatalogStore {
         (connection) => allowedIds.has(connection.sourceDeviceId) && allowedIds.has(connection.targetDeviceId),
       );
     });
-    data.testOrders.forEach((order) => {
+    data.testOrders = legacyOrders.map((order) => {
       const environment = data.labEnvironments.find((item) => item.id === order.environmentId);
-      const scenario = data.testScenarios.find((item) => item.id === order.scenarioId);
-      if (environment && environment.productId !== order.productId) order.environmentId = "";
-      if (scenario && scenario.productId !== order.productId) order.scenarioId = "";
-      if (!order.environmentId || !order.scenarioId) order.roleBindings = {};
+      return {
+        id: order.id,
+        productId: order.productId,
+        name: order.name,
+        description: order.description || "",
+        environmentId: environment && environment.productId !== order.productId ? "" : order.environmentId,
+        caseIds: order.caseIds,
+        createdAt: order.createdAt,
+        updatedAt: order.updatedAt,
+        archivedAt: order.archivedAt,
+      };
     });
     return data;
   }
@@ -806,9 +800,6 @@ export class CatalogStore {
     await this.mutate((data) => {
       const scenario = data.testScenarios.find((item) => item.id === id && item.productId === productId && !item.archivedAt);
       if (!scenario) throw new CatalogError("测试场景不存在", 404);
-      if (data.testOrders.some((item) => !item.archivedAt && item.scenarioId === id)) {
-        throw new CatalogError("测试场景正在被测试单使用，不能删除", 409);
-      }
       scenario.archivedAt = new Date().toISOString();
       scenario.updatedAt = scenario.archivedAt;
     });
@@ -825,40 +816,13 @@ export class CatalogStore {
     return caseIds;
   }
 
-  private validateOrderEnvironment(
-    data: CatalogData,
-    productId: string,
-    environmentValue: unknown,
-    scenarioValue: unknown,
-    bindingsValue: unknown,
-  ): Pick<TestOrder, "environmentId" | "scenarioId" | "roleBindings"> {
+  private validateOrderEnvironment(data: CatalogData, productId: string, environmentValue: unknown): string {
     const environmentId = optionalText(environmentValue, 100);
-    const scenarioId = optionalText(scenarioValue, 100);
     const environment = environmentId
       ? data.labEnvironments.find((item) => item.id === environmentId && item.productId === productId && !item.archivedAt)
       : undefined;
-    const scenario = scenarioId
-      ? data.testScenarios.find((item) => item.id === scenarioId && item.productId === productId && !item.archivedAt)
-      : undefined;
     if (environmentId && !environment) throw new CatalogError("实验环境不属于当前产品或不存在", 404);
-    if (scenarioId && !scenario) throw new CatalogError("测试场景不属于当前产品或不存在", 404);
-    if (scenario && !environment) throw new CatalogError("选择测试场景后必须选择实验环境");
-    if (!scenario) return { environmentId, scenarioId: "", roleBindings: {} };
-
-    const input = recordValue(bindingsValue);
-    const roleBindings: Record<string, string> = {};
-    for (const role of scenario.roles) {
-      const deviceId = optionalText(input[role.key], 100);
-      if (!deviceId) throw new CatalogError(`请为角色“${role.name}”绑定设备`);
-      if (!environment?.deviceIds.includes(deviceId)) throw new CatalogError(`角色“${role.name}”绑定的设备不属于所选环境`);
-      const device = data.deviceResources.find((item) => item.id === deviceId && item.productId === productId && !item.archivedAt);
-      if (!device) throw new CatalogError(`角色“${role.name}”绑定的设备不存在`);
-      if (device.type.toLowerCase() !== role.deviceType.toLowerCase()) {
-        throw new CatalogError(`角色“${role.name}”需要 ${role.deviceType} 类型设备`);
-      }
-      roleBindings[role.key] = deviceId;
-    }
-    return { environmentId, scenarioId, roleBindings };
+    return environmentId;
   }
 
   async createTestOrder(productId: string, input: Record<string, unknown>): Promise<TestOrder> {
@@ -867,16 +831,12 @@ export class CatalogStore {
         throw new CatalogError("产品不存在", 404);
       }
       const timestamp = new Date().toISOString();
-      const environment = this.validateOrderEnvironment(data, productId, input.environmentId, input.scenarioId, input.roleBindings);
       const order: TestOrder = {
         id: randomUUID(),
         productId,
         name: requiredText(input.name, "测试单名称", 200),
         description: optionalText(input.description, 4_000),
-        targetUrl: normalizeTargetUrl(input.targetUrl),
-        username: optionalText(input.username, 300),
-        password: optionalText(input.password, 1_000),
-        ...environment,
+        environmentId: this.validateOrderEnvironment(data, productId, input.environmentId),
         caseIds: this.validateOrderCases(data, productId, input.caseIds),
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -892,10 +852,7 @@ export class CatalogStore {
       if (!order) throw new CatalogError("测试单不存在", 404);
       order.name = requiredText(input.name, "测试单名称", 200);
       order.description = optionalText(input.description, 4_000);
-      order.targetUrl = normalizeTargetUrl(input.targetUrl);
-      order.username = optionalText(input.username, 300);
-      if (typeof input.password === "string" && input.password.trim()) order.password = input.password.trim();
-      Object.assign(order, this.validateOrderEnvironment(data, productId, input.environmentId, input.scenarioId, input.roleBindings));
+      order.environmentId = this.validateOrderEnvironment(data, productId, input.environmentId);
       order.caseIds = this.validateOrderCases(data, productId, input.caseIds);
       order.updatedAt = new Date().toISOString();
       return clone(order);
@@ -912,20 +869,16 @@ export class CatalogStore {
   }
 
   private publicOrder(data: CatalogData, order: TestOrder): TestOrderSummary {
-    const { password: _password, ...safeOrder } = clone(order);
     const product = data.products.find((item) => item.id === order.productId);
     const environment = data.labEnvironments.find((item) => item.id === order.environmentId);
-    const scenario = data.testScenarios.find((item) => item.id === order.scenarioId);
     const latestRun = data.testRuns
       .filter((run) => run.testOrderId === order.id)
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
     return {
-      ...safeOrder,
+      ...clone(order),
       productName: product?.name || "已删除产品",
       environmentName: environment?.name || "",
-      scenarioName: scenario?.name || "",
       caseCount: order.caseIds.length,
-      hasPassword: Boolean(order.password),
       latestRun: latestRun ? clone(latestRun) : undefined,
     };
   }
@@ -960,18 +913,11 @@ export class CatalogStore {
       .slice(0, 30)
       .map(clone);
     const environment = data.labEnvironments.find((item) => item.id === order.environmentId && !item.archivedAt);
-    const scenario = data.testScenarios.find((item) => item.id === order.scenarioId && !item.archivedAt);
-    const boundIds = new Set(Object.values(order.roleBindings));
-    const boundDevices = data.deviceResources
-      .filter((item) => boundIds.has(item.id) && !item.archivedAt)
-      .map((item) => this.publicDevice(item));
     return {
       ...this.publicOrder(data, order),
       cases,
       runs,
       environment: environment ? clone(environment) : undefined,
-      scenario: scenario ? clone(scenario) : undefined,
-      boundDevices,
     };
   }
 
@@ -980,7 +926,6 @@ export class CatalogStore {
     const order = data.testOrders.find((item) => item.id === id && !item.archivedAt);
     if (!order) throw new CatalogError("测试单不存在", 404);
     const environment = data.labEnvironments.find((item) => item.id === order.environmentId && !item.archivedAt);
-    const scenario = data.testScenarios.find((item) => item.id === order.scenarioId && !item.archivedAt);
     const devices = environment
       ? environment.deviceIds
           .map((deviceId) => data.deviceResources.find((item) => item.id === deviceId && !item.archivedAt))
@@ -989,7 +934,6 @@ export class CatalogStore {
       : [];
     return {
       environment: environment ? clone(environment) : undefined,
-      scenario: scenario ? clone(scenario) : undefined,
       devices,
     };
   }

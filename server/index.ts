@@ -122,65 +122,35 @@ async function createRunRecord(
   return run;
 }
 
-function interpolateSteps(text: string, order: TestOrder): string {
-  return text
-    .replaceAll("{{baseUrl}}", order.targetUrl)
-    .replaceAll("{{targetUrl}}", order.targetUrl)
-    .replaceAll("{{username}}", order.username)
-    .replaceAll("{{password}}", order.password);
-}
-
-function buildEnvironmentDescription(order: TestOrder, context: TestOrderExecutionContext): string {
-  const { environment, scenario, devices } = context;
-  if (!environment && !scenario) return "";
+function buildEnvironmentDescription(context: TestOrderExecutionContext): string {
+  const { environment, devices } = context;
+  if (!environment) return "";
   const deviceById = new Map(devices.map((device) => [device.id, device]));
-  const sections: string[] = [];
-
-  if (environment) {
-    const deviceLines = devices.map((device) => {
-      const controls = device.controlInterfaces.length
-        ? device.controlInterfaces
-            .map((item) => {
-              const credentials = item.username
-                ? `，账号 ${item.username}${item.password ? `，密码 ${item.password}` : ""}`
-                : item.password
-                  ? `，密码 ${item.password}`
-                  : "";
-              return `${item.name}[${item.type}] ${item.address}${credentials}`;
-            })
-            .join("；")
-        : "未配置控制接口";
-      return `- ${device.name}（ID: ${device.id}，类型: ${device.type}${device.model ? `，型号: ${device.model}` : ""}）\n  控制接口: ${controls}`;
-    });
-    const connectionLines = environment.connections.map((connection) => {
-      const source = deviceById.get(connection.sourceDeviceId)?.name || connection.sourceDeviceId;
-      const target = deviceById.get(connection.targetDeviceId)?.name || connection.targetDeviceId;
-      return `- ${source}.${connection.sourcePort} <-> ${target}.${connection.targetPort}${connection.description ? `（${connection.description}）` : ""}`;
-    });
-    sections.push(
-      `实验环境：${environment.name}\n${environment.description || "无补充说明"}\n\n环境设备：\n${deviceLines.join("\n")}\n\n物理连接：\n${connectionLines.join("\n") || "未配置连接关系"}`,
-    );
-  }
-
-  if (scenario) {
-    const roleLines = scenario.roles.map((role) => {
-      const device = deviceById.get(order.roleBindings[role.key]);
-      return `- ${role.name}（${role.key}，要求类型: ${role.deviceType}）=> ${device?.name || "未绑定"}`;
-    });
-    const parameterLines = scenario.parameters.map((parameter) => `- ${parameter.name}（${parameter.key}）: ${parameter.defaultValue || "未设置"}`);
-    sections.push(
-      `测试场景：${scenario.name}（${scenario.category}）\n${scenario.description || "无补充说明"}\n\n设备角色绑定：\n${roleLines.join("\n")}\n\n场景参数：\n${parameterLines.join("\n") || "无"}\n\n环境搭建要求：\n${scenario.setupInstructions}\n\n环境验证要求：\n${scenario.verificationInstructions}\n\n环境清理要求：\n${scenario.cleanupInstructions || "无"}`,
-    );
-  }
-
-  return `\n\n测试环境上下文：\n${sections.join("\n\n")}\n\n如果执行本用例前环境尚未满足场景要求，先使用可用的设备控制接口进行配置并验证；未提供相应工具时，不得声称已经完成该配置。`;
+  const deviceLines = devices.map((device) => {
+    const controls = device.controlInterfaces.length
+      ? device.controlInterfaces
+          .map((item) => {
+            const credentials = item.username
+              ? `，账号 ${item.username}${item.password ? `，密码 ${item.password}` : ""}`
+              : item.password
+                ? `，密码 ${item.password}`
+                : "";
+            return `${item.name}[${item.type}] ${item.address}${credentials}`;
+          })
+          .join("；")
+      : "未配置控制接口";
+    return `- ${device.name}（ID: ${device.id}，类型: ${device.type}${device.model ? `，型号: ${device.model}` : ""}）\n  控制接口: ${controls}`;
+  });
+  const connectionLines = environment.connections.map((connection) => {
+    const source = deviceById.get(connection.sourceDeviceId)?.name || connection.sourceDeviceId;
+    const target = deviceById.get(connection.targetDeviceId)?.name || connection.targetDeviceId;
+    return `- ${source}.${connection.sourcePort} <-> ${target}.${connection.targetPort}${connection.description ? `（${connection.description}）` : ""}`;
+  });
+  return `\n\n测试环境上下文：\n实验环境：${environment.name}\n${environment.description || "无补充说明"}\n\n环境设备：\n${deviceLines.join("\n")}\n\n物理连接：\n${connectionLines.join("\n") || "未配置连接关系"}\n\n请根据用例步骤使用可用的设备控制接口；未提供相应工具时，不得声称已经完成操作。`;
 }
 
-function buildCaseRequirement(order: TestOrder, caseRun: CaseRun, context: TestOrderExecutionContext): string {
-  const credentials = order.username
-    ? `\n登录账号：${order.username}${order.password ? `\n登录密码：${order.password}` : ""}`
-    : "";
-  return `执行产品测试用例。\n\n产品目标：${order.targetUrl}${credentials}${buildEnvironmentDescription(order, context)}\n\n用例名称：${caseRun.caseNameSnapshot}\n\n测试步骤：\n${interpolateSteps(caseRun.stepsSnapshot, order)}\n\n预期结果：\n${interpolateSteps(caseRun.expectedResultSnapshot, order)}\n\n请直接使用当前提供的工具执行，并根据实际观察调用 finish_test 提交结论。`;
+function buildCaseRequirement(caseRun: CaseRun, context: TestOrderExecutionContext): string {
+  return `执行产品测试用例。${buildEnvironmentDescription(context)}\n\n用例名称：${caseRun.caseNameSnapshot}\n\n测试步骤：\n${caseRun.stepsSnapshot}\n\n预期结果：\n${caseRun.expectedResultSnapshot}\n\n请直接使用当前提供的工具执行，并根据实际观察调用 finish_test 提交结论。`;
 }
 
 async function updateStoredCaseRun(runId: string, caseRunId: string, update: Partial<CaseRun>): Promise<void> {
@@ -221,7 +191,7 @@ async function executeTestOrderRun(run: RunRecord, order: TestOrder, testRun: Te
     try {
       const execution = await executePiRun({
         runId: caseRun.id,
-        requirement: buildCaseRequirement(order, caseRun, executionContext),
+        requirement: buildCaseRequirement(caseRun, executionContext),
         settings,
         onEvent: (event) =>
           publish(run, {

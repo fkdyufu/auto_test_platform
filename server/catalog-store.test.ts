@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -19,28 +19,68 @@ test("initializes the two default products", async (t) => {
   assert.ok(products.every((product) => product.caseCount === 0));
 });
 
-test("creates product cases and a normalized test order", async (t) => {
+test("creates product cases and a test order collection", async (t) => {
   const store = await createStore(t);
   const [product] = await store.listProducts();
   const testCase = await store.createTestCase(product.id, {
     name: "检查版本",
-    steps: "访问 {{baseUrl}} 并查看版本",
+    steps: "访问设备并查看版本",
     expectedResult: "版本信息可见",
   });
   const order = await store.createTestOrder(product.id, {
     name: "冒烟测试",
     description: "",
-    targetUrl: "192.168.1.1",
-    username: "root",
-    password: "secret",
+    targetUrl: "旧字段应被忽略",
+    username: "旧字段应被忽略",
+    password: "旧字段应被忽略",
     caseIds: [testCase.id],
   });
   const detail = await store.getTestOrderDetail(product.id, order.id);
 
-  assert.equal(detail.targetUrl, "http://192.168.1.1");
-  assert.equal(detail.hasPassword, true);
+  assert.equal("targetUrl" in detail, false);
+  assert.equal("username" in detail, false);
   assert.equal("password" in detail, false);
+  assert.equal("scenarioId" in detail, false);
+  assert.equal("roleBindings" in detail, false);
   assert.equal(detail.cases[0].id, testCase.id);
+});
+
+test("migrates legacy test order fields without losing the collection", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "ai-test-catalog-legacy-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const filePath = path.join(directory, "catalog.json");
+  const store = new CatalogStore(filePath);
+  const [product] = await store.listProducts();
+  const testCase = await store.createTestCase(product.id, {
+    name: "旧版用例",
+    steps: "执行检查",
+    expectedResult: "检查通过",
+  });
+  const order = await store.createTestOrder(product.id, {
+    name: "旧版测试单",
+    caseIds: [testCase.id],
+  });
+  const data = JSON.parse(await readFile(filePath, "utf8")) as {
+    version: number;
+    testOrders: Array<Record<string, unknown>>;
+  };
+  data.version = 4;
+  Object.assign(data.testOrders[0], {
+    targetUrl: "http://192.168.1.1",
+    username: "root",
+    password: "secret",
+    scenarioId: "legacy-scenario",
+    roleBindings: { dut: "legacy-device" },
+  });
+  await writeFile(filePath, `${JSON.stringify(data, null, 2)}\n`);
+
+  const detail = await new CatalogStore(filePath).getTestOrderDetail(product.id, order.id);
+  assert.equal(detail.name, "旧版测试单");
+  assert.deepEqual(detail.caseIds, [testCase.id]);
+  assert.equal("targetUrl" in detail, false);
+  assert.equal("password" in detail, false);
+  assert.equal("scenarioId" in detail, false);
+  assert.equal("roleBindings" in detail, false);
 });
 
 test("rejects cases from another product", async (t) => {
@@ -55,7 +95,6 @@ test("rejects cases from another product", async (t) => {
   await assert.rejects(
     store.createTestOrder(firstProduct.id, {
       name: "错误测试单",
-      targetUrl: "http://127.0.0.1",
       caseIds: [foreignCase.id],
     }),
     (error: unknown) => error instanceof CatalogError && error.message === "测试单包含不属于该产品的用例",
@@ -72,7 +111,6 @@ test("keeps case snapshots stable after the source case changes", async (t) => {
   });
   const order = await store.createTestOrder(product.id, {
     name: "回归测试",
-    targetUrl: "http://127.0.0.1",
     caseIds: [testCase.id],
   });
   const run = await store.createTestRun("run-1", order.id);
@@ -88,7 +126,7 @@ test("keeps case snapshots stable after the source case changes", async (t) => {
   assert.equal(run.caseRuns[0].expectedResultSnapshot, "原始预期");
 });
 
-test("creates structured resources, an environment, a scenario, and role bindings", async (t) => {
+test("creates structured resources, an environment, and an independent scenario", async (t) => {
   const store = await createStore(t);
   const [product] = await store.listProducts();
   const master = await store.createDeviceResource(product.id, {
@@ -133,20 +171,16 @@ test("creates structured resources, an environment, a scenario, and role binding
   });
   const order = await store.createTestOrder(product.id, {
     name: "VRRP 回归",
-    targetUrl: "192.168.1.10",
     environmentId: environment.id,
-    scenarioId: scenario.id,
-    roleBindings: { master: master.id, backup: backup.id },
     caseIds: [testCase.id],
   });
 
   const detail = await store.getTestOrderDetail(product.id, order.id);
   const context = await store.getTestOrderExecutionContext(order.id);
   assert.equal(detail.environmentName, "双机网络实验室");
-  assert.equal(detail.scenarioName, "VRRP 双机主备");
-  assert.deepEqual(detail.boundDevices.map((item) => item.name).sort(), ["TAU-01", "TAU-02"]);
   assert.equal(context.devices.length, 2);
-  assert.equal(context.scenario?.parameters[0].defaultValue, "192.168.100.254");
+  assert.equal((await store.listTestScenarios(product.id))[0].id, scenario.id);
+  assert.equal("scenario" in context, false);
   assert.equal(master.controlInterfaces[0].hasPassword, true);
   assert.equal("password" in master.controlInterfaces[0], false);
   assert.equal(context.devices.find((item) => item.id === master.id)?.controlInterfaces[0].password, "secret");
@@ -184,12 +218,11 @@ test("rejects relay as a control interface type", async (t) => {
   );
 });
 
-test("rejects scenario role bindings to devices outside the selected environment", async (t) => {
+test("does not attach scenarios or role bindings to test orders", async (t) => {
   const store = await createStore(t);
   const [product] = await store.listProducts();
-  const inside = await store.createDeviceResource(product.id, { name: "环境内设备", type: "交换机", controlInterfaces: [] });
-  const outside = await store.createDeviceResource(product.id, { name: "环境外设备", type: "TAU", controlInterfaces: [] });
-  const environment = await store.createLabEnvironment(product.id, { name: "隔离环境", deviceIds: [inside.id], connections: [] });
+  const device = await store.createDeviceResource(product.id, { name: "环境内设备", type: "TAU", controlInterfaces: [] });
+  const environment = await store.createLabEnvironment(product.id, { name: "隔离环境", deviceIds: [device.id], connections: [] });
   const scenario = await store.createTestScenario(product.id, {
     name: "单设备场景",
     category: "基础",
@@ -199,29 +232,17 @@ test("rejects scenario role bindings to devices outside the selected environment
   });
   const testCase = await store.createTestCase(product.id, { name: "在线检查", steps: "打开页面", expectedResult: "页面可见" });
 
-  await assert.rejects(
-    store.createTestOrder(product.id, {
-      name: "无效绑定",
-      targetUrl: "127.0.0.1",
-      environmentId: environment.id,
-      scenarioId: scenario.id,
-      roleBindings: { dut: outside.id },
-      caseIds: [testCase.id],
-    }),
-    (error: unknown) => error instanceof CatalogError && error.message.includes("不属于所选环境"),
-  );
+  const order = await store.createTestOrder(product.id, {
+    name: "独立场景测试单",
+    environmentId: environment.id,
+    scenarioId: scenario.id,
+    roleBindings: { dut: device.id },
+    caseIds: [testCase.id],
+  });
 
-  await assert.rejects(
-    store.createTestOrder(product.id, {
-      name: "类型不匹配",
-      targetUrl: "127.0.0.1",
-      environmentId: environment.id,
-      scenarioId: scenario.id,
-      roleBindings: { dut: inside.id },
-      caseIds: [testCase.id],
-    }),
-    (error: unknown) => error instanceof CatalogError && error.message.includes("需要 TAU 类型设备"),
-  );
+  assert.equal("scenarioId" in order, false);
+  assert.equal("roleBindings" in order, false);
+  await store.archiveTestScenario(product.id, scenario.id);
 });
 
 test("isolates resources, environments, and orders by product", async (t) => {
@@ -263,7 +284,6 @@ test("isolates resources, environments, and orders by product", async (t) => {
   await assert.rejects(
     store.createTestOrder(firstProduct.id, {
       name: "跨产品测试单",
-      targetUrl: "127.0.0.1",
       environmentId: secondEnvironment.id,
       caseIds: [testCase.id],
     }),
@@ -272,7 +292,6 @@ test("isolates resources, environments, and orders by product", async (t) => {
 
   const order = await store.createTestOrder(firstProduct.id, {
     name: "第一产品测试单",
-    targetUrl: "127.0.0.1",
     caseIds: [testCase.id],
   });
   await assert.rejects(
