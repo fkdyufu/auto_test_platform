@@ -12,6 +12,10 @@ const TOOL_LABELS: Record<string, string> = {
   browser_press: "发送按键",
   browser_wait: "等待页面",
   browser_screenshot: "保存截图",
+  device_ssh_exec: "SSH 执行命令",
+  device_telnet_exec: "Telnet 执行命令",
+  device_serial_exec: "串口交互",
+  device_http_request: "设备 API 请求",
   finish_test: "提交结论",
 };
 

@@ -1,0 +1,199 @@
+import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import test from "node:test";
+import type { AddressInfo } from "node:net";
+import { createBrowserTools, type FinishResult } from "./browser-tools.js";
+import type { DeviceResource } from "./catalog-store.js";
+import {
+  createDeviceTools,
+  DeviceToolDriver,
+  parseNetworkAddress,
+  parseSerialAddress,
+  type DeviceProtocolAdapters,
+} from "./device-tools.js";
+import { createToolEvidence } from "./tool-evidence.js";
+
+const timestamp = "2026-09-02T00:00:00.000Z";
+
+function testDevice(): DeviceResource {
+  return {
+    id: "device-1",
+    productId: "product-1",
+    name: "TAU-1",
+    type: "TAU",
+    model: "WKCJ-II",
+    description: "",
+    controlInterfaces: [
+      { id: "ssh-1", name: "SSH", type: "ssh", address: "192.0.2.10:2222", username: "root", password: "secret" },
+      { id: "telnet-1", name: "Telnet", type: "telnet", address: "192.0.2.10", username: "root", password: "secret" },
+      { id: "serial-1", name: "Console", type: "serial", address: "/dev/ttyUSB0?baudRate=9600", username: "", password: "" },
+      { id: "api-1", name: "REST API", type: "api", address: "http://192.0.2.10/api", username: "api", password: "secret" },
+    ],
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+}
+
+function mockAdapters(calls: string[]): DeviceProtocolAdapters {
+  return {
+    ssh: async (request) => {
+      calls.push(`ssh:${request.control.id}:${request.command}`);
+      return { success: true, stdout: "ssh output", exitCode: 0 };
+    },
+    telnet: async (request) => {
+      calls.push(`telnet:${request.control.id}:${request.command}`);
+      return { success: true, stdout: "telnet output" };
+    },
+    serial: async (request) => {
+      calls.push(`serial:${request.control.id}:${request.input}`);
+      return { success: true, output: "serial output" };
+    },
+    http: async (request) => {
+      calls.push(`http:${request.control.id}:${request.method}:${request.path}`);
+      return { success: true, status: 200, body: "api output" };
+    },
+  };
+}
+
+test("parses network and serial control interface addresses", () => {
+  assert.deepEqual(parseNetworkAddress("192.0.2.10:2222", 22, ["ssh:"]), { host: "192.0.2.10", port: 2222 });
+  assert.deepEqual(parseNetworkAddress("telnet://router.local", 23, ["telnet:"]), { host: "router.local", port: 23 });
+  assert.deepEqual(parseSerialAddress("/dev/ttyUSB0?baudRate=9600&dataBits=7&stopBits=2&parity=even"), {
+    path: "/dev/ttyUSB0",
+    baudRate: 9600,
+    dataBits: 7,
+    stopBits: 2,
+    parity: "even",
+  });
+  assert.throws(() => parseNetworkAddress("http://192.0.2.10", 22, ["ssh:"]), /协议不正确/);
+  assert.throws(() => parseSerialAddress("/dev/ttyUSB0?dataBits=9"), /dataBits/);
+});
+
+test("resolves configured interfaces and marks evidence after device operations", async () => {
+  const calls: string[] = [];
+  const evidence = createToolEvidence();
+  const driver = new DeviceToolDriver([testDevice()], evidence, mockAdapters(calls));
+
+  await driver.ssh({ deviceId: "device-1", command: "uname -a" });
+  await driver.telnet({ deviceId: "device-1", command: "show version" });
+  await driver.serial({ deviceId: "device-1", input: "status" });
+  await driver.http({ deviceId: "device-1", method: "GET", path: "status" });
+
+  assert.deepEqual(calls, [
+    "ssh:ssh-1:uname -a",
+    "telnet:telnet-1:show version",
+    "serial:serial-1:status",
+    "http:api-1:GET:status",
+  ]);
+  assert.equal(evidence.hasEvidence(), true);
+  assert.throws(() => driver.resolve("unknown", undefined, "ssh"), /不在当前物理环境/);
+});
+
+test("requires interfaceId when a device has multiple interfaces of one type", () => {
+  const device = testDevice();
+  device.controlInterfaces.push({
+    id: "ssh-2",
+    name: "Backup SSH",
+    type: "ssh",
+    address: "192.0.2.11:22",
+    username: "root",
+    password: "",
+  });
+  const driver = new DeviceToolDriver([device], createToolEvidence(), mockAdapters([]));
+  assert.throws(() => driver.resolve(device.id, undefined, "ssh"), /多个 SSH 控制接口/);
+  assert.equal(driver.resolve(device.id, "ssh-2", "ssh").control.address, "192.0.2.11:22");
+});
+
+test("registers only tools available in the current physical environment", () => {
+  const allTools = createDeviceTools({ devices: [testDevice()], evidence: createToolEvidence() });
+  assert.deepEqual(allTools.toolNames, [
+    "device_ssh_exec",
+    "device_telnet_exec",
+    "device_serial_exec",
+    "device_http_request",
+  ]);
+
+  const browserOnly = testDevice();
+  browserOnly.controlInterfaces = [{
+    id: "web-1",
+    name: "Web",
+    type: "web",
+    address: "http://192.0.2.10",
+    username: "",
+    password: "",
+  }];
+  assert.deepEqual(createDeviceTools({ devices: [browserOnly], evidence: createToolEvidence() }).toolNames, []);
+});
+
+test("aborts active device operations when the driver closes", async () => {
+  const evidence = createToolEvidence();
+  const adapters = mockAdapters([]);
+  adapters.ssh = async (_request, signal) => new Promise((_resolve, reject) => {
+    signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+  });
+  const driver = new DeviceToolDriver([testDevice()], evidence, adapters);
+  const execution = driver.ssh({ deviceId: "device-1", command: "sleep 60" });
+  await driver.close();
+
+  await assert.rejects(execution, /aborted/);
+  assert.equal(evidence.hasEvidence(), false);
+});
+
+test("performs a real same-origin API request with configured credentials", async (t) => {
+  const server = createServer((request, response) => {
+    assert.equal(request.url, "/api/status");
+    assert.equal(request.headers.authorization, `Basic ${Buffer.from("api-user:api-password").toString("base64")}`);
+    response.setHeader("Content-Type", "application/json");
+    response.end(JSON.stringify({ status: "ready" }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve()))));
+  const { port } = server.address() as AddressInfo;
+  const device = testDevice();
+  device.controlInterfaces = [{
+    id: "api-local",
+    name: "Local API",
+    type: "api",
+    address: `http://127.0.0.1:${port}/api`,
+    username: "api-user",
+    password: "api-password",
+  }];
+  const evidence = createToolEvidence();
+  const driver = new DeviceToolDriver([device], evidence);
+
+  const result = await driver.http({ deviceId: device.id, method: "GET", path: "status" });
+  const payload = JSON.parse(result.content[0].text) as { success: boolean; status: number; body: string };
+  assert.equal(payload.success, true);
+  assert.equal(payload.status, 200);
+  assert.deepEqual(JSON.parse(payload.body), { status: "ready" });
+  assert.equal(evidence.hasEvidence(), true);
+  await assert.rejects(
+    driver.http({ deviceId: device.id, method: "GET", path: "http://example.com/outside" }),
+    /不能跳转到控制接口之外/,
+  );
+});
+
+test("allows finish_test after evidence from a non-browser device tool", async () => {
+  const evidence = createToolEvidence();
+  let finishResult: FinishResult | undefined;
+  const toolset = createBrowserTools({
+    runId: "device-evidence",
+    artifactsDirectory: "/tmp/auto-test-platform-artifacts",
+    evidence,
+    onFinish: (result) => {
+      finishResult = result;
+    },
+  });
+  const finishTool = toolset.tools.find((tool) => tool.name === "finish_test");
+  assert.ok(finishTool);
+  const execute = finishTool.execute as unknown as (
+    id: string,
+    params: { status: "passed" | "failed"; summary: string },
+  ) => Promise<unknown>;
+
+  await assert.rejects(execute("finish-1", { status: "passed", summary: "未执行工具" }), /真实设备或页面结果/);
+  evidence.mark();
+  await execute("finish-2", { status: "passed", summary: "SSH 检查通过" });
+  assert.deepEqual(finishResult, { status: "passed", summary: "SSH 检查通过" });
+  await toolset.driver.close();
+});

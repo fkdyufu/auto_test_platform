@@ -16,3 +16,24 @@ test("keeps non-fill tool arguments unchanged", () => {
   const event = { tool: "browser_open", args: { url: "http://127.0.0.1" } };
   assert.equal(sanitizeToolEvent(event), event);
 });
+
+test("redacts sensitive device API headers", () => {
+  const event = sanitizeToolEvent({
+    tool: "device_http_request",
+    args: {
+      method: "GET",
+      headers: [
+        { name: "Authorization", value: "Bearer secret" },
+        { name: "Accept", value: "application/json" },
+      ],
+    },
+  });
+
+  assert.deepEqual(event.args, {
+    method: "GET",
+    headers: [
+      { name: "Authorization", value: "[REDACTED]" },
+      { name: "Accept", value: "application/json" },
+    ],
+  });
+});

@@ -1,0 +1,530 @@
+import { Buffer } from "node:buffer";
+import { Client as SshClient } from "ssh2";
+import { Telnet } from "telnet-client";
+import { SerialPort } from "serialport";
+import { defineTool } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
+import type { ControlInterface, ControlInterfaceType, DeviceResource } from "./catalog-store.js";
+import type { ToolEvidence } from "./tool-evidence.js";
+
+const DEFAULT_TIMEOUT_MS = 15_000;
+const MAX_OUTPUT_LENGTH = 32_000;
+
+interface ResolvedControlInterface {
+  device: DeviceResource;
+  control: ControlInterface;
+}
+
+interface NetworkAddress {
+  host: string;
+  port: number;
+}
+
+interface SshRequest {
+  control: ControlInterface;
+  command: string;
+  timeoutMs: number;
+}
+
+interface TelnetRequest extends SshRequest {}
+
+interface SerialRequest {
+  control: ControlInterface;
+  input: string;
+  waitMs: number;
+  appendNewline: boolean;
+}
+
+interface HttpRequest {
+  control: ControlInterface;
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  path: string;
+  headers: Array<{ name: string; value: string }>;
+  body?: string;
+  timeoutMs: number;
+}
+
+interface DeviceProtocolAdapters {
+  ssh(request: SshRequest, signal?: AbortSignal): Promise<Record<string, unknown>>;
+  telnet(request: TelnetRequest, signal?: AbortSignal): Promise<Record<string, unknown>>;
+  serial(request: SerialRequest, signal?: AbortSignal): Promise<Record<string, unknown>>;
+  http(request: HttpRequest, signal?: AbortSignal): Promise<Record<string, unknown>>;
+}
+
+interface DeviceToolsOptions {
+  devices: DeviceResource[];
+  evidence: ToolEvidence;
+  adapters?: DeviceProtocolAdapters;
+}
+
+function abortError(): Error {
+  const error = new Error("设备操作已取消");
+  error.name = "AbortError";
+  return error;
+}
+
+function limitedText(value: string): { text: string; truncated: boolean } {
+  if (value.length <= MAX_OUTPUT_LENGTH) return { text: value, truncated: false };
+  const half = Math.floor(MAX_OUTPUT_LENGTH / 2);
+  return {
+    text: `${value.slice(0, half)}\n... 输出已截断 ...\n${value.slice(-half)}`,
+    truncated: true,
+  };
+}
+
+function textResult(value: Record<string, unknown>) {
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }],
+    details: value,
+  };
+}
+
+export function parseNetworkAddress(
+  address: string,
+  defaultPort: number,
+  allowedProtocols: string[],
+): NetworkAddress {
+  const trimmed = address.trim();
+  if (!trimmed) throw new Error("控制接口地址为空");
+  const defaultProtocol = allowedProtocols[0].replace(/:$/, "");
+  const withProtocol = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `${defaultProtocol}://${trimmed}`;
+  let url: URL;
+  try {
+    url = new URL(withProtocol);
+  } catch {
+    throw new Error(`控制接口地址格式不正确：${address}`);
+  }
+  if (!allowedProtocols.includes(url.protocol)) {
+    throw new Error(`控制接口地址协议不正确，应为 ${allowedProtocols.join(" 或 ")}`);
+  }
+  const port = url.port ? Number(url.port) : defaultPort;
+  if (!url.hostname || !Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new Error(`控制接口地址格式不正确：${address}`);
+  }
+  return { host: url.hostname, port };
+}
+
+export interface SerialAddress {
+  path: string;
+  baudRate: number;
+  dataBits: 5 | 6 | 7 | 8;
+  stopBits: 1 | 2;
+  parity: "none" | "even" | "mark" | "odd" | "space";
+}
+
+export function parseSerialAddress(address: string): SerialAddress {
+  const trimmed = address.trim();
+  if (!trimmed) throw new Error("串口地址为空");
+  let pathValue = trimmed;
+  let query = "";
+  if (trimmed.startsWith("serial://")) {
+    const url = new URL(trimmed);
+    pathValue = decodeURIComponent(url.pathname);
+    query = url.search.slice(1);
+  } else {
+    const queryIndex = trimmed.indexOf("?");
+    if (queryIndex >= 0) {
+      pathValue = trimmed.slice(0, queryIndex);
+      query = trimmed.slice(queryIndex + 1);
+    }
+  }
+  if (!pathValue) throw new Error("串口路径为空");
+  const parameters = new URLSearchParams(query);
+  const baudRate = Number(parameters.get("baudRate") || "115200");
+  const dataBits = Number(parameters.get("dataBits") || "8") as SerialAddress["dataBits"];
+  const stopBits = Number(parameters.get("stopBits") || "1") as SerialAddress["stopBits"];
+  const parity = (parameters.get("parity") || "none") as SerialAddress["parity"];
+  if (!Number.isInteger(baudRate) || baudRate <= 0) throw new Error("串口 baudRate 不正确");
+  if (![5, 6, 7, 8].includes(dataBits)) throw new Error("串口 dataBits 只能是 5、6、7 或 8");
+  if (![1, 2].includes(stopBits)) throw new Error("串口 stopBits 只能是 1 或 2");
+  if (!["none", "even", "mark", "odd", "space"].includes(parity)) throw new Error("串口 parity 不正确");
+  return { path: pathValue, baudRate, dataBits, stopBits, parity };
+}
+
+function sshExec(request: SshRequest, signal?: AbortSignal): Promise<Record<string, unknown>> {
+  if (!request.control.username) throw new Error("SSH 控制接口未配置账号");
+  const target = parseNetworkAddress(request.control.address, 22, ["ssh:"]);
+  return new Promise((resolve, reject) => {
+    const client = new SshClient();
+    let settled = false;
+    const timer = setTimeout(() => finish(new Error(`SSH 操作超时（${request.timeoutMs}ms）`)), request.timeoutMs);
+    const onAbort = () => finish(abortError());
+    const finish = (error?: Error, result?: Record<string, unknown>) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      client.destroy();
+      if (error) reject(error);
+      else resolve(result || {});
+    };
+
+    if (signal?.aborted) {
+      finish(abortError());
+      return;
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+    client.once("error", (error) => finish(error));
+    client.once("ready", () => {
+      client.exec(request.command, (error, stream) => {
+        if (error) {
+          finish(error);
+          return;
+        }
+        let stdout = "";
+        let stderr = "";
+        stream.on("data", (chunk: Buffer | string) => {
+          stdout += chunk.toString();
+        });
+        stream.stderr.on("data", (chunk: Buffer | string) => {
+          stderr += chunk.toString();
+        });
+        stream.once("error", (streamError: Error) => finish(streamError));
+        stream.once("close", (exitCode: number | null, remoteSignal: string | null) => {
+          const safeStdout = limitedText(stdout);
+          const safeStderr = limitedText(stderr);
+          finish(undefined, {
+            success: exitCode === 0,
+            stdout: safeStdout.text,
+            stderr: safeStderr.text,
+            exitCode,
+            signal: remoteSignal,
+            truncated: safeStdout.truncated || safeStderr.truncated,
+          });
+        });
+      });
+    });
+    client.connect({
+      host: target.host,
+      port: target.port,
+      username: request.control.username,
+      password: request.control.password || undefined,
+      readyTimeout: request.timeoutMs,
+      keepaliveInterval: 5_000,
+      keepaliveCountMax: 2,
+    });
+  });
+}
+
+async function telnetExec(request: TelnetRequest, signal?: AbortSignal): Promise<Record<string, unknown>> {
+  const target = parseNetworkAddress(request.control.address, 23, ["telnet:"]);
+  const connection = new Telnet();
+  const onAbort = () => void connection.destroy();
+  if (signal?.aborted) throw abortError();
+  signal?.addEventListener("abort", onAbort, { once: true });
+  try {
+    await connection.connect({
+      host: target.host,
+      port: target.port,
+      username: request.control.username || undefined,
+      password: request.control.password || undefined,
+      disableLogon: !request.control.username,
+      shellPrompt: /(?:^|\r?\n)[^\r\n]*[#$>]\s*$/,
+      loginPrompt: /(?:login|username)[: ]*$/i,
+      passwordPrompt: /password[: ]*$/i,
+      timeout: request.timeoutMs,
+      execTimeout: request.timeoutMs,
+      stripControls: true,
+      maxBufferLength: MAX_OUTPUT_LENGTH * 4,
+    });
+    if (signal?.aborted) throw abortError();
+    const output = limitedText(await connection.exec(request.command, { execTimeout: request.timeoutMs }));
+    if (signal?.aborted) throw abortError();
+    return { success: true, stdout: output.text, stderr: "", exitCode: null, truncated: output.truncated };
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
+    await connection.end().catch(() => connection.destroy()).catch(() => undefined);
+  }
+}
+
+function openSerialPort(port: SerialPort): Promise<void> {
+  return new Promise((resolve, reject) => port.open((error) => (error ? reject(error) : resolve())));
+}
+
+function writeSerialPort(port: SerialPort, input: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    port.write(input, (writeError) => {
+      if (writeError) {
+        reject(writeError);
+        return;
+      }
+      port.drain((drainError) => (drainError ? reject(drainError) : resolve()));
+    });
+  });
+}
+
+function closeSerialPort(port: SerialPort): Promise<void> {
+  if (!port.isOpen) return Promise.resolve();
+  return new Promise((resolve) => port.close(() => resolve()));
+}
+
+function waitFor(milliseconds: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(abortError());
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, milliseconds);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(abortError());
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+async function serialExec(request: SerialRequest, signal?: AbortSignal): Promise<Record<string, unknown>> {
+  const options = parseSerialAddress(request.control.address);
+  const port = new SerialPort({ ...options, autoOpen: false });
+  let output = "";
+  let portError: Error | undefined;
+  const onData = (chunk: Buffer | string) => {
+    output += chunk.toString();
+  };
+  const onError = (error: Error) => {
+    portError = error;
+  };
+  const onAbort = () => port.destroy();
+  port.on("data", onData);
+  port.on("error", onError);
+  signal?.addEventListener("abort", onAbort, { once: true });
+  try {
+    if (signal?.aborted) throw abortError();
+    await openSerialPort(port);
+    await writeSerialPort(port, `${request.input}${request.appendNewline ? "\r\n" : ""}`);
+    await waitFor(request.waitMs, signal);
+    if (portError) throw portError;
+    const safeOutput = limitedText(output);
+    return { success: true, output: safeOutput.text, truncated: safeOutput.truncated };
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
+    port.off("data", onData);
+    port.off("error", onError);
+    await closeSerialPort(port);
+  }
+}
+
+async function httpRequest(request: HttpRequest, signal?: AbortSignal): Promise<Record<string, unknown>> {
+  const baseUrl = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(request.control.address)
+    ? request.control.address
+    : `http://${request.control.address}`);
+  if (baseUrl.protocol !== "http:" && baseUrl.protocol !== "https:") throw new Error("API 控制接口仅支持 HTTP/HTTPS");
+  const requestUrl = new URL(request.path || "", baseUrl.href.endsWith("/") ? baseUrl : new URL(`${baseUrl.href}/`));
+  if (requestUrl.origin !== baseUrl.origin) throw new Error("API 请求路径不能跳转到控制接口之外的地址");
+  const headers = new Headers(request.headers.map((item): [string, string] => [item.name, item.value]));
+  if (!headers.has("Authorization") && (request.control.username || request.control.password)) {
+    if (request.control.username) {
+      headers.set("Authorization", `Basic ${Buffer.from(`${request.control.username}:${request.control.password}`).toString("base64")}`);
+    } else {
+      headers.set("Authorization", `Bearer ${request.control.password}`);
+    }
+  }
+  if (request.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  const timeoutSignal = AbortSignal.timeout(request.timeoutMs);
+  const combinedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+  const response = await fetch(requestUrl, {
+    method: request.method,
+    headers,
+    body: request.method === "GET" ? undefined : request.body,
+    redirect: "manual",
+    signal: combinedSignal,
+  });
+  const responseBody = limitedText(await response.text());
+  return {
+    success: response.ok,
+    status: response.status,
+    statusText: response.statusText,
+    contentType: response.headers.get("content-type") || "",
+    body: responseBody.text,
+    truncated: responseBody.truncated,
+  };
+}
+
+const defaultAdapters: DeviceProtocolAdapters = {
+  ssh: sshExec,
+  telnet: telnetExec,
+  serial: serialExec,
+  http: httpRequest,
+};
+
+export class DeviceToolDriver {
+  private readonly activeOperations = new Set<AbortController>();
+
+  constructor(
+    private readonly devices: DeviceResource[],
+    private readonly evidence: ToolEvidence,
+    private readonly adapters: DeviceProtocolAdapters = defaultAdapters,
+  ) {}
+
+  resolve(deviceId: string, interfaceId: string | undefined, type: ControlInterfaceType): ResolvedControlInterface {
+    const device = this.devices.find((item) => item.id === deviceId);
+    if (!device) throw new Error(`设备不在当前物理环境中：${deviceId}`);
+    const controls = device.controlInterfaces.filter((item) => item.type === type);
+    if (interfaceId) {
+      const control = controls.find((item) => item.id === interfaceId);
+      if (!control) throw new Error(`设备“${device.name}”不存在指定的 ${type.toUpperCase()} 控制接口`);
+      return { device, control };
+    }
+    if (!controls.length) throw new Error(`设备“${device.name}”未配置 ${type.toUpperCase()} 控制接口`);
+    if (controls.length > 1) {
+      throw new Error(`设备“${device.name}”有多个 ${type.toUpperCase()} 控制接口，请提供 interfaceId：${controls.map((item) => `${item.name}[${item.id}]`).join("、")}`);
+    }
+    return { device, control: controls[0] };
+  }
+
+  private async run<T>(signal: AbortSignal | undefined, operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    const controller = new AbortController();
+    this.activeOperations.add(controller);
+    const combinedSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+    try {
+      const result = await operation(combinedSignal);
+      this.evidence.mark();
+      return result;
+    } finally {
+      this.activeOperations.delete(controller);
+    }
+  }
+
+  async ssh(params: { deviceId: string; interfaceId?: string; command: string; timeoutMs?: number }, signal?: AbortSignal) {
+    const { device, control } = this.resolve(params.deviceId, params.interfaceId, "ssh");
+    const result = await this.run(signal, (activeSignal) => this.adapters.ssh({
+      control,
+      command: params.command,
+      timeoutMs: params.timeoutMs || DEFAULT_TIMEOUT_MS,
+    }, activeSignal));
+    return textResult({ device: device.name, interface: control.name, ...result });
+  }
+
+  async telnet(params: { deviceId: string; interfaceId?: string; command: string; timeoutMs?: number }, signal?: AbortSignal) {
+    const { device, control } = this.resolve(params.deviceId, params.interfaceId, "telnet");
+    const result = await this.run(signal, (activeSignal) => this.adapters.telnet({
+      control,
+      command: params.command,
+      timeoutMs: params.timeoutMs || DEFAULT_TIMEOUT_MS,
+    }, activeSignal));
+    return textResult({ device: device.name, interface: control.name, ...result });
+  }
+
+  async serial(
+    params: { deviceId: string; interfaceId?: string; input: string; waitMs?: number; appendNewline?: boolean },
+    signal?: AbortSignal,
+  ) {
+    const { device, control } = this.resolve(params.deviceId, params.interfaceId, "serial");
+    const result = await this.run(signal, (activeSignal) => this.adapters.serial({
+      control,
+      input: params.input,
+      waitMs: params.waitMs || 1_000,
+      appendNewline: params.appendNewline !== false,
+    }, activeSignal));
+    return textResult({ device: device.name, interface: control.name, ...result });
+  }
+
+  async http(
+    params: {
+      deviceId: string;
+      interfaceId?: string;
+      method: HttpRequest["method"];
+      path?: string;
+      headers?: Array<{ name: string; value: string }>;
+      body?: string;
+      timeoutMs?: number;
+    },
+    signal?: AbortSignal,
+  ) {
+    const { device, control } = this.resolve(params.deviceId, params.interfaceId, "api");
+    const result = await this.run(signal, (activeSignal) => this.adapters.http({
+      control,
+      method: params.method,
+      path: params.path || "",
+      headers: params.headers || [],
+      body: params.body,
+      timeoutMs: params.timeoutMs || DEFAULT_TIMEOUT_MS,
+    }, activeSignal));
+    return textResult({ device: device.name, interface: control.name, ...result });
+  }
+
+  async close(): Promise<void> {
+    this.activeOperations.forEach((controller) => controller.abort());
+    this.activeOperations.clear();
+  }
+}
+
+const commonParameters = {
+  deviceId: Type.String({ description: "当前物理环境中的设备 ID" }),
+  interfaceId: Type.Optional(Type.String({ description: "控制接口 ID；设备只有一个同类型接口时可省略" })),
+};
+
+export function createDeviceTools(options: DeviceToolsOptions) {
+  const driver = new DeviceToolDriver(options.devices, options.evidence, options.adapters);
+  const sshTool = defineTool({
+    name: "device_ssh_exec",
+    label: "SSH 执行命令",
+    description: "通过设备已配置的 SSH 控制接口执行命令。地址和凭据由平台根据设备 ID 获取。",
+    parameters: Type.Object({
+      ...commonParameters,
+      command: Type.String({ minLength: 1, maxLength: 20_000 }),
+      timeoutMs: Type.Optional(Type.Number({ minimum: 1_000, maximum: 120_000 })),
+    }),
+    execute: async (_id, params, signal) => driver.ssh(params, signal),
+  });
+  const telnetTool = defineTool({
+    name: "device_telnet_exec",
+    label: "Telnet 执行命令",
+    description: "通过设备已配置的 Telnet 控制接口登录并执行命令。地址和凭据由平台自动获取。",
+    parameters: Type.Object({
+      ...commonParameters,
+      command: Type.String({ minLength: 1, maxLength: 20_000 }),
+      timeoutMs: Type.Optional(Type.Number({ minimum: 1_000, maximum: 120_000 })),
+    }),
+    execute: async (_id, params, signal) => driver.telnet(params, signal),
+  });
+  const serialTool = defineTool({
+    name: "device_serial_exec",
+    label: "串口交互",
+    description: "向设备已配置的本地串口发送内容并读取响应。串口地址可用查询参数配置 baudRate、dataBits、stopBits 和 parity。",
+    parameters: Type.Object({
+      ...commonParameters,
+      input: Type.String({ minLength: 1, maxLength: 20_000 }),
+      waitMs: Type.Optional(Type.Number({ minimum: 100, maximum: 10_000 })),
+      appendNewline: Type.Optional(Type.Boolean({ description: "是否自动追加 CRLF，默认 true" })),
+    }),
+    execute: async (_id, params, signal) => driver.serial(params, signal),
+  });
+  const httpTool = defineTool({
+    name: "device_http_request",
+    label: "设备 API 请求",
+    description: "向设备已配置的 API 控制接口发送同源 HTTP 请求。平台自动使用接口账号密码进行 Basic 或 Bearer 认证。",
+    parameters: Type.Object({
+      ...commonParameters,
+      method: Type.Union([
+        Type.Literal("GET"),
+        Type.Literal("POST"),
+        Type.Literal("PUT"),
+        Type.Literal("PATCH"),
+        Type.Literal("DELETE"),
+      ]),
+      path: Type.Optional(Type.String({ maxLength: 4_000, description: "相对于接口基地址的路径，可包含查询参数" })),
+      headers: Type.Optional(Type.Array(Type.Object({
+        name: Type.String({ minLength: 1, maxLength: 200 }),
+        value: Type.String({ maxLength: 4_000 }),
+      }), { maxItems: 30 })),
+      body: Type.Optional(Type.String({ maxLength: 100_000, description: "请求体；JSON 请求应传入 JSON 字符串" })),
+      timeoutMs: Type.Optional(Type.Number({ minimum: 1_000, maximum: 120_000 })),
+    }),
+    execute: async (_id, params, signal) => driver.http(params, signal),
+  });
+
+  const availableTypes = new Set(options.devices.flatMap((device) => device.controlInterfaces.map((item) => item.type)));
+  const tools = [
+    ...(availableTypes.has("ssh") ? [sshTool] : []),
+    ...(availableTypes.has("telnet") ? [telnetTool] : []),
+    ...(availableTypes.has("serial") ? [serialTool] : []),
+    ...(availableTypes.has("api") ? [httpTool] : []),
+  ];
+  return { driver, tools, toolNames: tools.map((tool) => tool.name) };
+}
+
+export type { DeviceProtocolAdapters };

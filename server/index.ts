@@ -147,7 +147,7 @@ function buildPhysicalEnvironmentDescription(context: TestOrderExecutionContext)
               : item.password
                 ? `，密码 ${item.password}`
                 : "";
-            return `${item.name}[${item.type}] ${item.address}${credentials}`;
+            return `${item.name}[${item.type}，接口 ID: ${item.id}] ${item.address}${credentials}`;
           })
           .join("；")
       : "未配置控制接口";
@@ -293,6 +293,7 @@ async function executeTestOrderRun(run: RunRecord, order: TestOrder, testRun: Te
           runId: `${scenarioRun.id}-setup`,
           requirement: buildScenarioSetupRequirement(scenario, scenarioRun, executionContext),
           settings,
+          devices: executionContext.devices,
           scenarioBinding: scenarioBindingDefinition(scenario, executionContext),
           onEvent: (event) => publish(run, {
             ...event,
@@ -396,6 +397,7 @@ async function executeTestOrderRun(run: RunRecord, order: TestOrder, testRun: Te
           runId: caseRun.id,
           requirement: buildCaseRequirement(caseRun, scenario!, scenarioRun, executionContext),
           settings,
+          devices: executionContext.devices,
           onEvent: (event) =>
             publish(run, {
               ...event,
@@ -495,6 +497,7 @@ async function executeTestOrderRun(run: RunRecord, order: TestOrder, testRun: Te
           runId: `${scenarioRun.id}-cleanup`,
           requirement: buildScenarioCleanupRequirement(scenario, scenarioRun, executionContext),
           settings,
+          devices: executionContext.devices,
           onEvent: (event) => publish(run, {
             ...event,
             scenarioRunId: scenarioRun.id,

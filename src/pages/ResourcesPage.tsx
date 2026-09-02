@@ -42,6 +42,15 @@ const INTERFACE_LABELS: Record<ControlInterfaceType, string> = {
   other: "其他",
 };
 
+const INTERFACE_ADDRESS_PLACEHOLDERS: Record<ControlInterfaceType, string> = {
+  web: "例如 http://192.168.1.1",
+  ssh: "例如 192.168.1.1:22",
+  telnet: "例如 192.168.1.1:23",
+  serial: "例如 /dev/ttyUSB0?baudRate=115200",
+  api: "例如 http://192.168.1.1/api/",
+  other: "接口地址",
+};
+
 const TAB_META: Record<ResourceTab, { label: string; action: string }> = {
   devices: { label: "设备资源", action: "新增设备" },
   physicalEnvironments: { label: "物理环境", action: "新增物理环境" },
@@ -297,7 +306,7 @@ function DeviceForm({ dialog, setDialog }: { dialog: Extract<ResourceDialog, { k
       {dialog.form.controlInterfaces.map((item) => <div className="structured-row control-row" key={item.id}>
         <label><span>类型</span><select value={item.type} onChange={(event) => updateControl(item.id, { type: event.target.value as ControlInterfaceType })}>{Object.entries(INTERFACE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
         <label><span>名称</span><input value={item.name} placeholder="例如 Web 管理" onChange={(event) => updateControl(item.id, { name: event.target.value })} /></label>
-        <label className="grow"><span>接口地址</span><input value={item.address} placeholder="URL、IP:端口或串口路径" onChange={(event) => updateControl(item.id, { address: event.target.value })} /></label>
+        <label className="grow"><span>接口地址</span><input value={item.address} placeholder={INTERFACE_ADDRESS_PLACEHOLDERS[item.type]} onChange={(event) => updateControl(item.id, { address: event.target.value })} /></label>
         <label><span>账号</span><input value={item.username} placeholder="可选" autoComplete="off" onChange={(event) => updateControl(item.id, { username: event.target.value })} /></label>
         <label><span>密码</span><input type="password" value={item.password} placeholder={dialog.id ? "留空保持不变" : "可选"} autoComplete="new-password" onChange={(event) => updateControl(item.id, { password: event.target.value })} /></label>
         <button type="button" className="icon-action danger row-remove" title="删除接口" onClick={() => update({ controlInterfaces: dialog.form.controlInterfaces.filter((control) => control.id !== item.id) })}><Trash2 size={16} /></button>

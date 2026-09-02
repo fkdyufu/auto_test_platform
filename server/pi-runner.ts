@@ -7,19 +7,23 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { createBrowserTools, type FinishResult } from "./browser-tools.js";
+import type { DeviceResource } from "./catalog-store.js";
+import { createDeviceTools } from "./device-tools.js";
 import { modelRuntimePaths, type ModelSettings } from "./settings-store.js";
+import { createToolEvidence } from "./tool-evidence.js";
 
 const RUNTIME_PROVIDER_ID = "test-runner";
 
-const SYSTEM_PROMPT = `你是一个自动化测试执行 Agent。你会收到一段用户需求，并通过提供的浏览器工具直接完成它。
+const SYSTEM_PROMPT = `你是一个自动化测试执行 Agent。你会收到一段测试需求，并通过当前提供的浏览器或设备控制工具直接完成它。
 
 执行规则：
-1. 需求包含网页地址时，先调用 browser_open。
-2. 根据 browser_open 或 browser_inspect 返回的页面状态选择元素并操作。
-3. 页面发生变化后重新检查，不要猜测页面内容。
-4. 只有实际观察到符合需求的结果后才能判定通过。
-5. 完成后必须调用 finish_test；无法完成时调用 finish_test 并标记 failed。
-6. 不要编写测试脚本，不要只描述操作步骤，直接执行需求。`;
+1. 根据设备 ID 和控制接口 ID 选择工具，不要自行编造地址或凭据。
+2. 需求包含网页地址时调用 browser_open，并根据页面检查结果选择元素操作。
+3. SSH、Telnet、串口或 API 操作必须调用对应的 device_* 工具，以工具返回内容作为事实依据。
+4. 页面或设备状态发生变化后重新读取，不要猜测结果。
+5. 只有实际观察到符合需求的结果后才能判定通过。
+6. 完成后必须调用 finish_test；无法完成时调用 finish_test 并标记 failed。
+7. 不要只描述操作步骤，直接执行需求。`;
 
 export interface RunnerEvent {
   type: "status" | "assistant_delta" | "assistant" | "tool_start" | "tool_end";
@@ -39,6 +43,7 @@ export interface PiRunOptions {
   scenarioBinding?: {
     roles: Array<{ key: string; allowedDeviceIds: string[] }>;
   };
+  devices?: DeviceResource[];
 }
 
 function getMessageText(message: unknown): string {
@@ -125,14 +130,19 @@ export async function executePiRun(options: PiRunOptions): Promise<{ result?: Fi
   let finishResult: FinishResult | undefined;
   let finalText = "";
   let modelError = "";
-  const { driver, tools, toolNames } = createBrowserTools({
+  const evidence = createToolEvidence();
+  const browserToolset = createBrowserTools({
     runId: options.runId,
     artifactsDirectory: modelRuntimePaths.artifactsDirectory,
+    evidence,
     onFinish: (result) => {
       finishResult = result;
     },
     scenarioBinding: options.scenarioBinding,
   });
+  const deviceToolset = createDeviceTools({ devices: options.devices || [], evidence });
+  const tools = [...browserToolset.tools, ...deviceToolset.tools];
+  const toolNames = tools.map((tool) => tool.name);
 
   const { session } = await createAgentSession({
     cwd: modelRuntimePaths.workspaceDirectory,
@@ -149,7 +159,7 @@ export async function executePiRun(options: PiRunOptions): Promise<{ result?: Fi
 
   options.onAbortReady(async () => {
     await session.abort();
-    await driver.close();
+    await Promise.all([browserToolset.driver.close(), deviceToolset.driver.close()]);
   });
 
   session.subscribe((event) => {
@@ -188,7 +198,7 @@ export async function executePiRun(options: PiRunOptions): Promise<{ result?: Fi
     return { result: finishResult, finalText };
   } finally {
     session.dispose();
-    await driver.close();
+    await Promise.all([browserToolset.driver.close(), deviceToolset.driver.close()]);
   }
 }
 

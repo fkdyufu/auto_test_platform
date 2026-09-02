@@ -3,6 +3,7 @@ import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright-core";
 import { Type } from "typebox";
 import { defineTool } from "@earendil-works/pi-coding-agent";
+import type { ToolEvidence } from "./tool-evidence.js";
 
 interface FinishResult {
   status: "passed" | "failed";
@@ -14,6 +15,7 @@ interface BrowserToolsOptions {
   runId: string;
   artifactsDirectory: string;
   onFinish: (result: FinishResult) => void;
+  evidence: ToolEvidence;
   scenarioBinding?: {
     roles: Array<{ key: string; allowedDeviceIds: string[] }>;
   };
@@ -30,9 +32,10 @@ export class BrowserDriver {
   private browser?: Browser;
   private context?: BrowserContext;
   private page?: Page;
-  private observedPage = false;
-
-  constructor(private readonly artifactsDirectory: string) {}
+  constructor(
+    private readonly artifactsDirectory: string,
+    private readonly onEvidence: () => void = () => undefined,
+  ) {}
 
   private async ensurePage(): Promise<Page> {
     if (this.page) return this.page;
@@ -112,14 +115,10 @@ export class BrowserDriver {
 
     const observedUrl = new URL(snapshot.url);
     if (observedUrl.protocol === "http:" || observedUrl.protocol === "https:") {
-      this.observedPage = true;
+      this.onEvidence();
     }
 
     return JSON.stringify(snapshot, null, 2);
-  }
-
-  hasObservedPage(): boolean {
-    return this.observedPage;
   }
 
   private async locator(target: string): Promise<Locator> {
@@ -179,12 +178,11 @@ export class BrowserDriver {
     this.page = undefined;
     this.context = undefined;
     this.browser = undefined;
-    this.observedPage = false;
   }
 }
 
 export function createBrowserTools(options: BrowserToolsOptions) {
-  const driver = new BrowserDriver(path.join(options.artifactsDirectory, options.runId));
+  const driver = new BrowserDriver(path.join(options.artifactsDirectory, options.runId), () => options.evidence.mark());
   const scenarioBinding = options.scenarioBinding;
   const roleBindingsSchema = Type.Object(
     Object.fromEntries(
@@ -280,8 +278,8 @@ export function createBrowserTools(options: BrowserToolsOptions) {
         roleBindings: Type.Optional(roleBindingsSchema),
       }),
       execute: async (_id, params) => {
-        if (params.status === "passed" && !driver.hasObservedPage()) {
-          throw new Error("尚未成功打开并读取目标页面，不能提交通过结论");
+        if (params.status === "passed" && !options.evidence.hasEvidence()) {
+          throw new Error("尚未通过工具获取真实设备或页面结果，不能提交通过结论");
         }
         if (params.status === "passed" && scenarioBinding) {
           const bindings = params.roleBindings || {};
