@@ -1547,6 +1547,7 @@ button:disabled {
 }
 
 .structured-list {
+  flex: 0 0 auto;
   overflow-x: auto;
   border: 1px solid var(--border);
   border-radius: 5px;
