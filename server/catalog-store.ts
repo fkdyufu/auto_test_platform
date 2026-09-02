@@ -39,6 +39,7 @@ export interface ControlInterface {
 
 export interface DeviceResource {
   id: string;
+  productId: string;
   name: string;
   type: string;
   model: string;
@@ -60,6 +61,7 @@ export interface EnvironmentConnection {
 
 export interface LabEnvironment {
   id: string;
+  productId: string;
   name: string;
   description: string;
   deviceIds: string[];
@@ -85,6 +87,7 @@ export interface ScenarioParameter {
 
 export interface TestScenario {
   id: string;
+  productId: string;
   name: string;
   category: string;
   description: string;
@@ -141,7 +144,7 @@ export interface TestRun {
 }
 
 interface CatalogData {
-  version: 3;
+  version: 4;
   products: Product[];
   testCases: TestCase[];
   deviceResources: DeviceResource[];
@@ -237,7 +240,7 @@ function clone<T>(value: T): T {
 function defaultData(): CatalogData {
   const timestamp = new Date().toISOString();
   return {
-    version: 3,
+    version: 4,
     products: ["WKCJ-I", "WKCJ-II"].map((name) => ({
       id: randomUUID(),
       name,
@@ -281,15 +284,63 @@ export class CatalogStore {
     this.initializePromise ??= this.initialize();
     await this.initializePromise;
     const data = JSON.parse(await readFile(this.filePath, "utf8")) as CatalogData & { version: number };
-    if (![1, 2, 3].includes(data.version) || !Array.isArray(data.products) || !Array.isArray(data.testCases)) {
+    if (![1, 2, 3, 4].includes(data.version) || !Array.isArray(data.products) || !Array.isArray(data.testCases)) {
       throw new CatalogError("业务数据文件格式不正确", 500);
     }
-    data.version = 3;
+    data.version = 4;
     data.deviceResources ??= [];
     data.labEnvironments ??= [];
     data.testScenarios ??= [];
+    data.testOrders ??= [];
+    data.testRuns ??= [];
+    data.testOrders.forEach((order) => {
+      order.environmentId ??= "";
+      order.scenarioId ??= "";
+      order.roleBindings ??= {};
+    });
+
+    const productIds = new Set(data.products.map((product) => product.id));
+    const fallbackProductId = data.products
+      .filter((product) => !product.archivedAt)
+      .sort((left, right) => {
+        const score = (productId: string) =>
+          data.testCases.filter((item) => item.productId === productId && !item.archivedAt).length
+          + data.testOrders.filter((item) => item.productId === productId && !item.archivedAt).length;
+        return score(right.id) - score(left.id);
+      })[0]?.id || data.products[0]?.id || "";
+    const environmentOwners = new Map<string, string>();
+    const scenarioOwners = new Map<string, string>();
+    data.testOrders.forEach((order) => {
+      if (order.environmentId && !environmentOwners.has(order.environmentId)) environmentOwners.set(order.environmentId, order.productId);
+      if (order.scenarioId && !scenarioOwners.has(order.scenarioId)) scenarioOwners.set(order.scenarioId, order.productId);
+    });
+    data.labEnvironments = data.labEnvironments.map((environment) => ({
+      ...environment,
+      productId: productIds.has(environment.productId)
+        ? environment.productId
+        : environmentOwners.get(environment.id) || fallbackProductId,
+    }));
+    data.testScenarios = data.testScenarios.map((scenario) => ({
+      ...scenario,
+      productId: productIds.has(scenario.productId)
+        ? scenario.productId
+        : scenarioOwners.get(scenario.id) || fallbackProductId,
+      roles: (scenario.roles || []).map((role) => ({
+        id: role.id,
+        key: role.key,
+        name: role.name,
+        deviceType: role.deviceType,
+      })),
+    }));
+    const deviceOwners = new Map<string, string>();
+    data.labEnvironments.forEach((environment) => {
+      environment.deviceIds.forEach((deviceId) => {
+        if (!deviceOwners.has(deviceId)) deviceOwners.set(deviceId, environment.productId);
+      });
+    });
     data.deviceResources = data.deviceResources.map((device) => ({
       id: device.id,
+      productId: productIds.has(device.productId) ? device.productId : deviceOwners.get(device.id) || fallbackProductId,
       name: device.name,
       type: device.type,
       model: device.model || "",
@@ -306,21 +357,21 @@ export class CatalogStore {
       updatedAt: device.updatedAt,
       archivedAt: device.archivedAt,
     }));
-    data.testScenarios = data.testScenarios.map((scenario) => ({
-      ...scenario,
-      roles: (scenario.roles || []).map((role) => ({
-        id: role.id,
-        key: role.key,
-        name: role.name,
-        deviceType: role.deviceType,
-      })),
-    }));
-    data.testOrders ??= [];
-    data.testRuns ??= [];
+
+    const deviceProductById = new Map(data.deviceResources.map((device) => [device.id, device.productId]));
+    data.labEnvironments.forEach((environment) => {
+      const allowedIds = new Set(environment.deviceIds.filter((deviceId) => deviceProductById.get(deviceId) === environment.productId));
+      environment.deviceIds = [...allowedIds];
+      environment.connections = environment.connections.filter(
+        (connection) => allowedIds.has(connection.sourceDeviceId) && allowedIds.has(connection.targetDeviceId),
+      );
+    });
     data.testOrders.forEach((order) => {
-      order.environmentId ??= "";
-      order.scenarioId ??= "";
-      order.roleBindings ??= {};
+      const environment = data.labEnvironments.find((item) => item.id === order.environmentId);
+      const scenario = data.testScenarios.find((item) => item.id === order.scenarioId);
+      if (environment && environment.productId !== order.productId) order.environmentId = "";
+      if (scenario && scenario.productId !== order.productId) order.scenarioId = "";
+      if (!order.environmentId || !order.scenarioId) order.roleBindings = {};
     });
     return data;
   }
@@ -402,6 +453,9 @@ export class CatalogStore {
       product.archivedAt = timestamp;
       product.updatedAt = timestamp;
       data.testCases.filter((item) => item.productId === id && !item.archivedAt).forEach((item) => (item.archivedAt = timestamp));
+      data.deviceResources.filter((item) => item.productId === id && !item.archivedAt).forEach((item) => (item.archivedAt = timestamp));
+      data.labEnvironments.filter((item) => item.productId === id && !item.archivedAt).forEach((item) => (item.archivedAt = timestamp));
+      data.testScenarios.filter((item) => item.productId === id && !item.archivedAt).forEach((item) => (item.archivedAt = timestamp));
       data.testOrders.filter((item) => item.productId === id && !item.archivedAt).forEach((item) => (item.archivedAt = timestamp));
     });
   }
@@ -415,9 +469,9 @@ export class CatalogStore {
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
   }
 
-  async getTestCase(id: string): Promise<TestCase> {
+  async getTestCase(productId: string, id: string): Promise<TestCase> {
     const data = await this.read();
-    const testCase = data.testCases.find((item) => item.id === id && !item.archivedAt);
+    const testCase = data.testCases.find((item) => item.id === id && item.productId === productId && !item.archivedAt);
     if (!testCase) throw new CatalogError("测试用例不存在", 404);
     return clone(testCase);
   }
@@ -441,9 +495,9 @@ export class CatalogStore {
     });
   }
 
-  async updateTestCase(id: string, input: Record<string, unknown>): Promise<TestCase> {
+  async updateTestCase(productId: string, id: string, input: Record<string, unknown>): Promise<TestCase> {
     return this.mutate((data) => {
-      const testCase = data.testCases.find((item) => item.id === id && !item.archivedAt);
+      const testCase = data.testCases.find((item) => item.id === id && item.productId === productId && !item.archivedAt);
       if (!testCase) throw new CatalogError("测试用例不存在", 404);
       testCase.name = requiredText(input.name, "用例名称", 200);
       testCase.steps = requiredText(input.steps, "测试步骤", 20_000);
@@ -453,9 +507,9 @@ export class CatalogStore {
     });
   }
 
-  async archiveTestCase(id: string): Promise<void> {
+  async archiveTestCase(productId: string, id: string): Promise<void> {
     await this.mutate((data) => {
-      const testCase = data.testCases.find((item) => item.id === id && !item.archivedAt);
+      const testCase = data.testCases.find((item) => item.id === id && item.productId === productId && !item.archivedAt);
       if (!testCase) throw new CatalogError("测试用例不存在", 404);
       const timestamp = new Date().toISOString();
       testCase.archivedAt = timestamp;
@@ -501,21 +555,24 @@ export class CatalogStore {
     };
   }
 
-  async listDeviceResources(): Promise<DeviceResourceSummary[]> {
+  async listDeviceResources(productId: string): Promise<DeviceResourceSummary[]> {
+    await this.getProduct(productId);
     const data = await this.read();
     return data.deviceResources
-      .filter((item) => !item.archivedAt)
+      .filter((item) => item.productId === productId && !item.archivedAt)
       .map((item) => this.publicDevice(item))
       .sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
   }
 
-  async createDeviceResource(input: Record<string, unknown>): Promise<DeviceResourceSummary> {
+  async createDeviceResource(productId: string, input: Record<string, unknown>): Promise<DeviceResourceSummary> {
     return this.mutate((data) => {
+      if (!data.products.some((item) => item.id === productId && !item.archivedAt)) throw new CatalogError("产品不存在", 404);
       const name = requiredText(input.name, "设备名称", 160);
-      uniqueName(data.deviceResources, name, "设备名称");
+      uniqueName(data.deviceResources.filter((item) => item.productId === productId), name, "设备名称");
       const timestamp = new Date().toISOString();
       const device: DeviceResource = {
         id: randomUUID(),
+        productId,
         name,
         type: requiredText(input.type, "设备类型", 120),
         model: optionalText(input.model, 160),
@@ -529,12 +586,12 @@ export class CatalogStore {
     });
   }
 
-  async updateDeviceResource(id: string, input: Record<string, unknown>): Promise<DeviceResourceSummary> {
+  async updateDeviceResource(productId: string, id: string, input: Record<string, unknown>): Promise<DeviceResourceSummary> {
     return this.mutate((data) => {
-      const device = data.deviceResources.find((item) => item.id === id && !item.archivedAt);
+      const device = data.deviceResources.find((item) => item.id === id && item.productId === productId && !item.archivedAt);
       if (!device) throw new CatalogError("设备资源不存在", 404);
       const name = requiredText(input.name, "设备名称", 160);
-      uniqueName(data.deviceResources, name, "设备名称", id);
+      uniqueName(data.deviceResources.filter((item) => item.productId === productId), name, "设备名称", id);
       device.name = name;
       device.type = requiredText(input.type, "设备类型", 120);
       device.model = optionalText(input.model, 160);
@@ -545,9 +602,9 @@ export class CatalogStore {
     });
   }
 
-  async archiveDeviceResource(id: string): Promise<void> {
+  async archiveDeviceResource(productId: string, id: string): Promise<void> {
     await this.mutate((data) => {
-      const device = data.deviceResources.find((item) => item.id === id && !item.archivedAt);
+      const device = data.deviceResources.find((item) => item.id === id && item.productId === productId && !item.archivedAt);
       if (!device) throw new CatalogError("设备资源不存在", 404);
       if (data.labEnvironments.some((item) => !item.archivedAt && item.deviceIds.includes(id))) {
         throw new CatalogError("设备正在被实验环境使用，不能删除", 409);
@@ -557,12 +614,14 @@ export class CatalogStore {
     });
   }
 
-  private normalizeEnvironmentDevices(data: CatalogData, value: unknown): string[] {
+  private normalizeEnvironmentDevices(data: CatalogData, productId: string, value: unknown): string[] {
     if (!Array.isArray(value)) throw new CatalogError("请选择环境设备");
     const deviceIds = [...new Set(value.filter((item): item is string => typeof item === "string"))];
     if (!deviceIds.length) throw new CatalogError("实验环境至少需要一台设备");
-    const activeIds = new Set(data.deviceResources.filter((item) => !item.archivedAt).map((item) => item.id));
-    if (deviceIds.some((id) => !activeIds.has(id))) throw new CatalogError("实验环境包含不存在的设备");
+    const activeIds = new Set(
+      data.deviceResources.filter((item) => item.productId === productId && !item.archivedAt).map((item) => item.id),
+    );
+    if (deviceIds.some((id) => !activeIds.has(id))) throw new CatalogError("实验环境包含其他产品或不存在的设备");
     return deviceIds;
   }
 
@@ -593,22 +652,25 @@ export class CatalogStore {
     });
   }
 
-  async listLabEnvironments(): Promise<LabEnvironment[]> {
+  async listLabEnvironments(productId: string): Promise<LabEnvironment[]> {
+    await this.getProduct(productId);
     const data = await this.read();
     return data.labEnvironments
-      .filter((item) => !item.archivedAt)
+      .filter((item) => item.productId === productId && !item.archivedAt)
       .map(clone)
       .sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
   }
 
-  async createLabEnvironment(input: Record<string, unknown>): Promise<LabEnvironment> {
+  async createLabEnvironment(productId: string, input: Record<string, unknown>): Promise<LabEnvironment> {
     return this.mutate((data) => {
+      if (!data.products.some((item) => item.id === productId && !item.archivedAt)) throw new CatalogError("产品不存在", 404);
       const name = requiredText(input.name, "环境名称", 160);
-      uniqueName(data.labEnvironments, name, "环境名称");
-      const deviceIds = this.normalizeEnvironmentDevices(data, input.deviceIds);
+      uniqueName(data.labEnvironments.filter((item) => item.productId === productId), name, "环境名称");
+      const deviceIds = this.normalizeEnvironmentDevices(data, productId, input.deviceIds);
       const timestamp = new Date().toISOString();
       const environment: LabEnvironment = {
         id: randomUUID(),
+        productId,
         name,
         description: optionalText(input.description, 4_000),
         deviceIds,
@@ -621,13 +683,13 @@ export class CatalogStore {
     });
   }
 
-  async updateLabEnvironment(id: string, input: Record<string, unknown>): Promise<LabEnvironment> {
+  async updateLabEnvironment(productId: string, id: string, input: Record<string, unknown>): Promise<LabEnvironment> {
     return this.mutate((data) => {
-      const environment = data.labEnvironments.find((item) => item.id === id && !item.archivedAt);
+      const environment = data.labEnvironments.find((item) => item.id === id && item.productId === productId && !item.archivedAt);
       if (!environment) throw new CatalogError("实验环境不存在", 404);
       const name = requiredText(input.name, "环境名称", 160);
-      uniqueName(data.labEnvironments, name, "环境名称", id);
-      const deviceIds = this.normalizeEnvironmentDevices(data, input.deviceIds);
+      uniqueName(data.labEnvironments.filter((item) => item.productId === productId), name, "环境名称", id);
+      const deviceIds = this.normalizeEnvironmentDevices(data, productId, input.deviceIds);
       environment.name = name;
       environment.description = optionalText(input.description, 4_000);
       environment.deviceIds = deviceIds;
@@ -637,9 +699,9 @@ export class CatalogStore {
     });
   }
 
-  async archiveLabEnvironment(id: string): Promise<void> {
+  async archiveLabEnvironment(productId: string, id: string): Promise<void> {
     await this.mutate((data) => {
-      const environment = data.labEnvironments.find((item) => item.id === id && !item.archivedAt);
+      const environment = data.labEnvironments.find((item) => item.id === id && item.productId === productId && !item.archivedAt);
       if (!environment) throw new CatalogError("实验环境不存在", 404);
       if (data.testOrders.some((item) => !item.archivedAt && item.environmentId === id)) {
         throw new CatalogError("实验环境正在被测试单使用，不能删除", 409);
@@ -687,21 +749,24 @@ export class CatalogStore {
     return parameters;
   }
 
-  async listTestScenarios(): Promise<TestScenario[]> {
+  async listTestScenarios(productId: string): Promise<TestScenario[]> {
+    await this.getProduct(productId);
     const data = await this.read();
     return data.testScenarios
-      .filter((item) => !item.archivedAt)
+      .filter((item) => item.productId === productId && !item.archivedAt)
       .map(clone)
       .sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
   }
 
-  async createTestScenario(input: Record<string, unknown>): Promise<TestScenario> {
+  async createTestScenario(productId: string, input: Record<string, unknown>): Promise<TestScenario> {
     return this.mutate((data) => {
+      if (!data.products.some((item) => item.id === productId && !item.archivedAt)) throw new CatalogError("产品不存在", 404);
       const name = requiredText(input.name, "场景名称", 160);
-      uniqueName(data.testScenarios, name, "场景名称");
+      uniqueName(data.testScenarios.filter((item) => item.productId === productId), name, "场景名称");
       const timestamp = new Date().toISOString();
       const scenario: TestScenario = {
         id: randomUUID(),
+        productId,
         name,
         category: requiredText(input.category, "功能分类", 120),
         description: optionalText(input.description, 4_000),
@@ -718,12 +783,12 @@ export class CatalogStore {
     });
   }
 
-  async updateTestScenario(id: string, input: Record<string, unknown>): Promise<TestScenario> {
+  async updateTestScenario(productId: string, id: string, input: Record<string, unknown>): Promise<TestScenario> {
     return this.mutate((data) => {
-      const scenario = data.testScenarios.find((item) => item.id === id && !item.archivedAt);
+      const scenario = data.testScenarios.find((item) => item.id === id && item.productId === productId && !item.archivedAt);
       if (!scenario) throw new CatalogError("测试场景不存在", 404);
       const name = requiredText(input.name, "场景名称", 160);
-      uniqueName(data.testScenarios, name, "场景名称", id);
+      uniqueName(data.testScenarios.filter((item) => item.productId === productId), name, "场景名称", id);
       scenario.name = name;
       scenario.category = requiredText(input.category, "功能分类", 120);
       scenario.description = optionalText(input.description, 4_000);
@@ -737,9 +802,9 @@ export class CatalogStore {
     });
   }
 
-  async archiveTestScenario(id: string): Promise<void> {
+  async archiveTestScenario(productId: string, id: string): Promise<void> {
     await this.mutate((data) => {
-      const scenario = data.testScenarios.find((item) => item.id === id && !item.archivedAt);
+      const scenario = data.testScenarios.find((item) => item.id === id && item.productId === productId && !item.archivedAt);
       if (!scenario) throw new CatalogError("测试场景不存在", 404);
       if (data.testOrders.some((item) => !item.archivedAt && item.scenarioId === id)) {
         throw new CatalogError("测试场景正在被测试单使用，不能删除", 409);
@@ -762,6 +827,7 @@ export class CatalogStore {
 
   private validateOrderEnvironment(
     data: CatalogData,
+    productId: string,
     environmentValue: unknown,
     scenarioValue: unknown,
     bindingsValue: unknown,
@@ -769,11 +835,13 @@ export class CatalogStore {
     const environmentId = optionalText(environmentValue, 100);
     const scenarioId = optionalText(scenarioValue, 100);
     const environment = environmentId
-      ? data.labEnvironments.find((item) => item.id === environmentId && !item.archivedAt)
+      ? data.labEnvironments.find((item) => item.id === environmentId && item.productId === productId && !item.archivedAt)
       : undefined;
-    const scenario = scenarioId ? data.testScenarios.find((item) => item.id === scenarioId && !item.archivedAt) : undefined;
-    if (environmentId && !environment) throw new CatalogError("实验环境不存在", 404);
-    if (scenarioId && !scenario) throw new CatalogError("测试场景不存在", 404);
+    const scenario = scenarioId
+      ? data.testScenarios.find((item) => item.id === scenarioId && item.productId === productId && !item.archivedAt)
+      : undefined;
+    if (environmentId && !environment) throw new CatalogError("实验环境不属于当前产品或不存在", 404);
+    if (scenarioId && !scenario) throw new CatalogError("测试场景不属于当前产品或不存在", 404);
     if (scenario && !environment) throw new CatalogError("选择测试场景后必须选择实验环境");
     if (!scenario) return { environmentId, scenarioId: "", roleBindings: {} };
 
@@ -783,7 +851,7 @@ export class CatalogStore {
       const deviceId = optionalText(input[role.key], 100);
       if (!deviceId) throw new CatalogError(`请为角色“${role.name}”绑定设备`);
       if (!environment?.deviceIds.includes(deviceId)) throw new CatalogError(`角色“${role.name}”绑定的设备不属于所选环境`);
-      const device = data.deviceResources.find((item) => item.id === deviceId && !item.archivedAt);
+      const device = data.deviceResources.find((item) => item.id === deviceId && item.productId === productId && !item.archivedAt);
       if (!device) throw new CatalogError(`角色“${role.name}”绑定的设备不存在`);
       if (device.type.toLowerCase() !== role.deviceType.toLowerCase()) {
         throw new CatalogError(`角色“${role.name}”需要 ${role.deviceType} 类型设备`);
@@ -793,14 +861,13 @@ export class CatalogStore {
     return { environmentId, scenarioId, roleBindings };
   }
 
-  async createTestOrder(input: Record<string, unknown>): Promise<TestOrder> {
+  async createTestOrder(productId: string, input: Record<string, unknown>): Promise<TestOrder> {
     return this.mutate((data) => {
-      const productId = requiredText(input.productId, "产品");
       if (!data.products.some((item) => item.id === productId && !item.archivedAt)) {
         throw new CatalogError("产品不存在", 404);
       }
       const timestamp = new Date().toISOString();
-      const environment = this.validateOrderEnvironment(data, input.environmentId, input.scenarioId, input.roleBindings);
+      const environment = this.validateOrderEnvironment(data, productId, input.environmentId, input.scenarioId, input.roleBindings);
       const order: TestOrder = {
         id: randomUUID(),
         productId,
@@ -819,30 +886,25 @@ export class CatalogStore {
     });
   }
 
-  async updateTestOrder(id: string, input: Record<string, unknown>): Promise<TestOrder> {
+  async updateTestOrder(productId: string, id: string, input: Record<string, unknown>): Promise<TestOrder> {
     return this.mutate((data) => {
-      const order = data.testOrders.find((item) => item.id === id && !item.archivedAt);
+      const order = data.testOrders.find((item) => item.id === id && item.productId === productId && !item.archivedAt);
       if (!order) throw new CatalogError("测试单不存在", 404);
-      const productId = requiredText(input.productId, "产品");
-      if (!data.products.some((item) => item.id === productId && !item.archivedAt)) {
-        throw new CatalogError("产品不存在", 404);
-      }
-      order.productId = productId;
       order.name = requiredText(input.name, "测试单名称", 200);
       order.description = optionalText(input.description, 4_000);
       order.targetUrl = normalizeTargetUrl(input.targetUrl);
       order.username = optionalText(input.username, 300);
       if (typeof input.password === "string" && input.password.trim()) order.password = input.password.trim();
-      Object.assign(order, this.validateOrderEnvironment(data, input.environmentId, input.scenarioId, input.roleBindings));
+      Object.assign(order, this.validateOrderEnvironment(data, productId, input.environmentId, input.scenarioId, input.roleBindings));
       order.caseIds = this.validateOrderCases(data, productId, input.caseIds);
       order.updatedAt = new Date().toISOString();
       return clone(order);
     });
   }
 
-  async archiveTestOrder(id: string): Promise<void> {
+  async archiveTestOrder(productId: string, id: string): Promise<void> {
     await this.mutate((data) => {
-      const order = data.testOrders.find((item) => item.id === id && !item.archivedAt);
+      const order = data.testOrders.find((item) => item.id === id && item.productId === productId && !item.archivedAt);
       if (!order) throw new CatalogError("测试单不存在", 404);
       order.archivedAt = new Date().toISOString();
       order.updatedAt = order.archivedAt;
@@ -868,24 +930,25 @@ export class CatalogStore {
     };
   }
 
-  async listTestOrders(): Promise<TestOrderSummary[]> {
+  async listTestOrders(productId: string): Promise<TestOrderSummary[]> {
+    await this.getProduct(productId);
     const data = await this.read();
     return data.testOrders
-      .filter((order) => !order.archivedAt)
+      .filter((order) => order.productId === productId && !order.archivedAt)
       .map((order) => this.publicOrder(data, order))
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   }
 
-  async getTestOrder(id: string): Promise<TestOrder> {
+  async getTestOrder(productId: string, id: string): Promise<TestOrder> {
     const data = await this.read();
-    const order = data.testOrders.find((item) => item.id === id && !item.archivedAt);
+    const order = data.testOrders.find((item) => item.id === id && item.productId === productId && !item.archivedAt);
     if (!order) throw new CatalogError("测试单不存在", 404);
     return clone(order);
   }
 
-  async getTestOrderDetail(id: string): Promise<TestOrderDetail> {
+  async getTestOrderDetail(productId: string, id: string): Promise<TestOrderDetail> {
     const data = await this.read();
-    const order = data.testOrders.find((item) => item.id === id && !item.archivedAt);
+    const order = data.testOrders.find((item) => item.id === id && item.productId === productId && !item.archivedAt);
     if (!order) throw new CatalogError("测试单不存在", 404);
     const cases = order.caseIds
       .map((caseId) => data.testCases.find((item) => item.id === caseId))

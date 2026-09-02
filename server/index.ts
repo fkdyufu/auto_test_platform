@@ -354,7 +354,7 @@ app.post("/api/settings/test", async (_request, response, next) => {
   }
 });
 
-app.post("/api/test-orders/:id/runs", async (request, response, next) => {
+app.post("/api/products/:productId/test-orders/:id/runs", async (request, response, next) => {
   try {
     const settings = await readModelSettings();
     if (!toPublicSettings(settings).configured) {
@@ -362,7 +362,7 @@ app.post("/api/test-orders/:id/runs", async (request, response, next) => {
       return;
     }
 
-    const order = await catalogStore.getTestOrder(request.params.id);
+    const order = await catalogStore.getTestOrder(request.params.productId, request.params.id);
     const selectedCaseId = typeof request.body?.testCaseId === "string" ? request.body.testCaseId : undefined;
     if (selectedCaseId && !order.caseIds.includes(selectedCaseId)) {
       response.status(400).json({ error: "所选用例不属于该测试单" });

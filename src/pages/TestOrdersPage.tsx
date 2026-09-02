@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   ArrowLeft,
   ChevronRight,
@@ -40,7 +40,6 @@ const STATUS_LABELS: Record<RunStatus, string> = {
 };
 
 const EMPTY_ORDER: TestOrderInput = {
-  productId: "",
   name: "",
   description: "",
   targetUrl: "",
@@ -70,9 +69,8 @@ function StatusBadge({ run }: { run?: TestRun }) {
   return <span className={`status-badge ${appearance}`}>{label}</span>;
 }
 
-export function TestOrdersPage() {
+export function TestOrdersPage({ product }: { product: ProductSummary }) {
   const [orders, setOrders] = useState<TestOrderSummary[]>([]);
-  const [products, setProducts] = useState<ProductSummary[]>([]);
   const [devices, setDevices] = useState<DeviceResource[]>([]);
   const [environments, setEnvironments] = useState<LabEnvironment[]>([]);
   const [scenarios, setScenarios] = useState<TestScenario[]>([]);
@@ -88,18 +86,26 @@ export function TestOrdersPage() {
 
   const active = activeRun?.status === "queued" || activeRun?.status === "running";
 
-  const loadOrders = async () => setOrders(await api.getTestOrders());
+  const loadOrders = async () => setOrders(await api.getTestOrders(product.id));
 
   const loadDetail = async (id: string) => {
-    const nextDetail = await api.getTestOrder(id);
+    const nextDetail = await api.getTestOrder(product.id, id);
     setDetail(nextDetail);
     return nextDetail;
   };
 
   useEffect(() => {
-    void Promise.all([api.getProducts(), api.getTestOrders(), api.getDeviceResources(), api.getLabEnvironments(), api.getTestScenarios()])
-      .then(([nextProducts, nextOrders, nextDevices, nextEnvironments, nextScenarios]) => {
-        setProducts(nextProducts);
+    setSelectedId("");
+    setDetail(null);
+    setDialog(null);
+    setActiveRun(null);
+    void Promise.all([
+      api.getTestOrders(product.id),
+      api.getDeviceResources(product.id),
+      api.getLabEnvironments(product.id),
+      api.getTestScenarios(product.id),
+    ])
+      .then(([nextOrders, nextDevices, nextEnvironments, nextScenarios]) => {
         setOrders(nextOrders);
         setDevices(nextDevices);
         setEnvironments(nextEnvironments);
@@ -107,7 +113,7 @@ export function TestOrdersPage() {
       })
       .catch((error) => setNotice({ kind: "error", message: error instanceof Error ? error.message : "读取测试单失败" }));
     return () => eventSourceRef.current?.close();
-  }, []);
+  }, [product.id]);
 
   useEffect(() => {
     if (!selectedId) {
@@ -117,23 +123,16 @@ export function TestOrdersPage() {
     void loadDetail(selectedId).catch((error) =>
       setNotice({ kind: "error", message: error instanceof Error ? error.message : "读取测试单详情失败" }),
     );
-  }, [selectedId]);
-
-  const dialogProduct = useMemo(
-    () => products.find((product) => product.id === dialog?.form.productId),
-    [products, dialog?.form.productId],
-  );
+  }, [selectedId, product.id]);
 
   const openDialog = async (order?: TestOrderDetail | TestOrderSummary) => {
     try {
-      const productId = order?.productId || products[0]?.id || "";
       setDialogError("");
-      setAvailableCases(productId ? await api.getTestCases(productId) : []);
+      setAvailableCases(await api.getTestCases(product.id));
       setDialog({
         id: order?.id,
         form: order
           ? {
-              productId: order.productId,
               name: order.name,
               description: order.description,
               targetUrl: order.targetUrl,
@@ -144,20 +143,10 @@ export function TestOrdersPage() {
               roleBindings: { ...order.roleBindings },
               caseIds: [...order.caseIds],
             }
-          : { ...EMPTY_ORDER, productId },
+          : { ...EMPTY_ORDER },
       });
     } catch (error) {
       setNotice({ kind: "error", message: error instanceof Error ? error.message : "读取产品用例失败" });
-    }
-  };
-
-  const selectDialogProduct = async (productId: string) => {
-    if (!dialog) return;
-    setDialog({ ...dialog, form: { ...dialog.form, productId, caseIds: [] } });
-    try {
-      setAvailableCases(await api.getTestCases(productId));
-    } catch (error) {
-      setDialogError(error instanceof Error ? error.message : "读取产品用例失败");
     }
   };
 
@@ -228,7 +217,9 @@ export function TestOrdersPage() {
     try {
       setSubmitting(true);
       setDialogError("");
-      const saved = dialog.id ? await api.updateTestOrder(dialog.id, dialog.form) : await api.createTestOrder(dialog.form);
+      const saved = dialog.id
+        ? await api.updateTestOrder(product.id, dialog.id, dialog.form)
+        : await api.createTestOrder(product.id, dialog.form);
       await loadOrders();
       setSelectedId(saved.id);
       setDetail(saved);
@@ -244,7 +235,7 @@ export function TestOrdersPage() {
   const deleteOrder = async (order: TestOrderSummary | TestOrderDetail) => {
     if (!window.confirm(`确定删除测试单“${order.name}”吗？历史执行记录将保留。`)) return;
     try {
-      await api.deleteTestOrder(order.id);
+      await api.deleteTestOrder(product.id, order.id);
       if (selectedId === order.id) setSelectedId("");
       await loadOrders();
       setNotice({ kind: "success", message: "测试单已删除" });
@@ -281,7 +272,7 @@ export function TestOrdersPage() {
     try {
       setNotice(null);
       setSelectedId(order.id);
-      connectEvents(await api.executeTestOrder(order.id, testCaseId));
+      connectEvents(await api.executeTestOrder(product.id, order.id, testCaseId));
     } catch (error) {
       setNotice({ kind: "error", message: error instanceof Error ? error.message : "创建执行任务失败" });
     }
@@ -308,7 +299,7 @@ export function TestOrdersPage() {
               返回列表
             </button>
           ) : (
-            <button className="button primary" onClick={() => void openDialog()} disabled={!products.length}>
+            <button className="button primary" onClick={() => void openDialog()}>
               <Plus size={17} />
               新建测试单
             </button>
@@ -325,7 +316,6 @@ export function TestOrdersPage() {
               <thead>
                 <tr>
                   <th>测试单</th>
-                  <th>产品</th>
                   <th>环境 / 场景</th>
                   <th>用例</th>
                   <th>最近执行</th>
@@ -339,7 +329,6 @@ export function TestOrdersPage() {
                     <td className="name-cell">
                       <button className="link-button" onClick={() => setSelectedId(order.id)}>{order.name}</button>
                     </td>
-                    <td>{order.productName}</td>
                     <td>{order.environmentName || "未配置"}<span className="cell-subtext">{order.scenarioName || "无测试场景"}</span></td>
                     <td>{order.caseCount}</td>
                     <td><StatusBadge run={order.latestRun} /></td>
@@ -365,7 +354,7 @@ export function TestOrdersPage() {
                 ))}
                 {!orders.length && (
                   <tr>
-                    <td colSpan={7} className="table-empty">
+                    <td colSpan={6} className="table-empty">
                       <ClipboardList size={24} />
                       暂无测试单
                     </td>
@@ -526,12 +515,6 @@ export function TestOrdersPage() {
                 autoFocus
               />
             </label>
-            <label className="field">
-              <span>产品</span>
-              <select value={dialog.form.productId} onChange={(event) => void selectDialogProduct(event.target.value)}>
-                {products.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}
-              </select>
-            </label>
             <label className="field full-width">
               <span>测试单描述</span>
               <textarea
@@ -621,7 +604,7 @@ export function TestOrdersPage() {
                 <span><strong>{testCase.name}</strong><small>{testCase.expectedResult}</small></span>
               </label>
             ))}
-            {!availableCases.length && <div className="list-empty">{dialogProduct?.name || "该产品"}暂无测试用例</div>}
+            {!availableCases.length && <div className="list-empty">{product.name} 暂无测试用例</div>}
           </div>
         </Modal>
       )}

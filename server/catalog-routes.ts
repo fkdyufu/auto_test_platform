@@ -64,159 +64,159 @@ catalogRouter.post("/products/:id/cases", async (request, response, next) => {
   }
 });
 
-catalogRouter.put("/test-cases/:id", async (request, response, next) => {
+catalogRouter.put("/products/:productId/test-cases/:id", async (request, response, next) => {
   try {
-    response.json(await catalogStore.updateTestCase(request.params.id, body(request.body)));
+    response.json(await catalogStore.updateTestCase(request.params.productId, request.params.id, body(request.body)));
   } catch (error) {
     next(error);
   }
 });
 
-catalogRouter.delete("/test-cases/:id", async (request, response, next) => {
+catalogRouter.delete("/products/:productId/test-cases/:id", async (request, response, next) => {
   try {
-    await catalogStore.archiveTestCase(request.params.id);
+    await catalogStore.archiveTestCase(request.params.productId, request.params.id);
     response.status(204).end();
   } catch (error) {
     next(error);
   }
 });
 
-catalogRouter.get("/device-resources", async (_request, response, next) => {
+catalogRouter.get("/products/:productId/device-resources", async (request, response, next) => {
   try {
-    response.json(await catalogStore.listDeviceResources());
+    response.json(await catalogStore.listDeviceResources(request.params.productId));
   } catch (error) {
     next(error);
   }
 });
 
-catalogRouter.post("/device-resources", async (request, response, next) => {
+catalogRouter.post("/products/:productId/device-resources", async (request, response, next) => {
   try {
-    response.status(201).json(await catalogStore.createDeviceResource(body(request.body)));
+    response.status(201).json(await catalogStore.createDeviceResource(request.params.productId, body(request.body)));
   } catch (error) {
     next(error);
   }
 });
 
-catalogRouter.put("/device-resources/:id", async (request, response, next) => {
+catalogRouter.put("/products/:productId/device-resources/:id", async (request, response, next) => {
   try {
-    response.json(await catalogStore.updateDeviceResource(request.params.id, body(request.body)));
+    response.json(await catalogStore.updateDeviceResource(request.params.productId, request.params.id, body(request.body)));
   } catch (error) {
     next(error);
   }
 });
 
-catalogRouter.delete("/device-resources/:id", async (request, response, next) => {
+catalogRouter.delete("/products/:productId/device-resources/:id", async (request, response, next) => {
   try {
-    await catalogStore.archiveDeviceResource(request.params.id);
+    await catalogStore.archiveDeviceResource(request.params.productId, request.params.id);
     response.status(204).end();
   } catch (error) {
     next(error);
   }
 });
 
-catalogRouter.get("/lab-environments", async (_request, response, next) => {
+catalogRouter.get("/products/:productId/lab-environments", async (request, response, next) => {
   try {
-    response.json(await catalogStore.listLabEnvironments());
+    response.json(await catalogStore.listLabEnvironments(request.params.productId));
   } catch (error) {
     next(error);
   }
 });
 
-catalogRouter.post("/lab-environments", async (request, response, next) => {
+catalogRouter.post("/products/:productId/lab-environments", async (request, response, next) => {
   try {
-    response.status(201).json(await catalogStore.createLabEnvironment(body(request.body)));
+    response.status(201).json(await catalogStore.createLabEnvironment(request.params.productId, body(request.body)));
   } catch (error) {
     next(error);
   }
 });
 
-catalogRouter.put("/lab-environments/:id", async (request, response, next) => {
+catalogRouter.put("/products/:productId/lab-environments/:id", async (request, response, next) => {
   try {
-    response.json(await catalogStore.updateLabEnvironment(request.params.id, body(request.body)));
+    response.json(await catalogStore.updateLabEnvironment(request.params.productId, request.params.id, body(request.body)));
   } catch (error) {
     next(error);
   }
 });
 
-catalogRouter.delete("/lab-environments/:id", async (request, response, next) => {
+catalogRouter.delete("/products/:productId/lab-environments/:id", async (request, response, next) => {
   try {
-    await catalogStore.archiveLabEnvironment(request.params.id);
+    await catalogStore.archiveLabEnvironment(request.params.productId, request.params.id);
     response.status(204).end();
   } catch (error) {
     next(error);
   }
 });
 
-catalogRouter.get("/test-scenarios", async (_request, response, next) => {
+catalogRouter.get("/products/:productId/test-scenarios", async (request, response, next) => {
   try {
-    response.json(await catalogStore.listTestScenarios());
+    response.json(await catalogStore.listTestScenarios(request.params.productId));
   } catch (error) {
     next(error);
   }
 });
 
-catalogRouter.post("/test-scenarios", async (request, response, next) => {
+catalogRouter.post("/products/:productId/test-scenarios", async (request, response, next) => {
   try {
-    response.status(201).json(await catalogStore.createTestScenario(body(request.body)));
+    response.status(201).json(await catalogStore.createTestScenario(request.params.productId, body(request.body)));
   } catch (error) {
     next(error);
   }
 });
 
-catalogRouter.put("/test-scenarios/:id", async (request, response, next) => {
+catalogRouter.put("/products/:productId/test-scenarios/:id", async (request, response, next) => {
   try {
-    response.json(await catalogStore.updateTestScenario(request.params.id, body(request.body)));
+    response.json(await catalogStore.updateTestScenario(request.params.productId, request.params.id, body(request.body)));
   } catch (error) {
     next(error);
   }
 });
 
-catalogRouter.delete("/test-scenarios/:id", async (request, response, next) => {
+catalogRouter.delete("/products/:productId/test-scenarios/:id", async (request, response, next) => {
   try {
-    await catalogStore.archiveTestScenario(request.params.id);
+    await catalogStore.archiveTestScenario(request.params.productId, request.params.id);
     response.status(204).end();
   } catch (error) {
     next(error);
   }
 });
 
-catalogRouter.get("/test-orders", async (_request, response, next) => {
+catalogRouter.get("/products/:productId/test-orders", async (request, response, next) => {
   try {
-    response.json(await catalogStore.listTestOrders());
+    response.json(await catalogStore.listTestOrders(request.params.productId));
   } catch (error) {
     next(error);
   }
 });
 
-catalogRouter.post("/test-orders", async (request, response, next) => {
+catalogRouter.post("/products/:productId/test-orders", async (request, response, next) => {
   try {
-    const order = await catalogStore.createTestOrder(body(request.body));
-    response.status(201).json(await catalogStore.getTestOrderDetail(order.id));
+    const order = await catalogStore.createTestOrder(request.params.productId, body(request.body));
+    response.status(201).json(await catalogStore.getTestOrderDetail(request.params.productId, order.id));
   } catch (error) {
     next(error);
   }
 });
 
-catalogRouter.get("/test-orders/:id", async (request, response, next) => {
+catalogRouter.get("/products/:productId/test-orders/:id", async (request, response, next) => {
   try {
-    response.json(await catalogStore.getTestOrderDetail(request.params.id));
+    response.json(await catalogStore.getTestOrderDetail(request.params.productId, request.params.id));
   } catch (error) {
     next(error);
   }
 });
 
-catalogRouter.put("/test-orders/:id", async (request, response, next) => {
+catalogRouter.put("/products/:productId/test-orders/:id", async (request, response, next) => {
   try {
-    await catalogStore.updateTestOrder(request.params.id, body(request.body));
-    response.json(await catalogStore.getTestOrderDetail(request.params.id));
+    await catalogStore.updateTestOrder(request.params.productId, request.params.id, body(request.body));
+    response.json(await catalogStore.getTestOrderDetail(request.params.productId, request.params.id));
   } catch (error) {
     next(error);
   }
 });
 
-catalogRouter.delete("/test-orders/:id", async (request, response, next) => {
+catalogRouter.delete("/products/:productId/test-orders/:id", async (request, response, next) => {
   try {
-    await catalogStore.archiveTestOrder(request.params.id);
+    await catalogStore.archiveTestOrder(request.params.productId, request.params.id);
     response.status(204).end();
   } catch (error) {
     next(error);

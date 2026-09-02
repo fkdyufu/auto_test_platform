@@ -91,6 +91,7 @@ export interface ControlInterfaceInput extends Omit<ControlInterface, "hasPasswo
 
 export interface DeviceResource {
   id: string;
+  productId: string;
   name: string;
   type: string;
   model: string;
@@ -111,6 +112,7 @@ export interface EnvironmentConnection {
 
 export interface LabEnvironment {
   id: string;
+  productId: string;
   name: string;
   description: string;
   deviceIds: string[];
@@ -135,6 +137,7 @@ export interface ScenarioParameter {
 
 export interface TestScenario {
   id: string;
+  productId: string;
   name: string;
   category: string;
   description: string;
@@ -214,7 +217,6 @@ export interface TestCaseInput {
 }
 
 export interface TestOrderInput {
-  productId: string;
   name: string;
   description: string;
   targetUrl: string;
@@ -233,8 +235,8 @@ export interface DeviceResourceInput {
   description: string;
   controlInterfaces: ControlInterfaceInput[];
 }
-export type LabEnvironmentInput = Omit<LabEnvironment, "id" | "createdAt" | "updatedAt">;
-export type TestScenarioInput = Omit<TestScenario, "id" | "createdAt" | "updatedAt">;
+export type LabEnvironmentInput = Omit<LabEnvironment, "id" | "productId" | "createdAt" | "updatedAt">;
+export type TestScenarioInput = Omit<TestScenario, "id" | "productId" | "createdAt" | "updatedAt">;
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
@@ -268,36 +270,41 @@ export const api = {
   getTestCases: (productId: string) => request<TestCase[]>(`/api/products/${productId}/cases`),
   createTestCase: (productId: string, input: TestCaseInput) =>
     request<TestCase>(`/api/products/${productId}/cases`, { method: "POST", body: JSON.stringify(input) }),
-  updateTestCase: (id: string, input: TestCaseInput) =>
-    request<TestCase>(`/api/test-cases/${id}`, { method: "PUT", body: JSON.stringify(input) }),
-  deleteTestCase: (id: string) => request<void>(`/api/test-cases/${id}`, { method: "DELETE" }),
-  getDeviceResources: () => request<DeviceResource[]>("/api/device-resources"),
-  createDeviceResource: (input: DeviceResourceInput) =>
-    request<DeviceResource>("/api/device-resources", { method: "POST", body: JSON.stringify(input) }),
-  updateDeviceResource: (id: string, input: DeviceResourceInput) =>
-    request<DeviceResource>(`/api/device-resources/${id}`, { method: "PUT", body: JSON.stringify(input) }),
-  deleteDeviceResource: (id: string) => request<void>(`/api/device-resources/${id}`, { method: "DELETE" }),
-  getLabEnvironments: () => request<LabEnvironment[]>("/api/lab-environments"),
-  createLabEnvironment: (input: LabEnvironmentInput) =>
-    request<LabEnvironment>("/api/lab-environments", { method: "POST", body: JSON.stringify(input) }),
-  updateLabEnvironment: (id: string, input: LabEnvironmentInput) =>
-    request<LabEnvironment>(`/api/lab-environments/${id}`, { method: "PUT", body: JSON.stringify(input) }),
-  deleteLabEnvironment: (id: string) => request<void>(`/api/lab-environments/${id}`, { method: "DELETE" }),
-  getTestScenarios: () => request<TestScenario[]>("/api/test-scenarios"),
-  createTestScenario: (input: TestScenarioInput) =>
-    request<TestScenario>("/api/test-scenarios", { method: "POST", body: JSON.stringify(input) }),
-  updateTestScenario: (id: string, input: TestScenarioInput) =>
-    request<TestScenario>(`/api/test-scenarios/${id}`, { method: "PUT", body: JSON.stringify(input) }),
-  deleteTestScenario: (id: string) => request<void>(`/api/test-scenarios/${id}`, { method: "DELETE" }),
-  getTestOrders: () => request<TestOrderSummary[]>("/api/test-orders"),
-  getTestOrder: (id: string) => request<TestOrderDetail>(`/api/test-orders/${id}`),
-  createTestOrder: (input: TestOrderInput) =>
-    request<TestOrderDetail>("/api/test-orders", { method: "POST", body: JSON.stringify(input) }),
-  updateTestOrder: (id: string, input: TestOrderInput) =>
-    request<TestOrderDetail>(`/api/test-orders/${id}`, { method: "PUT", body: JSON.stringify(input) }),
-  deleteTestOrder: (id: string) => request<void>(`/api/test-orders/${id}`, { method: "DELETE" }),
-  executeTestOrder: (id: string, testCaseId?: string) =>
-    request<RunResponse>(`/api/test-orders/${id}/runs`, {
+  updateTestCase: (productId: string, id: string, input: TestCaseInput) =>
+    request<TestCase>(`/api/products/${productId}/test-cases/${id}`, { method: "PUT", body: JSON.stringify(input) }),
+  deleteTestCase: (productId: string, id: string) =>
+    request<void>(`/api/products/${productId}/test-cases/${id}`, { method: "DELETE" }),
+  getDeviceResources: (productId: string) => request<DeviceResource[]>(`/api/products/${productId}/device-resources`),
+  createDeviceResource: (productId: string, input: DeviceResourceInput) =>
+    request<DeviceResource>(`/api/products/${productId}/device-resources`, { method: "POST", body: JSON.stringify(input) }),
+  updateDeviceResource: (productId: string, id: string, input: DeviceResourceInput) =>
+    request<DeviceResource>(`/api/products/${productId}/device-resources/${id}`, { method: "PUT", body: JSON.stringify(input) }),
+  deleteDeviceResource: (productId: string, id: string) =>
+    request<void>(`/api/products/${productId}/device-resources/${id}`, { method: "DELETE" }),
+  getLabEnvironments: (productId: string) => request<LabEnvironment[]>(`/api/products/${productId}/lab-environments`),
+  createLabEnvironment: (productId: string, input: LabEnvironmentInput) =>
+    request<LabEnvironment>(`/api/products/${productId}/lab-environments`, { method: "POST", body: JSON.stringify(input) }),
+  updateLabEnvironment: (productId: string, id: string, input: LabEnvironmentInput) =>
+    request<LabEnvironment>(`/api/products/${productId}/lab-environments/${id}`, { method: "PUT", body: JSON.stringify(input) }),
+  deleteLabEnvironment: (productId: string, id: string) =>
+    request<void>(`/api/products/${productId}/lab-environments/${id}`, { method: "DELETE" }),
+  getTestScenarios: (productId: string) => request<TestScenario[]>(`/api/products/${productId}/test-scenarios`),
+  createTestScenario: (productId: string, input: TestScenarioInput) =>
+    request<TestScenario>(`/api/products/${productId}/test-scenarios`, { method: "POST", body: JSON.stringify(input) }),
+  updateTestScenario: (productId: string, id: string, input: TestScenarioInput) =>
+    request<TestScenario>(`/api/products/${productId}/test-scenarios/${id}`, { method: "PUT", body: JSON.stringify(input) }),
+  deleteTestScenario: (productId: string, id: string) =>
+    request<void>(`/api/products/${productId}/test-scenarios/${id}`, { method: "DELETE" }),
+  getTestOrders: (productId: string) => request<TestOrderSummary[]>(`/api/products/${productId}/test-orders`),
+  getTestOrder: (productId: string, id: string) => request<TestOrderDetail>(`/api/products/${productId}/test-orders/${id}`),
+  createTestOrder: (productId: string, input: TestOrderInput) =>
+    request<TestOrderDetail>(`/api/products/${productId}/test-orders`, { method: "POST", body: JSON.stringify(input) }),
+  updateTestOrder: (productId: string, id: string, input: TestOrderInput) =>
+    request<TestOrderDetail>(`/api/products/${productId}/test-orders/${id}`, { method: "PUT", body: JSON.stringify(input) }),
+  deleteTestOrder: (productId: string, id: string) =>
+    request<void>(`/api/products/${productId}/test-orders/${id}`, { method: "DELETE" }),
+  executeTestOrder: (productId: string, id: string, testCaseId?: string) =>
+    request<RunResponse>(`/api/products/${productId}/test-orders/${id}/runs`, {
       method: "POST",
       body: JSON.stringify(testCaseId ? { testCaseId } : {}),
     }),

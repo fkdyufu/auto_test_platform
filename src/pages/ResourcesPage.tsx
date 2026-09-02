@@ -18,6 +18,7 @@ import {
   type EnvironmentConnection,
   type LabEnvironment,
   type LabEnvironmentInput,
+  type ProductSummary,
   type ScenarioParameter,
   type ScenarioRole,
   type TestScenario,
@@ -76,7 +77,7 @@ function emptyScenario(): TestScenarioInput {
   };
 }
 
-export function ResourcesPage() {
+export function ResourcesPage({ product }: { product: ProductSummary }) {
   const [tab, setTab] = useState<ResourceTab>("devices");
   const [devices, setDevices] = useState<DeviceResource[]>([]);
   const [environments, setEnvironments] = useState<LabEnvironment[]>([]);
@@ -88,9 +89,9 @@ export function ResourcesPage() {
 
   const reload = async () => {
     const [nextDevices, nextEnvironments, nextScenarios] = await Promise.all([
-      api.getDeviceResources(),
-      api.getLabEnvironments(),
-      api.getTestScenarios(),
+      api.getDeviceResources(product.id),
+      api.getLabEnvironments(product.id),
+      api.getTestScenarios(product.id),
     ]);
     setDevices(nextDevices);
     setEnvironments(nextEnvironments);
@@ -98,10 +99,12 @@ export function ResourcesPage() {
   };
 
   useEffect(() => {
+    setDialog(null);
+    setNotice(null);
     void reload().catch((error) =>
       setNotice({ kind: "error", message: error instanceof Error ? error.message : "读取资源数据失败" }),
     );
-  }, []);
+  }, [product.id]);
 
   const openCreate = () => {
     setDialogError("");
@@ -117,13 +120,13 @@ export function ResourcesPage() {
       setSubmitting(true);
       setDialogError("");
       if (dialog.kind === "device") {
-        if (dialog.id) await api.updateDeviceResource(dialog.id, dialog.form);
-        else await api.createDeviceResource(dialog.form);
+        if (dialog.id) await api.updateDeviceResource(product.id, dialog.id, dialog.form);
+        else await api.createDeviceResource(product.id, dialog.form);
       } else if (dialog.kind === "environment") {
-        if (dialog.id) await api.updateLabEnvironment(dialog.id, dialog.form);
-        else await api.createLabEnvironment(dialog.form);
-      } else if (dialog.id) await api.updateTestScenario(dialog.id, dialog.form);
-      else await api.createTestScenario(dialog.form);
+        if (dialog.id) await api.updateLabEnvironment(product.id, dialog.id, dialog.form);
+        else await api.createLabEnvironment(product.id, dialog.form);
+      } else if (dialog.id) await api.updateTestScenario(product.id, dialog.id, dialog.form);
+      else await api.createTestScenario(product.id, dialog.form);
       await reload();
       setDialog(null);
       setNotice({ kind: "success", message: dialog.id ? "配置已更新" : "配置已创建" });
@@ -137,9 +140,9 @@ export function ResourcesPage() {
   const remove = async (kind: ResourceDialog["kind"], id: string, name: string) => {
     if (!window.confirm(`确定删除“${name}”吗？`)) return;
     try {
-      if (kind === "device") await api.deleteDeviceResource(id);
-      else if (kind === "environment") await api.deleteLabEnvironment(id);
-      else await api.deleteTestScenario(id);
+      if (kind === "device") await api.deleteDeviceResource(product.id, id);
+      else if (kind === "environment") await api.deleteLabEnvironment(product.id, id);
+      else await api.deleteTestScenario(product.id, id);
       await reload();
       setNotice({ kind: "success", message: "配置已删除" });
     } catch (error) {

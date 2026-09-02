@@ -93,6 +93,37 @@ button:disabled {
   white-space: nowrap;
 }
 
+.product-context {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  border-bottom: 1px solid #303946;
+  padding: 14px 16px;
+}
+
+.product-context > span {
+  color: #84909f;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.product-context select {
+  width: 100%;
+  height: 36px;
+  border: 1px solid #46515f;
+  border-radius: 5px;
+  outline: 0;
+  background: #29323e;
+  color: #f1f4f7;
+  padding: 0 9px;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.product-context select:focus {
+  border-color: #7ba7df;
+}
+
 .nav-list {
   display: flex;
   flex-direction: column;
@@ -124,6 +155,11 @@ button:disabled {
   background: #f3f6fa;
   color: #172333;
   font-weight: 650;
+}
+
+.nav-item:disabled {
+  background: transparent;
+  color: #5f6975;
 }
 
 .nav-chevron {
@@ -181,6 +217,18 @@ button:disabled {
 .main-content {
   min-height: 100vh;
   margin-left: var(--sidebar-width);
+}
+
+.product-page {
+  max-width: 1100px;
+}
+
+.product-detail-surface {
+  margin-top: 22px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  overflow: hidden;
 }
 
 .page {
@@ -1795,6 +1843,7 @@ button:disabled {
     position: relative;
     width: 100%;
     height: auto;
+    flex-wrap: wrap;
     flex-direction: row;
     align-items: center;
     border-right: 0;
@@ -1810,6 +1859,25 @@ button:disabled {
 
   .brand-name {
     display: none;
+  }
+
+  .product-context {
+    order: 3;
+    width: 100%;
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
+    border-top: 1px solid #303946;
+    border-bottom: 0;
+    padding: 8px 16px;
+  }
+
+  .product-context > span {
+    flex: 0 0 auto;
+  }
+
+  .product-context select {
+    flex: 1;
   }
 
   .nav-list {

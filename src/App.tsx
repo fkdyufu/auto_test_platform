@@ -20,7 +20,7 @@ import {
   TerminalSquare,
   TestTubeDiagonal,
 } from "lucide-react";
-import { api, type ModelSettings, type RunEvent, type RunStatus } from "./api";
+import { api, type ModelSettings, type ProductSummary, type RunEvent, type RunStatus } from "./api";
 import { RunMonitor } from "./components/RunMonitor";
 import { InlineNotice, PageHeader, type Notice } from "./components/ui";
 import { ProductsPage } from "./pages/ProductsPage";
@@ -90,6 +90,8 @@ const STATUS_LABELS: Record<RunStatus, string> = {
   cancelled: "已取消",
 };
 
+const ACTIVE_PRODUCT_KEY = "ai-test-runner.active-product";
+
 function readPage(): PageName {
   const page = window.location.hash.replace(/^#/, "");
   return page === "resources" || page === "orders" || page === "run" || page === "settings" ? page : "products";
@@ -99,6 +101,8 @@ function App() {
   const [page, setPage] = useState<PageName>(readPage);
   const [settings, setSettings] = useState<ModelSettings | null>(null);
   const [settingsError, setSettingsError] = useState("");
+  const [products, setProducts] = useState<ProductSummary[]>([]);
+  const [productId, setProductId] = useState("");
 
   useEffect(() => {
     const onHashChange = () => setPage(readPage());
@@ -115,9 +119,28 @@ function App() {
     }
   };
 
+  const refreshProducts = async (preferredId?: string) => {
+    const nextProducts = await api.getProducts();
+    const storedId = localStorage.getItem(ACTIVE_PRODUCT_KEY) || "";
+    const candidate = preferredId || productId || storedId;
+    const nextId = nextProducts.some((product) => product.id === candidate) ? candidate : nextProducts[0]?.id || "";
+    setProducts(nextProducts);
+    setProductId(nextId);
+    if (nextId) localStorage.setItem(ACTIVE_PRODUCT_KEY, nextId);
+    else localStorage.removeItem(ACTIVE_PRODUCT_KEY);
+  };
+
   useEffect(() => {
     void refreshSettings();
+    void refreshProducts();
   }, []);
+
+  const activeProduct = products.find((product) => product.id === productId) || null;
+
+  const selectProduct = (nextId: string) => {
+    setProductId(nextId);
+    localStorage.setItem(ACTIVE_PRODUCT_KEY, nextId);
+  };
 
   const navigate = (target: PageName) => {
     window.location.hash = target;
@@ -134,18 +157,26 @@ function App() {
           <span className="brand-name">AI Test Runner</span>
         </div>
 
+        <label className="product-context">
+          <span>当前产品</span>
+          <select value={productId} onChange={(event) => selectProduct(event.target.value)} disabled={!products.length}>
+            {products.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}
+            {!products.length && <option value="">暂无产品</option>}
+          </select>
+        </label>
+
         <nav className="nav-list" aria-label="主导航">
-          <button className={`nav-item ${page === "products" ? "active" : ""}`} onClick={() => navigate("products")} title="产品管理">
+          <button className={`nav-item ${page === "products" ? "active" : ""}`} onClick={() => navigate("products")} title="产品概览">
             <Package size={18} />
-            <span>产品管理</span>
+            <span>产品概览</span>
             {page === "products" && <ChevronRight className="nav-chevron" size={16} />}
           </button>
-          <button className={`nav-item ${page === "resources" ? "active" : ""}`} onClick={() => navigate("resources")} title="资源与环境">
+          <button className={`nav-item ${page === "resources" ? "active" : ""}`} onClick={() => navigate("resources")} title="资源与环境" disabled={!activeProduct}>
             <Network size={18} />
             <span>资源与环境</span>
             {page === "resources" && <ChevronRight className="nav-chevron" size={16} />}
           </button>
-          <button className={`nav-item ${page === "orders" ? "active" : ""}`} onClick={() => navigate("orders")} title="测试单">
+          <button className={`nav-item ${page === "orders" ? "active" : ""}`} onClick={() => navigate("orders")} title="测试单" disabled={!activeProduct}>
             <ClipboardList size={18} />
             <span>测试单</span>
             {page === "orders" && <ChevronRight className="nav-chevron" size={16} />}
@@ -172,12 +203,12 @@ function App() {
       </aside>
 
       <main className="main-content">
-        {page === "products" ? (
-          <ProductsPage />
-        ) : page === "resources" ? (
-          <ResourcesPage />
-        ) : page === "orders" ? (
-          <TestOrdersPage />
+        {page === "products" || (!activeProduct && (page === "resources" || page === "orders")) ? (
+          <ProductsPage product={activeProduct} onProductsChanged={refreshProducts} />
+        ) : page === "resources" && activeProduct ? (
+          <ResourcesPage key={activeProduct.id} product={activeProduct} />
+        ) : page === "orders" && activeProduct ? (
+          <TestOrdersPage key={activeProduct.id} product={activeProduct} />
         ) : page === "run" ? (
           <RunPage settings={settings} onOpenSettings={() => navigate("settings")} />
         ) : (
