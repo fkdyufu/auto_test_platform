@@ -464,6 +464,7 @@ button:disabled {
   padding: 0 15px;
   font-size: 13px;
   font-weight: 650;
+  white-space: nowrap;
 }
 
 .button.primary {
@@ -1139,6 +1140,10 @@ button:disabled {
   font-weight: 650;
 }
 
+.cases-content .data-table {
+  min-width: 920px;
+}
+
 .mono-cell,
 .order-index {
   color: #6e7986;
@@ -1450,7 +1455,27 @@ button:disabled {
 
 .detail-section .data-table th:last-child,
 .detail-section .data-table td:last-child {
-  width: 92px;
+  width: 112px;
+}
+
+.scenario-group-row td {
+  height: 38px;
+  background: #f4f7fa;
+  color: #4d5c6c;
+  padding-top: 7px;
+  padding-bottom: 7px;
+}
+
+.scenario-group-row td > div {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.scenario-group-row span {
+  color: #87919d;
+  font-size: 10px;
+  font-weight: 500;
 }
 
 .run-monitor-section .execution-log {

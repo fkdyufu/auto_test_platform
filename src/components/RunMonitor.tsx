@@ -29,6 +29,7 @@ function TimelineEvent({ event }: { event: TimelineItem }) {
   const isError = event.type === "error" || event.toolState === "failed" || (!isTool && event.error);
   const isInterrupted = event.toolState === "interrupted";
   const label = isTool ? TOOL_LABELS[event.tool || ""] || event.tool : event.message;
+  const executionContext = event.caseName || event.scenarioName;
   const iconClass = event.toolState ? `tool_${event.toolState}` : event.type;
 
   return (
@@ -43,14 +44,14 @@ function TimelineEvent({ event }: { event: TimelineItem }) {
           <Check size={14} />
         ) : event.toolState === "interrupted" ? (
           <CircleStop size={14} />
-        ) : event.type === "result" || event.type === "case_result" ? (
+        ) : event.type === "result" || event.type === "case_result" || event.type === "scenario_result" ? (
           <TestTubeDiagonal size={14} />
         ) : (
           <Clock3 size={14} />
         )}
       </span>
       <div className="timeline-content">
-        {isTool && event.caseName && <span className="case-context">{event.caseName}</span>}
+        {isTool && executionContext && <span className="case-context">{executionContext}</span>}
         <strong>{label || "状态更新"}</strong>
         {isTool && event.toolState !== "running" && event.message && <p>{event.message}</p>}
       </div>

@@ -26,6 +26,8 @@ export interface RunEvent {
     | "run_state"
     | "result"
     | "error"
+    | "scenario_state"
+    | "scenario_result"
     | "case_state"
     | "case_result";
   message?: string;
@@ -38,6 +40,8 @@ export interface RunEvent {
   testCaseId?: string;
   caseRunId?: string;
   caseName?: string;
+  scenarioRunId?: string;
+  scenarioName?: string;
 }
 
 export interface RunResponse {
@@ -67,6 +71,7 @@ export interface ProductSummary extends Product {
 export interface TestCase {
   id: string;
   productId: string;
+  scenarioId: string;
   name: string;
   steps: string;
   expectedResult: string;
@@ -138,6 +143,7 @@ export interface ScenarioParameter {
 export interface TestScenario {
   id: string;
   productId: string;
+  isDefault: boolean;
   name: string;
   category: string;
   description: string;
@@ -153,6 +159,7 @@ export interface TestScenario {
 export interface CaseRun {
   id: string;
   testCaseId: string;
+  scenarioRunId: string;
   caseNameSnapshot: string;
   stepsSnapshot: string;
   expectedResultSnapshot: string;
@@ -163,12 +170,30 @@ export interface CaseRun {
   finishedAt?: string;
 }
 
+export interface ScenarioRun {
+  id: string;
+  testScenarioId: string;
+  scenarioNameSnapshot: string;
+  isDefault: boolean;
+  status: RunStatus;
+  outcome?: TestOutcome;
+  roleBindings: Record<string, string>;
+  parameterValues: Record<string, string>;
+  caseRunIds: string[];
+  summary?: string;
+  cleanupOutcome?: TestOutcome;
+  cleanupSummary?: string;
+  startedAt?: string;
+  finishedAt?: string;
+}
+
 export interface TestRun {
   id: string;
   testOrderId: string;
   triggerType: "all" | "single";
   status: RunStatus;
   outcome?: TestOutcome;
+  scenarioRuns: ScenarioRun[];
   caseRuns: CaseRun[];
   createdAt: string;
   startedAt?: string;
@@ -203,6 +228,7 @@ export interface ProductInput {
 }
 
 export interface TestCaseInput {
+  scenarioId: string;
   name: string;
   steps: string;
   expectedResult: string;
@@ -223,7 +249,7 @@ export interface DeviceResourceInput {
   controlInterfaces: ControlInterfaceInput[];
 }
 export type PhysicalEnvironmentInput = Omit<PhysicalEnvironment, "id" | "productId" | "createdAt" | "updatedAt">;
-export type TestScenarioInput = Omit<TestScenario, "id" | "productId" | "createdAt" | "updatedAt">;
+export type TestScenarioInput = Omit<TestScenario, "id" | "productId" | "isDefault" | "createdAt" | "updatedAt">;
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {

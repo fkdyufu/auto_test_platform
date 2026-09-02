@@ -18,6 +18,7 @@ export interface Product {
 export interface TestCase {
   id: string;
   productId: string;
+  scenarioId: string;
   name: string;
   steps: string;
   expectedResult: string;
@@ -88,6 +89,7 @@ export interface ScenarioParameter {
 export interface TestScenario {
   id: string;
   productId: string;
+  isDefault: boolean;
   name: string;
   category: string;
   description: string;
@@ -126,6 +128,7 @@ type LegacyTestOrder = Omit<TestOrder, "physicalEnvironmentId"> & {
 export interface CaseRun {
   id: string;
   testCaseId: string;
+  scenarioRunId: string;
   caseNameSnapshot: string;
   stepsSnapshot: string;
   expectedResultSnapshot: string;
@@ -136,12 +139,30 @@ export interface CaseRun {
   finishedAt?: string;
 }
 
+export interface ScenarioRun {
+  id: string;
+  testScenarioId: string;
+  scenarioNameSnapshot: string;
+  isDefault: boolean;
+  status: ExecutionStatus;
+  outcome?: TestOutcome;
+  roleBindings: Record<string, string>;
+  parameterValues: Record<string, string>;
+  caseRunIds: string[];
+  summary?: string;
+  cleanupOutcome?: TestOutcome;
+  cleanupSummary?: string;
+  startedAt?: string;
+  finishedAt?: string;
+}
+
 export interface TestRun {
   id: string;
   testOrderId: string;
   triggerType: "all" | "single";
   status: ExecutionStatus;
   outcome?: TestOutcome;
+  scenarioRuns: ScenarioRun[];
   caseRuns: CaseRun[];
   createdAt: string;
   startedAt?: string;
@@ -149,7 +170,7 @@ export interface TestRun {
 }
 
 interface CatalogData {
-  version: 6;
+  version: 7;
   products: Product[];
   testCases: TestCase[];
   deviceResources: DeviceResource[];
@@ -158,6 +179,13 @@ interface CatalogData {
   testOrders: TestOrder[];
   testRuns: TestRun[];
 }
+
+type LegacyTestCase = Omit<TestCase, "scenarioId"> & { scenarioId?: string };
+type LegacyCaseRun = Omit<CaseRun, "scenarioRunId"> & { scenarioRunId?: string };
+type LegacyTestRun = Omit<TestRun, "scenarioRuns" | "caseRuns"> & {
+  scenarioRuns?: ScenarioRun[];
+  caseRuns: LegacyCaseRun[];
+};
 
 export interface ProductSummary extends Product {
   caseCount: number;
@@ -188,6 +216,7 @@ export interface TestOrderDetail extends TestOrderSummary {
 export interface TestOrderExecutionContext {
   physicalEnvironment?: PhysicalEnvironment;
   devices: DeviceResource[];
+  scenarios: TestScenario[];
 }
 
 export class CatalogError extends Error {
@@ -227,22 +256,45 @@ function clone<T>(value: T): T {
   return structuredClone(value);
 }
 
+function defaultScenarioId(productId: string): string {
+  return `default-scenario-${productId}`;
+}
+
+function createDefaultScenario(product: Product, timestamp = new Date().toISOString()): TestScenario {
+  return {
+    id: defaultScenarioId(product.id),
+    productId: product.id,
+    isDefault: true,
+    name: "默认场景",
+    category: "默认",
+    description: "不切换逻辑拓扑，直接使用所选物理环境执行用例。",
+    roles: [],
+    parameters: [],
+    setupInstructions: "保持物理环境当前逻辑配置，不执行额外的场景搭建。",
+    verificationInstructions: "确认用例所需设备及其控制接口可用。",
+    cleanupInstructions: "",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+}
+
 function defaultData(): CatalogData {
   const timestamp = new Date().toISOString();
+  const products = ["WKCJ-I", "WKCJ-II"].map((name) => ({
+    id: randomUUID(),
+    name,
+    description: "",
+    zentaoId: "",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  }));
   return {
-    version: 6,
-    products: ["WKCJ-I", "WKCJ-II"].map((name) => ({
-      id: randomUUID(),
-      name,
-      description: "",
-      zentaoId: "",
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    })),
+    version: 7,
+    products,
     testCases: [],
     deviceResources: [],
     physicalEnvironments: [],
-    testScenarios: [],
+    testScenarios: products.map((product) => createDefaultScenario(product, timestamp)),
     testOrders: [],
     testRuns: [],
   };
@@ -274,11 +326,11 @@ export class CatalogStore {
     this.initializePromise ??= this.initialize();
     await this.initializePromise;
     const data = JSON.parse(await readFile(this.filePath, "utf8")) as CatalogData & { version: number };
-    if (![1, 2, 3, 4, 5, 6].includes(data.version) || !Array.isArray(data.products) || !Array.isArray(data.testCases)) {
+    if (![1, 2, 3, 4, 5, 6, 7].includes(data.version) || !Array.isArray(data.products) || !Array.isArray(data.testCases)) {
       throw new CatalogError("业务数据文件格式不正确", 500);
     }
     const legacyData = data as typeof data & { labEnvironments?: PhysicalEnvironment[] };
-    data.version = 6;
+    data.version = 7;
     data.deviceResources ??= [];
     data.physicalEnvironments ??= legacyData.labEnvironments ?? [];
     delete legacyData.labEnvironments;
@@ -315,6 +367,7 @@ export class CatalogStore {
     }));
     data.testScenarios = data.testScenarios.map((scenario) => ({
       ...scenario,
+      isDefault: scenario.isDefault === true,
       productId: productIds.has(scenario.productId)
         ? scenario.productId
         : scenarioOwners.get(scenario.id) || fallbackProductId,
@@ -325,6 +378,26 @@ export class CatalogStore {
         deviceType: role.deviceType,
       })),
     }));
+    data.products.forEach((product) => {
+      if (!data.testScenarios.some((scenario) => scenario.productId === product.id && scenario.isDefault)) {
+        data.testScenarios.push(createDefaultScenario(product, product.createdAt));
+      }
+    });
+    const scenarioById = new Map(data.testScenarios.map((scenario) => [scenario.id, scenario]));
+    data.testCases = (data.testCases as LegacyTestCase[]).map((testCase) => {
+      const scenario = testCase.scenarioId ? scenarioById.get(testCase.scenarioId) : undefined;
+      return {
+        id: testCase.id,
+        productId: testCase.productId,
+        scenarioId: scenario?.productId === testCase.productId ? scenario.id : defaultScenarioId(testCase.productId),
+        name: testCase.name,
+        steps: testCase.steps,
+        expectedResult: testCase.expectedResult,
+        createdAt: testCase.createdAt,
+        updatedAt: testCase.updatedAt,
+        archivedAt: testCase.archivedAt,
+      };
+    });
     const deviceOwners = new Map<string, string>();
     data.physicalEnvironments.forEach((physicalEnvironment) => {
       physicalEnvironment.deviceIds.forEach((deviceId) => {
@@ -375,6 +448,39 @@ export class CatalogStore {
         updatedAt: order.updatedAt,
         archivedAt: order.archivedAt,
       };
+    });
+    const testCaseById = new Map(data.testCases.map((testCase) => [testCase.id, testCase]));
+    data.testRuns = (data.testRuns as LegacyTestRun[]).map((run) => {
+      if (run.scenarioRuns && run.caseRuns.every((caseRun) => Boolean(caseRun.scenarioRunId))) {
+        return run as TestRun;
+      }
+      const runOrder = data.testOrders.find((order) => order.id === run.testOrderId);
+      const scenarioRuns = new Map<string, ScenarioRun>();
+      const caseRuns = run.caseRuns.map((caseRun) => {
+        const testCase = testCaseById.get(caseRun.testCaseId);
+        const scenario = scenarioById.get(testCase?.scenarioId || "");
+        const scenarioId = scenario?.id || defaultScenarioId(testCase?.productId || runOrder?.productId || "legacy");
+        let scenarioRun = scenarioRuns.get(scenarioId);
+        if (!scenarioRun) {
+          scenarioRun = {
+            id: `scenario-run-${run.id}-${scenarioId}`,
+            testScenarioId: scenarioId,
+            scenarioNameSnapshot: scenario?.name || "默认场景",
+            isDefault: scenario?.isDefault ?? true,
+            status: run.status,
+            outcome: run.outcome,
+            roleBindings: {},
+            parameterValues: {},
+            caseRunIds: [],
+            startedAt: run.startedAt,
+            finishedAt: run.finishedAt,
+          };
+          scenarioRuns.set(scenarioId, scenarioRun);
+        }
+        scenarioRun.caseRunIds.push(caseRun.id);
+        return { ...caseRun, scenarioRunId: scenarioRun.id };
+      });
+      return { ...run, scenarioRuns: [...scenarioRuns.values()], caseRuns };
     });
     return data;
   }
@@ -428,6 +534,7 @@ export class CatalogStore {
         updatedAt: timestamp,
       };
       data.products.push(product);
+      data.testScenarios.push(createDefaultScenario(product, timestamp));
       return clone(product);
     });
   }
@@ -479,6 +586,15 @@ export class CatalogStore {
     return clone(testCase);
   }
 
+  private validateTestCaseScenario(data: CatalogData, productId: string, value: unknown): string {
+    const scenarioId = optionalText(value, 100) || defaultScenarioId(productId);
+    const scenario = data.testScenarios.find(
+      (item) => item.id === scenarioId && item.productId === productId && !item.archivedAt,
+    );
+    if (!scenario) throw new CatalogError("测试场景不属于当前产品或不存在", 404);
+    return scenarioId;
+  }
+
   async createTestCase(productId: string, input: Record<string, unknown>): Promise<TestCase> {
     return this.mutate((data) => {
       const product = data.products.find((item) => item.id === productId && !item.archivedAt);
@@ -487,6 +603,7 @@ export class CatalogStore {
       const testCase: TestCase = {
         id: randomUUID(),
         productId,
+        scenarioId: this.validateTestCaseScenario(data, productId, input.scenarioId),
         name: requiredText(input.name, "用例名称", 200),
         steps: requiredText(input.steps, "测试步骤", 20_000),
         expectedResult: requiredText(input.expectedResult, "预期结果", 10_000),
@@ -502,6 +619,7 @@ export class CatalogStore {
     return this.mutate((data) => {
       const testCase = data.testCases.find((item) => item.id === id && item.productId === productId && !item.archivedAt);
       if (!testCase) throw new CatalogError("测试用例不存在", 404);
+      testCase.scenarioId = this.validateTestCaseScenario(data, productId, input.scenarioId ?? testCase.scenarioId);
       testCase.name = requiredText(input.name, "用例名称", 200);
       testCase.steps = requiredText(input.steps, "测试步骤", 20_000);
       testCase.expectedResult = requiredText(input.expectedResult, "预期结果", 10_000);
@@ -762,7 +880,7 @@ export class CatalogStore {
     return data.testScenarios
       .filter((item) => item.productId === productId && !item.archivedAt)
       .map(clone)
-      .sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
+      .sort((left, right) => Number(right.isDefault) - Number(left.isDefault) || left.name.localeCompare(right.name, "zh-CN"));
   }
 
   async createTestScenario(productId: string, input: Record<string, unknown>): Promise<TestScenario> {
@@ -774,6 +892,7 @@ export class CatalogStore {
       const scenario: TestScenario = {
         id: randomUUID(),
         productId,
+        isDefault: false,
         name,
         category: requiredText(input.category, "功能分类", 120),
         description: optionalText(input.description, 4_000),
@@ -794,6 +913,7 @@ export class CatalogStore {
     return this.mutate((data) => {
       const scenario = data.testScenarios.find((item) => item.id === id && item.productId === productId && !item.archivedAt);
       if (!scenario) throw new CatalogError("测试场景不存在", 404);
+      if (scenario.isDefault) throw new CatalogError("默认场景由系统维护，不能编辑", 409);
       const name = requiredText(input.name, "场景名称", 160);
       uniqueName(data.testScenarios.filter((item) => item.productId === productId), name, "场景名称", id);
       scenario.name = name;
@@ -813,6 +933,10 @@ export class CatalogStore {
     await this.mutate((data) => {
       const scenario = data.testScenarios.find((item) => item.id === id && item.productId === productId && !item.archivedAt);
       if (!scenario) throw new CatalogError("测试场景不存在", 404);
+      if (scenario.isDefault) throw new CatalogError("默认场景不能删除", 409);
+      if (data.testCases.some((testCase) => testCase.scenarioId === id && !testCase.archivedAt)) {
+        throw new CatalogError("测试场景正在被测试用例使用，不能删除", 409);
+      }
       scenario.archivedAt = new Date().toISOString();
       scenario.updatedAt = scenario.archivedAt;
     });
@@ -954,6 +1078,9 @@ export class CatalogStore {
     return {
       physicalEnvironment: physicalEnvironment ? clone(physicalEnvironment) : undefined,
       devices,
+      scenarios: data.testScenarios
+        .filter((scenario) => scenario.productId === order.productId && !scenario.archivedAt)
+        .map(clone),
     };
   }
 
@@ -967,19 +1094,48 @@ export class CatalogStore {
       }
       const cases = caseIds.map((caseId) => data.testCases.find((item) => item.id === caseId && !item.archivedAt));
       if (cases.some((item) => !item)) throw new CatalogError("测试单中存在已删除的测试用例");
+      const caseRuns: CaseRun[] = [];
+      const scenarioRunsById = new Map<string, ScenarioRun>();
+      for (const testCase of cases as TestCase[]) {
+        const scenario = data.testScenarios.find(
+          (item) => item.id === testCase.scenarioId && item.productId === order.productId && !item.archivedAt,
+        );
+        if (!scenario) throw new CatalogError(`用例“${testCase.name}”关联的测试场景不存在`);
+        let scenarioRun = scenarioRunsById.get(scenario.id);
+        if (!scenarioRun) {
+          scenarioRun = {
+            id: randomUUID(),
+            testScenarioId: scenario.id,
+            scenarioNameSnapshot: scenario.name,
+            isDefault: scenario.isDefault,
+            status: "queued",
+            roleBindings: {},
+            parameterValues: Object.fromEntries(
+              scenario.parameters.map((parameter) => [parameter.key, parameter.defaultValue]),
+            ),
+            caseRunIds: [],
+          };
+          scenarioRunsById.set(scenario.id, scenarioRun);
+        }
+        const caseRun: CaseRun = {
+          id: randomUUID(),
+          testCaseId: testCase.id,
+          scenarioRunId: scenarioRun.id,
+          caseNameSnapshot: testCase.name,
+          stepsSnapshot: testCase.steps,
+          expectedResultSnapshot: testCase.expectedResult,
+          status: "queued",
+        };
+        scenarioRun.caseRunIds.push(caseRun.id);
+        caseRuns.push(caseRun);
+      }
       const run: TestRun = {
         id: runId,
         testOrderId,
         triggerType: selectedCaseIds?.length ? "single" : "all",
         status: "queued",
-        caseRuns: (cases as TestCase[]).map((testCase) => ({
-          id: randomUUID(),
-          testCaseId: testCase.id,
-          caseNameSnapshot: testCase.name,
-          stepsSnapshot: testCase.steps,
-          expectedResultSnapshot: testCase.expectedResult,
-          status: "queued",
-        })),
+        scenarioRuns: [...scenarioRunsById.values()],
+        caseRuns,
         createdAt: new Date().toISOString(),
       };
       data.testRuns.push(run);

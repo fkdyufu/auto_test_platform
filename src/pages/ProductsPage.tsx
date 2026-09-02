@@ -1,13 +1,20 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { FileText, Library, Package, Pencil, Plus, Trash2 } from "lucide-react";
-import { api, type ProductInput, type ProductSummary, type TestCase, type TestCaseInput } from "../api";
+import {
+  api,
+  type ProductInput,
+  type ProductSummary,
+  type TestCase,
+  type TestCaseInput,
+  type TestScenario,
+} from "../api";
 import { InlineNotice, Modal, PageHeader, type Notice } from "../components/ui";
 
 type ProductDialog = { id?: string; form: ProductInput } | null;
 type CaseDialog = { id?: string; form: TestCaseInput } | null;
 
 const EMPTY_PRODUCT: ProductInput = { name: "", description: "", zentaoId: "" };
-const EMPTY_CASE: TestCaseInput = { name: "", steps: "", expectedResult: "" };
+const EMPTY_CASE: TestCaseInput = { scenarioId: "", name: "", steps: "", expectedResult: "" };
 
 function shortId(id: string): string {
   return id.slice(0, 8).toUpperCase();
@@ -25,6 +32,7 @@ export function ProductsPage({
   onProductsChanged: (preferredId?: string) => Promise<void>;
 }) {
   const [cases, setCases] = useState<TestCase[]>([]);
+  const [scenarios, setScenarios] = useState<TestScenario[]>([]);
   const [tab, setTab] = useState<"info" | "cases">("info");
   const [notice, setNotice] = useState<Notice>(null);
   const [productDialog, setProductDialog] = useState<ProductDialog>(null);
@@ -38,10 +46,14 @@ export function ProductsPage({
     setNotice(null);
     if (!product) {
       setCases([]);
+      setScenarios([]);
       return;
     }
-    void api.getTestCases(product.id)
-      .then(setCases)
+    void Promise.all([api.getTestCases(product.id), api.getTestScenarios(product.id)])
+      .then(([nextCases, nextScenarios]) => {
+        setCases(nextCases);
+        setScenarios(nextScenarios);
+      })
       .catch((error) => setNotice({ kind: "error", message: error instanceof Error ? error.message : "读取用例失败" }));
   }, [product?.id]);
 
@@ -89,8 +101,13 @@ export function ProductsPage({
     setCaseDialog({
       id: testCase?.id,
       form: testCase
-        ? { name: testCase.name, steps: testCase.steps, expectedResult: testCase.expectedResult }
-        : { ...EMPTY_CASE },
+        ? {
+            scenarioId: testCase.scenarioId,
+            name: testCase.name,
+            steps: testCase.steps,
+            expectedResult: testCase.expectedResult,
+          }
+        : { ...EMPTY_CASE, scenarioId: scenarios.find((scenario) => scenario.isDefault)?.id || scenarios[0]?.id || "" },
     });
   };
 
@@ -172,12 +189,13 @@ export function ProductsPage({
               </div>
               <div className="table-wrap">
                 <table className="data-table">
-                  <thead><tr><th>ID</th><th>名称</th><th>步骤</th><th>预期结果</th><th aria-label="操作" /></tr></thead>
+                  <thead><tr><th>ID</th><th>名称</th><th>测试场景</th><th>步骤</th><th>预期结果</th><th aria-label="操作" /></tr></thead>
                   <tbody>
                     {cases.map((testCase) => (
                       <tr key={testCase.id}>
                         <td className="mono-cell" title={testCase.id}>{shortId(testCase.id)}</td>
                         <td className="name-cell">{testCase.name}</td>
+                        <td><span className="category-label">{scenarios.find((scenario) => scenario.id === testCase.scenarioId)?.name || "场景已删除"}</span></td>
                         <td className="truncate-cell">{testCase.steps}</td>
                         <td className="truncate-cell">{testCase.expectedResult}</td>
                         <td><div className="row-actions">
@@ -186,7 +204,7 @@ export function ProductsPage({
                         </div></td>
                       </tr>
                     ))}
-                    {!cases.length && <tr><td colSpan={5} className="table-empty"><FileText size={22} />暂无测试用例</td></tr>}
+                    {!cases.length && <tr><td colSpan={6} className="table-empty"><FileText size={22} />暂无测试用例</td></tr>}
                   </tbody>
                 </table>
               </div>
@@ -210,6 +228,7 @@ export function ProductsPage({
         <Modal title={caseDialog.id ? "编辑测试用例" : "新增测试用例"} onClose={() => setCaseDialog(null)} onSubmit={saveCase} submitting={submitting}>
           {dialogError && <div className="form-error">{dialogError}</div>}
           <label className="field"><span>用例名称</span><input value={caseDialog.form.name} onChange={(event) => setCaseDialog({ ...caseDialog, form: { ...caseDialog.form, name: event.target.value } })} autoFocus /></label>
+          <label className="field"><span>测试场景</span><select value={caseDialog.form.scenarioId} onChange={(event) => setCaseDialog({ ...caseDialog, form: { ...caseDialog.form, scenarioId: event.target.value } })}>{scenarios.map((scenario) => <option key={scenario.id} value={scenario.id}>{scenario.name}{scenario.isDefault ? "（系统默认）" : ""}</option>)}</select></label>
           <label className="field"><span>测试步骤</span><textarea value={caseDialog.form.steps} onChange={(event) => setCaseDialog({ ...caseDialog, form: { ...caseDialog.form, steps: event.target.value } })} rows={7} /></label>
           <label className="field"><span>预期结果</span><textarea value={caseDialog.form.expectedResult} onChange={(event) => setCaseDialog({ ...caseDialog, form: { ...caseDialog.form, expectedResult: event.target.value } })} rows={5} /></label>
         </Modal>

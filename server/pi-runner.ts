@@ -36,6 +36,9 @@ export interface PiRunOptions {
   settings: ModelSettings;
   onEvent: (event: RunnerEvent) => void;
   onAbortReady: (abort: () => Promise<void>) => void;
+  scenarioBinding?: {
+    roles: Array<{ key: string; allowedDeviceIds: string[] }>;
+  };
 }
 
 function getMessageText(message: unknown): string {
@@ -128,6 +131,7 @@ export async function executePiRun(options: PiRunOptions): Promise<{ result?: Fi
     onFinish: (result) => {
       finishResult = result;
     },
+    scenarioBinding: options.scenarioBinding,
   });
 
   const { session } = await createAgentSession({

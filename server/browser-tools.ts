@@ -7,12 +7,16 @@ import { defineTool } from "@earendil-works/pi-coding-agent";
 interface FinishResult {
   status: "passed" | "failed";
   summary: string;
+  roleBindings?: Record<string, string>;
 }
 
 interface BrowserToolsOptions {
   runId: string;
   artifactsDirectory: string;
   onFinish: (result: FinishResult) => void;
+  scenarioBinding?: {
+    roles: Array<{ key: string; allowedDeviceIds: string[] }>;
+  };
 }
 
 function textResult(text: string, details: Record<string, unknown> = {}) {
@@ -181,6 +185,16 @@ export class BrowserDriver {
 
 export function createBrowserTools(options: BrowserToolsOptions) {
   const driver = new BrowserDriver(path.join(options.artifactsDirectory, options.runId));
+  const scenarioBinding = options.scenarioBinding;
+  const roleBindingsSchema = Type.Object(
+    Object.fromEntries(
+      (scenarioBinding?.roles || []).map((role) => [
+        role.key,
+        Type.String({ description: `角色 ${role.key} 对应的物理环境设备 ID` }),
+      ]),
+    ),
+    { additionalProperties: false },
+  );
 
   const tools = [
     defineTool({
@@ -257,17 +271,38 @@ export function createBrowserTools(options: BrowserToolsOptions) {
     defineTool({
       name: "finish_test",
       label: "结束测试",
-      description: "完成需求后必须调用一次，提交通过或失败结论。",
+      description: scenarioBinding
+        ? "完成场景搭建和验证后必须调用一次。通过时同时提交每个角色对应的设备 ID。"
+        : "完成需求后必须调用一次，提交通过或失败结论。",
       parameters: Type.Object({
         status: Type.Union([Type.Literal("passed"), Type.Literal("failed")]),
         summary: Type.String({ description: "基于实际观察的简短结论" }),
+        roleBindings: Type.Optional(roleBindingsSchema),
       }),
       execute: async (_id, params) => {
         if (params.status === "passed" && !driver.hasObservedPage()) {
           throw new Error("尚未成功打开并读取目标页面，不能提交通过结论");
         }
-        options.onFinish(params);
-        return textResult("测试结果已提交", params);
+        if (params.status === "passed" && scenarioBinding) {
+          const bindings = params.roleBindings || {};
+          const expectedKeys = new Set(scenarioBinding.roles.map((role) => role.key));
+          const unknownKey = Object.keys(bindings).find((key) => !expectedKeys.has(key));
+          if (unknownKey) throw new Error(`角色绑定包含未知角色：${unknownKey}`);
+          for (const role of scenarioBinding.roles) {
+            const deviceId = bindings[role.key];
+            if (!deviceId) throw new Error(`缺少角色“${role.key}”的设备绑定`);
+            if (!role.allowedDeviceIds.includes(deviceId)) {
+              throw new Error(`角色“${role.key}”绑定的设备不属于当前物理环境或类型不匹配`);
+            }
+          }
+        }
+        const result: FinishResult = {
+          status: params.status,
+          summary: params.summary,
+          ...(params.roleBindings ? { roleBindings: params.roleBindings } : {}),
+        };
+        options.onFinish(result);
+        return textResult("测试结果已提交", { ...result });
       },
     }),
   ];

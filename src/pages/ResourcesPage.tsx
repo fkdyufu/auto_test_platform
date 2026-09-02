@@ -77,6 +77,19 @@ function emptyScenario(): TestScenarioInput {
   };
 }
 
+function scenarioInput(scenario: TestScenario): TestScenarioInput {
+  return {
+    name: scenario.name,
+    category: scenario.category,
+    description: scenario.description,
+    roles: structuredClone(scenario.roles),
+    parameters: structuredClone(scenario.parameters),
+    setupInstructions: scenario.setupInstructions,
+    verificationInstructions: scenario.verificationInstructions,
+    cleanupInstructions: scenario.cleanupInstructions,
+  };
+}
+
 export function ResourcesPage({ product }: { product: ProductSummary }) {
   const [tab, setTab] = useState<ResourceTab>("devices");
   const [devices, setDevices] = useState<DeviceResource[]>([]);
@@ -231,14 +244,16 @@ export function ResourcesPage({ product }: { product: ProductSummary }) {
               <tbody>
                 {scenarios.map((scenario) => (
                   <tr key={scenario.id}>
-                    <td className="name-cell"><strong>{scenario.name}</strong></td>
+                    <td className="name-cell"><strong>{scenario.name}</strong>{scenario.isDefault && <small>系统默认</small>}</td>
                     <td><span className="category-label">{scenario.category}</span></td>
                     <td>{scenario.roles.length}<span className="cell-subtext">{scenario.roles.map((role) => role.name).join("、")}</span></td>
                     <td>{scenario.parameters.length}</td>
                     <td className="truncate-cell">{scenario.description || "-"}</td>
                     <td><div className="row-actions">
-                      <button className="icon-action" title="编辑场景" onClick={() => setDialog({ kind: "scenario", id: scenario.id, form: { ...scenario, roles: structuredClone(scenario.roles), parameters: structuredClone(scenario.parameters) } })}><Pencil size={16} /></button>
-                      <button className="icon-action danger" title="删除场景" onClick={() => void remove("scenario", scenario.id, scenario.name)}><Trash2 size={16} /></button>
+                      {scenario.isDefault ? <span className="category-label">系统维护</span> : <>
+                        <button className="icon-action" title="编辑场景" onClick={() => setDialog({ kind: "scenario", id: scenario.id, form: scenarioInput(scenario) })}><Pencil size={16} /></button>
+                        <button className="icon-action danger" title="删除场景" onClick={() => void remove("scenario", scenario.id, scenario.name)}><Trash2 size={16} /></button>
+                      </>}
                     </div></td>
                   </tr>
                 ))}

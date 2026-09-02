@@ -17,6 +17,12 @@ test("initializes the two default products", async (t) => {
 
   assert.deepEqual(products.map((product) => product.name), ["WKCJ-I", "WKCJ-II"]);
   assert.ok(products.every((product) => product.caseCount === 0));
+  for (const product of products) {
+    const scenarios = await store.listTestScenarios(product.id);
+    assert.equal(scenarios.length, 1);
+    assert.equal(scenarios[0].name, "默认场景");
+    assert.equal(scenarios[0].isDefault, true);
+  }
 });
 
 test("creates product cases and a test order collection", async (t) => {
@@ -183,6 +189,7 @@ test("creates structured resources, a physical environment, and an independent s
     cleanupInstructions: "清除本次 VRRP 配置",
   });
   const testCase = await store.createTestCase(product.id, {
+    scenarioId: scenario.id,
     name: "主设备断电切换",
     steps: "关闭主设备并持续检测虚拟 IP",
     expectedResult: "备设备接管虚拟 IP",
@@ -197,8 +204,8 @@ test("creates structured resources, a physical environment, and an independent s
   const context = await store.getTestOrderExecutionContext(order.id);
   assert.equal(detail.physicalEnvironmentName, "双机网络实验室");
   assert.equal(context.devices.length, 2);
-  assert.equal((await store.listTestScenarios(product.id))[0].id, scenario.id);
-  assert.equal("scenario" in context, false);
+  assert.ok((await store.listTestScenarios(product.id)).some((item) => item.id === scenario.id));
+  assert.equal(context.scenarios.find((item) => item.id === scenario.id)?.name, "VRRP 双机主备");
   assert.equal(master.controlInterfaces[0].hasPassword, true);
   assert.equal("password" in master.controlInterfaces[0], false);
   assert.equal(context.devices.find((item) => item.id === master.id)?.controlInterfaces[0].password, "secret");
@@ -320,4 +327,139 @@ test("isolates resources, physical environments, and orders by product", async (
     store.getTestOrderDetail(secondProduct.id, order.id),
     (error: unknown) => error instanceof CatalogError && error.status === 404,
   );
+});
+
+test("assigns cases to a validated product scenario", async (t) => {
+  const store = await createStore(t);
+  const [firstProduct, secondProduct] = await store.listProducts();
+  const scenario = await store.createTestScenario(firstProduct.id, {
+    name: "端口转发",
+    category: "转发",
+    roles: [{ key: "dut", name: "被测设备", deviceType: "TAU" }],
+    setupInstructions: "配置转发路径",
+    verificationInstructions: "确认链路连通",
+  });
+  const testCase = await store.createTestCase(firstProduct.id, {
+    scenarioId: scenario.id,
+    name: "检查吞吐率",
+    steps: "启动打流并读取统计",
+    expectedResult: "吞吐率符合预期",
+  });
+
+  assert.equal(testCase.scenarioId, scenario.id);
+  await assert.rejects(
+    store.createTestCase(secondProduct.id, {
+      scenarioId: scenario.id,
+      name: "跨产品场景用例",
+      steps: "执行检查",
+      expectedResult: "检查通过",
+    }),
+    (error: unknown) => error instanceof CatalogError && error.message.includes("不属于当前产品"),
+  );
+  await assert.rejects(
+    store.archiveTestScenario(firstProduct.id, scenario.id),
+    (error: unknown) => error instanceof CatalogError && error.message.includes("测试用例"),
+  );
+  const [defaultScenario] = await store.listTestScenarios(firstProduct.id);
+  await assert.rejects(
+    store.archiveTestScenario(firstProduct.id, defaultScenario.id),
+    (error: unknown) => error instanceof CatalogError && error.message === "默认场景不能删除",
+  );
+});
+
+test("groups a test run by each case scenario", async (t) => {
+  const store = await createStore(t);
+  const [product] = await store.listProducts();
+  const firstScenario = await store.createTestScenario(product.id, {
+    name: "场景 A",
+    category: "路由",
+    roles: [{ key: "dut", name: "被测设备", deviceType: "TAU" }],
+    parameters: [{ key: "area", name: "区域", defaultValue: "0" }],
+    setupInstructions: "搭建场景 A",
+    verificationInstructions: "验证场景 A",
+  });
+  const secondScenario = await store.createTestScenario(product.id, {
+    name: "场景 B",
+    category: "转发",
+    roles: [{ key: "dut", name: "被测设备", deviceType: "TAU" }],
+    setupInstructions: "搭建场景 B",
+    verificationInstructions: "验证场景 B",
+  });
+  const firstCase = await store.createTestCase(product.id, {
+    scenarioId: firstScenario.id,
+    name: "用例 A1",
+    steps: "执行 A1",
+    expectedResult: "A1 通过",
+  });
+  const secondCase = await store.createTestCase(product.id, {
+    scenarioId: secondScenario.id,
+    name: "用例 B1",
+    steps: "执行 B1",
+    expectedResult: "B1 通过",
+  });
+  const thirdCase = await store.createTestCase(product.id, {
+    scenarioId: firstScenario.id,
+    name: "用例 A2",
+    steps: "执行 A2",
+    expectedResult: "A2 通过",
+  });
+  const order = await store.createTestOrder(product.id, {
+    name: "多场景回归",
+    caseIds: [firstCase.id, secondCase.id, thirdCase.id],
+  });
+  const run = await store.createTestRun("multi-scenario-run", order.id);
+
+  assert.deepEqual(run.scenarioRuns.map((item) => item.testScenarioId), [firstScenario.id, secondScenario.id]);
+  assert.deepEqual(run.scenarioRuns.map((item) => item.caseRunIds.length), [2, 1]);
+  assert.equal(run.scenarioRuns[0].parameterValues.area, "0");
+  assert.ok(run.caseRuns.every((caseRun) => run.scenarioRuns.some((scenarioRun) => scenarioRun.id === caseRun.scenarioRunId)));
+  assert.deepEqual(
+    run.scenarioRuns[0].caseRunIds.map((id) => run.caseRuns.find((caseRun) => caseRun.id === id)?.testCaseId),
+    [firstCase.id, thirdCase.id],
+  );
+});
+
+test("migrates legacy cases and runs into the default scenario", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "ai-test-catalog-scenario-migration-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const filePath = path.join(directory, "catalog.json");
+  const store = new CatalogStore(filePath);
+  const [product] = await store.listProducts();
+  const testCase = await store.createTestCase(product.id, {
+    name: "旧用例",
+    steps: "执行旧步骤",
+    expectedResult: "旧结果通过",
+  });
+  const order = await store.createTestOrder(product.id, { name: "旧测试单", caseIds: [testCase.id] });
+  const run = await store.createTestRun("legacy-run", order.id);
+  await store.updateTestRun(run.id, (storedRun) => {
+    storedRun.status = "completed";
+    storedRun.outcome = "passed";
+    storedRun.caseRuns[0].status = "completed";
+    storedRun.caseRuns[0].outcome = "passed";
+    storedRun.caseRuns[0].summary = "历史结论";
+  });
+
+  const data = JSON.parse(await readFile(filePath, "utf8")) as {
+    version: number;
+    testCases: Array<Record<string, unknown>>;
+    testScenarios: Array<Record<string, unknown>>;
+    testRuns: Array<Record<string, unknown> & { caseRuns: Array<Record<string, unknown>> }>;
+  };
+  data.version = 6;
+  data.testScenarios = [];
+  delete data.testCases[0].scenarioId;
+  delete data.testRuns[0].scenarioRuns;
+  delete data.testRuns[0].caseRuns[0].scenarioRunId;
+  await writeFile(filePath, `${JSON.stringify(data, null, 2)}\n`);
+
+  const migratedStore = new CatalogStore(filePath);
+  const detail = await migratedStore.getTestOrderDetail(product.id, order.id);
+  const [defaultScenario] = await migratedStore.listTestScenarios(product.id);
+  assert.equal(defaultScenario.isDefault, true);
+  assert.equal(detail.cases[0].scenarioId, defaultScenario.id);
+  assert.equal(detail.runs[0].scenarioRuns.length, 1);
+  assert.equal(detail.runs[0].scenarioRuns[0].testScenarioId, defaultScenario.id);
+  assert.equal(detail.runs[0].caseRuns[0].scenarioRunId, detail.runs[0].scenarioRuns[0].id);
+  assert.equal(detail.runs[0].caseRuns[0].summary, "历史结论");
 });

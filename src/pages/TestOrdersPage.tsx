@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { Fragment, useEffect, useRef, useState, type FormEvent } from "react";
 import {
   ArrowLeft,
   ChevronRight,
@@ -11,6 +11,7 @@ import {
   Play,
   Plus,
   Trash2,
+  Workflow,
 } from "lucide-react";
 import {
   api,
@@ -24,6 +25,7 @@ import {
   type TestOrderInput,
   type TestOrderSummary,
   type TestRun,
+  type TestScenario,
 } from "../api";
 import { RunMonitor } from "../components/RunMonitor";
 import { InlineNotice, Modal, PageHeader, type Notice } from "../components/ui";
@@ -64,6 +66,7 @@ function StatusBadge({ run }: { run?: TestRun }) {
 export function TestOrdersPage({ product }: { product: ProductSummary }) {
   const [orders, setOrders] = useState<TestOrderSummary[]>([]);
   const [physicalEnvironments, setPhysicalEnvironments] = useState<PhysicalEnvironment[]>([]);
+  const [scenarios, setScenarios] = useState<TestScenario[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [detail, setDetail] = useState<TestOrderDetail | null>(null);
   const [dialog, setDialog] = useState<{ id?: string; form: TestOrderInput } | null>(null);
@@ -92,10 +95,12 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
     void Promise.all([
       api.getTestOrders(product.id),
       api.getPhysicalEnvironments(product.id),
+      api.getTestScenarios(product.id),
     ])
-      .then(([nextOrders, nextPhysicalEnvironments]) => {
+      .then(([nextOrders, nextPhysicalEnvironments, nextScenarios]) => {
         setOrders(nextOrders);
         setPhysicalEnvironments(nextPhysicalEnvironments);
+        setScenarios(nextScenarios);
       })
       .catch((error) => setNotice({ kind: "error", message: error instanceof Error ? error.message : "读取测试单失败" }));
     return () => eventSourceRef.current?.close();
@@ -114,7 +119,12 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
   const openDialog = async (order?: TestOrderDetail | TestOrderSummary) => {
     try {
       setDialogError("");
-      setAvailableCases(await api.getTestCases(product.id));
+      const [nextCases, nextScenarios] = await Promise.all([
+        api.getTestCases(product.id),
+        api.getTestScenarios(product.id),
+      ]);
+      setAvailableCases(nextCases);
+      setScenarios(nextScenarios);
       setDialog({
         id: order?.id,
         form: order
@@ -226,6 +236,21 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
       setNotice({ kind: "error", message: error instanceof Error ? error.message : "取消执行失败" });
     }
   };
+
+  const scenarioName = (scenarioId: string) =>
+    scenarios.find((scenario) => scenario.id === scenarioId)?.name || "场景已删除";
+
+  const groupedCases = detail
+    ? Array.from(
+        detail.cases.reduce((groups, testCase) => {
+          const group = groups.get(testCase.scenarioId) || [];
+          group.push(testCase);
+          groups.set(testCase.scenarioId, group);
+          return groups;
+        }, new Map<string, TestCase[]>()),
+      )
+    : [];
+  const executionPlanCases = groupedCases.flatMap(([, testCases]) => testCases);
 
   return (
     <div className="page orders-page">
@@ -343,28 +368,34 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
           <section className="detail-section">
             <div className="content-toolbar">
               <div><ClipboardList size={17} /><strong>测试用例</strong></div>
-              <span className="muted-count">按列表顺序执行</span>
+              <span className="muted-count">先搭建场景，再按组执行</span>
             </div>
             <div className="table-wrap">
               <table className="data-table">
                 <thead>
-                  <tr><th>顺序</th><th>用例名称</th><th>测试步骤</th><th>预期结果</th><th aria-label="操作" /></tr>
+                  <tr><th>顺序</th><th>测试场景</th><th>用例名称</th><th>测试步骤</th><th>预期结果</th><th aria-label="操作" /></tr>
                 </thead>
                 <tbody>
-                  {detail.cases.map((testCase, index) => (
-                    <tr key={testCase.id}>
-                      <td className="order-index">{String(index + 1).padStart(2, "0")}</td>
-                      <td className="name-cell">{testCase.name}</td>
-                      <td className="truncate-cell">{testCase.steps}</td>
-                      <td className="truncate-cell">{testCase.expectedResult}</td>
-                      <td>
-                        <button className="button secondary compact" onClick={() => void execute(detail, testCase.id)} disabled={active}>
-                          <Play size={15} />
-                          执行
-                        </button>
-                      </td>
+                  {groupedCases.map(([scenarioId, testCases]) => <Fragment key={scenarioId}>
+                    <tr className="scenario-group-row">
+                      <td colSpan={6}><div><Workflow size={14} /><strong>{scenarioName(scenarioId)}</strong><span>{testCases.length} 个用例</span></div></td>
                     </tr>
-                  ))}
+                    {testCases.map((testCase) => (
+                      <tr key={testCase.id}>
+                        <td className="order-index">{String(executionPlanCases.indexOf(testCase) + 1).padStart(2, "0")}</td>
+                        <td><span className="category-label">{scenarioName(testCase.scenarioId)}</span></td>
+                        <td className="name-cell">{testCase.name}</td>
+                        <td className="truncate-cell">{testCase.steps}</td>
+                        <td className="truncate-cell">{testCase.expectedResult}</td>
+                        <td>
+                          <button className="button secondary compact" onClick={() => void execute(detail, testCase.id)} disabled={active}>
+                            <Play size={15} />
+                            执行
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </Fragment>)}
                 </tbody>
               </table>
             </div>
@@ -467,7 +498,7 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
                   checked={dialog.form.caseIds.includes(testCase.id)}
                   onChange={() => toggleCase(testCase.id)}
                 />
-                <span><strong>{testCase.name}</strong><small>{testCase.expectedResult}</small></span>
+                <span><strong>{testCase.name}</strong><small>{scenarioName(testCase.scenarioId)} · {testCase.expectedResult}</small></span>
               </label>
             ))}
             {!availableCases.length && <div className="list-empty">{product.name} 暂无测试用例</div>}
