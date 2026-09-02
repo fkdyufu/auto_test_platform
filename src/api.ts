@@ -101,7 +101,7 @@ export interface DeviceResource {
   updatedAt: string;
 }
 
-export interface EnvironmentConnection {
+export interface PhysicalConnection {
   id: string;
   sourceDeviceId: string;
   sourcePort: string;
@@ -110,13 +110,13 @@ export interface EnvironmentConnection {
   description: string;
 }
 
-export interface LabEnvironment {
+export interface PhysicalEnvironment {
   id: string;
   productId: string;
   name: string;
   description: string;
   deviceIds: string[];
-  connections: EnvironmentConnection[];
+  connections: PhysicalConnection[];
   createdAt: string;
   updatedAt: string;
 }
@@ -181,8 +181,8 @@ export interface TestOrderSummary {
   productName: string;
   name: string;
   description: string;
-  environmentId: string;
-  environmentName: string;
+  physicalEnvironmentId: string;
+  physicalEnvironmentName: string;
   caseIds: string[];
   caseCount: number;
   createdAt: string;
@@ -193,7 +193,7 @@ export interface TestOrderSummary {
 export interface TestOrderDetail extends TestOrderSummary {
   cases: TestCase[];
   runs: TestRun[];
-  environment?: LabEnvironment;
+  physicalEnvironment?: PhysicalEnvironment;
 }
 
 export interface ProductInput {
@@ -211,7 +211,7 @@ export interface TestCaseInput {
 export interface TestOrderInput {
   name: string;
   description: string;
-  environmentId: string;
+  physicalEnvironmentId: string;
   caseIds: string[];
 }
 
@@ -222,7 +222,7 @@ export interface DeviceResourceInput {
   description: string;
   controlInterfaces: ControlInterfaceInput[];
 }
-export type LabEnvironmentInput = Omit<LabEnvironment, "id" | "productId" | "createdAt" | "updatedAt">;
+export type PhysicalEnvironmentInput = Omit<PhysicalEnvironment, "id" | "productId" | "createdAt" | "updatedAt">;
 export type TestScenarioInput = Omit<TestScenario, "id" | "productId" | "createdAt" | "updatedAt">;
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -268,13 +268,20 @@ export const api = {
     request<DeviceResource>(`/api/products/${productId}/device-resources/${id}`, { method: "PUT", body: JSON.stringify(input) }),
   deleteDeviceResource: (productId: string, id: string) =>
     request<void>(`/api/products/${productId}/device-resources/${id}`, { method: "DELETE" }),
-  getLabEnvironments: (productId: string) => request<LabEnvironment[]>(`/api/products/${productId}/lab-environments`),
-  createLabEnvironment: (productId: string, input: LabEnvironmentInput) =>
-    request<LabEnvironment>(`/api/products/${productId}/lab-environments`, { method: "POST", body: JSON.stringify(input) }),
-  updateLabEnvironment: (productId: string, id: string, input: LabEnvironmentInput) =>
-    request<LabEnvironment>(`/api/products/${productId}/lab-environments/${id}`, { method: "PUT", body: JSON.stringify(input) }),
-  deleteLabEnvironment: (productId: string, id: string) =>
-    request<void>(`/api/products/${productId}/lab-environments/${id}`, { method: "DELETE" }),
+  getPhysicalEnvironments: (productId: string) =>
+    request<PhysicalEnvironment[]>(`/api/products/${productId}/physical-environments`),
+  createPhysicalEnvironment: (productId: string, input: PhysicalEnvironmentInput) =>
+    request<PhysicalEnvironment>(`/api/products/${productId}/physical-environments`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  updatePhysicalEnvironment: (productId: string, id: string, input: PhysicalEnvironmentInput) =>
+    request<PhysicalEnvironment>(`/api/products/${productId}/physical-environments/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
+  deletePhysicalEnvironment: (productId: string, id: string) =>
+    request<void>(`/api/products/${productId}/physical-environments/${id}`, { method: "DELETE" }),
   getTestScenarios: (productId: string) => request<TestScenario[]>(`/api/products/${productId}/test-scenarios`),
   createTestScenario: (productId: string, input: TestScenarioInput) =>
     request<TestScenario>(`/api/products/${productId}/test-scenarios`, { method: "POST", body: JSON.stringify(input) }),

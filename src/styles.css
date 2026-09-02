@@ -1695,7 +1695,7 @@ button:disabled {
   padding-top: 16px;
 }
 
-.order-environment-config {
+.order-physical-environment-config {
   display: flex;
   flex-direction: column;
   gap: 12px;

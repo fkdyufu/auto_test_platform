@@ -15,9 +15,9 @@ import {
   type ControlInterfaceType,
   type DeviceResource,
   type DeviceResourceInput,
-  type EnvironmentConnection,
-  type LabEnvironment,
-  type LabEnvironmentInput,
+  type PhysicalConnection,
+  type PhysicalEnvironment,
+  type PhysicalEnvironmentInput,
   type ProductSummary,
   type ScenarioParameter,
   type ScenarioRole,
@@ -26,11 +26,11 @@ import {
 } from "../api";
 import { InlineNotice, Modal, PageHeader, type Notice } from "../components/ui";
 
-type ResourceTab = "devices" | "environments" | "scenarios";
+type ResourceTab = "devices" | "physicalEnvironments" | "scenarios";
 
 type ResourceDialog =
   | { kind: "device"; id?: string; form: DeviceResourceInput }
-  | { kind: "environment"; id?: string; form: LabEnvironmentInput }
+  | { kind: "physicalEnvironment"; id?: string; form: PhysicalEnvironmentInput }
   | { kind: "scenario"; id?: string; form: TestScenarioInput };
 
 const INTERFACE_LABELS: Record<ControlInterfaceType, string> = {
@@ -44,7 +44,7 @@ const INTERFACE_LABELS: Record<ControlInterfaceType, string> = {
 
 const TAB_META: Record<ResourceTab, { label: string; action: string }> = {
   devices: { label: "设备资源", action: "新增设备" },
-  environments: { label: "实验环境", action: "新增环境" },
+  physicalEnvironments: { label: "物理环境", action: "新增物理环境" },
   scenarios: { label: "测试场景", action: "新增场景" },
 };
 
@@ -60,7 +60,7 @@ function emptyDevice(): DeviceResourceInput {
   };
 }
 
-function emptyEnvironment(): LabEnvironmentInput {
+function emptyPhysicalEnvironment(): PhysicalEnvironmentInput {
   return { name: "", description: "", deviceIds: [], connections: [] };
 }
 
@@ -80,7 +80,7 @@ function emptyScenario(): TestScenarioInput {
 export function ResourcesPage({ product }: { product: ProductSummary }) {
   const [tab, setTab] = useState<ResourceTab>("devices");
   const [devices, setDevices] = useState<DeviceResource[]>([]);
-  const [environments, setEnvironments] = useState<LabEnvironment[]>([]);
+  const [physicalEnvironments, setPhysicalEnvironments] = useState<PhysicalEnvironment[]>([]);
   const [scenarios, setScenarios] = useState<TestScenario[]>([]);
   const [dialog, setDialog] = useState<ResourceDialog | null>(null);
   const [dialogError, setDialogError] = useState("");
@@ -88,13 +88,13 @@ export function ResourcesPage({ product }: { product: ProductSummary }) {
   const [submitting, setSubmitting] = useState(false);
 
   const reload = async () => {
-    const [nextDevices, nextEnvironments, nextScenarios] = await Promise.all([
+    const [nextDevices, nextPhysicalEnvironments, nextScenarios] = await Promise.all([
       api.getDeviceResources(product.id),
-      api.getLabEnvironments(product.id),
+      api.getPhysicalEnvironments(product.id),
       api.getTestScenarios(product.id),
     ]);
     setDevices(nextDevices);
-    setEnvironments(nextEnvironments);
+    setPhysicalEnvironments(nextPhysicalEnvironments);
     setScenarios(nextScenarios);
   };
 
@@ -109,7 +109,9 @@ export function ResourcesPage({ product }: { product: ProductSummary }) {
   const openCreate = () => {
     setDialogError("");
     if (tab === "devices") setDialog({ kind: "device", form: emptyDevice() });
-    else if (tab === "environments") setDialog({ kind: "environment", form: emptyEnvironment() });
+    else if (tab === "physicalEnvironments") {
+      setDialog({ kind: "physicalEnvironment", form: emptyPhysicalEnvironment() });
+    }
     else setDialog({ kind: "scenario", form: emptyScenario() });
   };
 
@@ -122,9 +124,9 @@ export function ResourcesPage({ product }: { product: ProductSummary }) {
       if (dialog.kind === "device") {
         if (dialog.id) await api.updateDeviceResource(product.id, dialog.id, dialog.form);
         else await api.createDeviceResource(product.id, dialog.form);
-      } else if (dialog.kind === "environment") {
-        if (dialog.id) await api.updateLabEnvironment(product.id, dialog.id, dialog.form);
-        else await api.createLabEnvironment(product.id, dialog.form);
+      } else if (dialog.kind === "physicalEnvironment") {
+        if (dialog.id) await api.updatePhysicalEnvironment(product.id, dialog.id, dialog.form);
+        else await api.createPhysicalEnvironment(product.id, dialog.form);
       } else if (dialog.id) await api.updateTestScenario(product.id, dialog.id, dialog.form);
       else await api.createTestScenario(product.id, dialog.form);
       await reload();
@@ -141,7 +143,7 @@ export function ResourcesPage({ product }: { product: ProductSummary }) {
     if (!window.confirm(`确定删除“${name}”吗？`)) return;
     try {
       if (kind === "device") await api.deleteDeviceResource(product.id, id);
-      else if (kind === "environment") await api.deleteLabEnvironment(product.id, id);
+      else if (kind === "physicalEnvironment") await api.deletePhysicalEnvironment(product.id, id);
       else await api.deleteTestScenario(product.id, id);
       await reload();
       setNotice({ kind: "success", message: "配置已删除" });
@@ -171,8 +173,8 @@ export function ResourcesPage({ product }: { product: ProductSummary }) {
         <button className={tab === "devices" ? "active" : ""} onClick={() => setTab("devices")}>
           <Server size={16} />设备资源<span>{devices.length}</span>
         </button>
-        <button className={tab === "environments" ? "active" : ""} onClick={() => setTab("environments")}>
-          <Cable size={16} />实验环境<span>{environments.length}</span>
+        <button className={tab === "physicalEnvironments" ? "active" : ""} onClick={() => setTab("physicalEnvironments")}>
+          <Cable size={16} />物理环境<span>{physicalEnvironments.length}</span>
         </button>
         <button className={tab === "scenarios" ? "active" : ""} onClick={() => setTab("scenarios")}>
           <Workflow size={16} />测试场景<span>{scenarios.length}</span>
@@ -201,24 +203,24 @@ export function ResourcesPage({ product }: { product: ProductSummary }) {
               </tbody>
             </table>
           </div>
-        ) : tab === "environments" ? (
+        ) : tab === "physicalEnvironments" ? (
           <div className="table-wrap">
             <table className="data-table">
-              <thead><tr><th>环境名称</th><th>设备</th><th>连接关系</th><th>环境说明</th><th aria-label="操作" /></tr></thead>
+              <thead><tr><th>物理环境名称</th><th>设备</th><th>连接关系</th><th>物理环境说明</th><th aria-label="操作" /></tr></thead>
               <tbody>
-                {environments.map((environment) => (
-                  <tr key={environment.id}>
-                    <td className="name-cell"><strong>{environment.name}</strong></td>
-                    <td>{environment.deviceIds.length}<span className="cell-subtext">{environment.deviceIds.slice(0, 3).map(deviceName).join("、")}</span></td>
-                    <td>{environment.connections.length}</td>
-                    <td className="truncate-cell">{environment.description || "-"}</td>
+                {physicalEnvironments.map((physicalEnvironment) => (
+                  <tr key={physicalEnvironment.id}>
+                    <td className="name-cell"><strong>{physicalEnvironment.name}</strong></td>
+                    <td>{physicalEnvironment.deviceIds.length}<span className="cell-subtext">{physicalEnvironment.deviceIds.slice(0, 3).map(deviceName).join("、")}</span></td>
+                    <td>{physicalEnvironment.connections.length}</td>
+                    <td className="truncate-cell">{physicalEnvironment.description || "-"}</td>
                     <td><div className="row-actions">
-                      <button className="icon-action" title="编辑环境" onClick={() => setDialog({ kind: "environment", id: environment.id, form: { ...environment, deviceIds: [...environment.deviceIds], connections: structuredClone(environment.connections) } })}><Pencil size={16} /></button>
-                      <button className="icon-action danger" title="删除环境" onClick={() => void remove("environment", environment.id, environment.name)}><Trash2 size={16} /></button>
+                      <button className="icon-action" title="编辑物理环境" onClick={() => setDialog({ kind: "physicalEnvironment", id: physicalEnvironment.id, form: { ...physicalEnvironment, deviceIds: [...physicalEnvironment.deviceIds], connections: structuredClone(physicalEnvironment.connections) } })}><Pencil size={16} /></button>
+                      <button className="icon-action danger" title="删除物理环境" onClick={() => void remove("physicalEnvironment", physicalEnvironment.id, physicalEnvironment.name)}><Trash2 size={16} /></button>
                     </div></td>
                   </tr>
                 ))}
-                {!environments.length && <tr><td colSpan={5} className="table-empty"><Layers3 size={24} />暂无实验环境</td></tr>}
+                {!physicalEnvironments.length && <tr><td colSpan={5} className="table-empty"><Layers3 size={24} />暂无物理环境</td></tr>}
               </tbody>
             </table>
           </div>
@@ -249,14 +251,14 @@ export function ResourcesPage({ product }: { product: ProductSummary }) {
 
       {dialog && (
         <Modal
-          title={`${dialog.id ? "编辑" : "新增"}${dialog.kind === "device" ? "设备资源" : dialog.kind === "environment" ? "实验环境" : "测试场景"}`}
+          title={`${dialog.id ? "编辑" : "新增"}${dialog.kind === "device" ? "设备资源" : dialog.kind === "physicalEnvironment" ? "物理环境" : "测试场景"}`}
           onClose={() => setDialog(null)}
           onSubmit={save}
           submitting={submitting}
         >
           {dialogError && <div className="form-error">{dialogError}</div>}
-          {dialog.kind === "device" ? <DeviceForm dialog={dialog} setDialog={setDialog} /> : dialog.kind === "environment" ? (
-            <EnvironmentForm dialog={dialog} setDialog={setDialog} devices={devices} />
+          {dialog.kind === "device" ? <DeviceForm dialog={dialog} setDialog={setDialog} /> : dialog.kind === "physicalEnvironment" ? (
+            <PhysicalEnvironmentForm dialog={dialog} setDialog={setDialog} devices={devices} />
           ) : <ScenarioForm dialog={dialog} setDialog={setDialog} />}
         </Modal>
       )}
@@ -290,20 +292,20 @@ function DeviceForm({ dialog, setDialog }: { dialog: Extract<ResourceDialog, { k
   </>;
 }
 
-function EnvironmentForm({ dialog, setDialog, devices }: { dialog: Extract<ResourceDialog, { kind: "environment" }>; setDialog: (value: ResourceDialog) => void; devices: DeviceResource[] }) {
-  const update = (value: Partial<LabEnvironmentInput>) => setDialog({ ...dialog, form: { ...dialog.form, ...value } });
+function PhysicalEnvironmentForm({ dialog, setDialog, devices }: { dialog: Extract<ResourceDialog, { kind: "physicalEnvironment" }>; setDialog: (value: ResourceDialog) => void; devices: DeviceResource[] }) {
+  const update = (value: Partial<PhysicalEnvironmentInput>) => setDialog({ ...dialog, form: { ...dialog.form, ...value } });
   const toggleDevice = (deviceId: string) => {
     const selected = dialog.form.deviceIds.includes(deviceId);
     const deviceIds = selected ? dialog.form.deviceIds.filter((id) => id !== deviceId) : [...dialog.form.deviceIds, deviceId];
     update({ deviceIds, connections: dialog.form.connections.filter((item) => deviceIds.includes(item.sourceDeviceId) && deviceIds.includes(item.targetDeviceId)) });
   };
-  const updateConnection = (id: string, value: Partial<EnvironmentConnection>) =>
+  const updateConnection = (id: string, value: Partial<PhysicalConnection>) =>
     update({ connections: dialog.form.connections.map((item) => item.id === id ? { ...item, ...value } : item) });
   const selectedDevices = devices.filter((item) => dialog.form.deviceIds.includes(item.id));
   return <>
     <div className="modal-grid">
-      <label className="field"><span>环境名称</span><input autoFocus value={dialog.form.name} onChange={(event) => update({ name: event.target.value })} /></label>
-      <label className="field full-width"><span>环境说明</span><textarea rows={3} value={dialog.form.description} onChange={(event) => update({ description: event.target.value })} /></label>
+      <label className="field"><span>物理环境名称</span><input autoFocus value={dialog.form.name} onChange={(event) => update({ name: event.target.value })} /></label>
+      <label className="field full-width"><span>物理环境说明</span><textarea rows={3} value={dialog.form.description} onChange={(event) => update({ description: event.target.value })} /></label>
     </div>
     <div className="form-list-heading"><div><Server size={16} /><strong>环境设备</strong></div><small>已选择 {dialog.form.deviceIds.length} 台</small></div>
     <div className="case-picker resource-picker">
@@ -356,9 +358,9 @@ function ScenarioForm({ dialog, setDialog }: { dialog: Extract<ResourceDialog, {
       {!dialog.form.parameters.length && <div className="structured-empty">暂无场景参数</div>}
     </div>
     <div className="modal-grid instruction-grid">
-      <label className="field full-width"><span>环境搭建要求</span><textarea rows={4} value={dialog.form.setupInstructions} onChange={(event) => update({ setupInstructions: event.target.value })} /></label>
-      <label className="field full-width"><span>环境验证要求</span><textarea rows={3} value={dialog.form.verificationInstructions} onChange={(event) => update({ verificationInstructions: event.target.value })} /></label>
-      <label className="field full-width"><span>环境清理要求</span><textarea rows={3} value={dialog.form.cleanupInstructions} onChange={(event) => update({ cleanupInstructions: event.target.value })} /></label>
+      <label className="field full-width"><span>场景搭建要求</span><textarea rows={4} value={dialog.form.setupInstructions} onChange={(event) => update({ setupInstructions: event.target.value })} /></label>
+      <label className="field full-width"><span>场景验证要求</span><textarea rows={3} value={dialog.form.verificationInstructions} onChange={(event) => update({ verificationInstructions: event.target.value })} /></label>
+      <label className="field full-width"><span>场景清理要求</span><textarea rows={3} value={dialog.form.cleanupInstructions} onChange={(event) => update({ cleanupInstructions: event.target.value })} /></label>
     </div>
   </>;
 }

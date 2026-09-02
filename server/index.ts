@@ -122,9 +122,9 @@ async function createRunRecord(
   return run;
 }
 
-function buildEnvironmentDescription(context: TestOrderExecutionContext): string {
-  const { environment, devices } = context;
-  if (!environment) return "";
+function buildPhysicalEnvironmentDescription(context: TestOrderExecutionContext): string {
+  const { physicalEnvironment, devices } = context;
+  if (!physicalEnvironment) return "";
   const deviceById = new Map(devices.map((device) => [device.id, device]));
   const deviceLines = devices.map((device) => {
     const controls = device.controlInterfaces.length
@@ -141,16 +141,16 @@ function buildEnvironmentDescription(context: TestOrderExecutionContext): string
       : "未配置控制接口";
     return `- ${device.name}（ID: ${device.id}，类型: ${device.type}${device.model ? `，型号: ${device.model}` : ""}）\n  控制接口: ${controls}`;
   });
-  const connectionLines = environment.connections.map((connection) => {
+  const connectionLines = physicalEnvironment.connections.map((connection) => {
     const source = deviceById.get(connection.sourceDeviceId)?.name || connection.sourceDeviceId;
     const target = deviceById.get(connection.targetDeviceId)?.name || connection.targetDeviceId;
     return `- ${source}.${connection.sourcePort} <-> ${target}.${connection.targetPort}${connection.description ? `（${connection.description}）` : ""}`;
   });
-  return `\n\n测试环境上下文：\n实验环境：${environment.name}\n${environment.description || "无补充说明"}\n\n环境设备：\n${deviceLines.join("\n")}\n\n物理连接：\n${connectionLines.join("\n") || "未配置连接关系"}\n\n请根据用例步骤使用可用的设备控制接口；未提供相应工具时，不得声称已经完成操作。`;
+  return `\n\n物理环境上下文：\n物理环境：${physicalEnvironment.name}\n${physicalEnvironment.description || "无补充说明"}\n\n环境设备：\n${deviceLines.join("\n")}\n\n物理连接：\n${connectionLines.join("\n") || "未配置连接关系"}\n\n请根据用例步骤使用可用的设备控制接口；未提供相应工具时，不得声称已经完成操作。`;
 }
 
 function buildCaseRequirement(caseRun: CaseRun, context: TestOrderExecutionContext): string {
-  return `执行产品测试用例。${buildEnvironmentDescription(context)}\n\n用例名称：${caseRun.caseNameSnapshot}\n\n测试步骤：\n${caseRun.stepsSnapshot}\n\n预期结果：\n${caseRun.expectedResultSnapshot}\n\n请直接使用当前提供的工具执行，并根据实际观察调用 finish_test 提交结论。`;
+  return `执行产品测试用例。${buildPhysicalEnvironmentDescription(context)}\n\n用例名称：${caseRun.caseNameSnapshot}\n\n测试步骤：\n${caseRun.stepsSnapshot}\n\n预期结果：\n${caseRun.expectedResultSnapshot}\n\n请直接使用当前提供的工具执行，并根据实际观察调用 finish_test 提交结论。`;
 }
 
 async function updateStoredCaseRun(runId: string, caseRunId: string, update: Partial<CaseRun>): Promise<void> {

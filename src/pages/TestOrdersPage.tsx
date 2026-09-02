@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import {
   api,
-  type LabEnvironment,
+  type PhysicalEnvironment,
   type ProductSummary,
   type RunEvent,
   type RunResponse,
@@ -39,7 +39,7 @@ const STATUS_LABELS: Record<RunStatus, string> = {
 const EMPTY_ORDER: TestOrderInput = {
   name: "",
   description: "",
-  environmentId: "",
+  physicalEnvironmentId: "",
   caseIds: [],
 };
 
@@ -63,7 +63,7 @@ function StatusBadge({ run }: { run?: TestRun }) {
 
 export function TestOrdersPage({ product }: { product: ProductSummary }) {
   const [orders, setOrders] = useState<TestOrderSummary[]>([]);
-  const [environments, setEnvironments] = useState<LabEnvironment[]>([]);
+  const [physicalEnvironments, setPhysicalEnvironments] = useState<PhysicalEnvironment[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [detail, setDetail] = useState<TestOrderDetail | null>(null);
   const [dialog, setDialog] = useState<{ id?: string; form: TestOrderInput } | null>(null);
@@ -91,11 +91,11 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
     setActiveRun(null);
     void Promise.all([
       api.getTestOrders(product.id),
-      api.getLabEnvironments(product.id),
+      api.getPhysicalEnvironments(product.id),
     ])
-      .then(([nextOrders, nextEnvironments]) => {
+      .then(([nextOrders, nextPhysicalEnvironments]) => {
         setOrders(nextOrders);
-        setEnvironments(nextEnvironments);
+        setPhysicalEnvironments(nextPhysicalEnvironments);
       })
       .catch((error) => setNotice({ kind: "error", message: error instanceof Error ? error.message : "读取测试单失败" }));
     return () => eventSourceRef.current?.close();
@@ -121,7 +121,7 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
           ? {
               name: order.name,
               description: order.description,
-              environmentId: order.environmentId,
+              physicalEnvironmentId: order.physicalEnvironmentId,
               caseIds: [...order.caseIds],
             }
           : { ...EMPTY_ORDER },
@@ -143,11 +143,11 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
     });
   };
 
-  const selectEnvironment = (environmentId: string) => {
+  const selectPhysicalEnvironment = (physicalEnvironmentId: string) => {
     if (!dialog) return;
     setDialog({
       ...dialog,
-      form: { ...dialog.form, environmentId },
+      form: { ...dialog.form, physicalEnvironmentId },
     });
   };
 
@@ -256,7 +256,7 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
               <thead>
                 <tr>
                   <th>测试单</th>
-                  <th>实验环境</th>
+                  <th>物理环境</th>
                   <th>用例</th>
                   <th>最近执行</th>
                   <th>更新时间</th>
@@ -269,7 +269,7 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
                     <td className="name-cell">
                       <button className="link-button" onClick={() => setSelectedId(order.id)}>{order.name}</button>
                     </td>
-                    <td>{order.environmentName || "未配置"}</td>
+                    <td>{order.physicalEnvironmentName || "未配置"}</td>
                     <td>{order.caseCount}</td>
                     <td><StatusBadge run={order.latestRun} /></td>
                     <td>{formatDateTime(order.updatedAt)}</td>
@@ -334,7 +334,7 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
           </section>
 
           <dl className="order-meta">
-            <div><dt>实验环境</dt><dd>{detail.environmentName || "未配置"}</dd></div>
+            <div><dt>物理环境</dt><dd>{detail.physicalEnvironmentName || "未配置"}</dd></div>
             <div><dt>用例数量</dt><dd>{detail.caseCount}</dd></div>
             <div><dt>最近执行</dt><dd><StatusBadge run={detail.runs[0]} /></dd></div>
             <div><dt>更新时间</dt><dd>{formatDateTime(detail.updatedAt)}</dd></div>
@@ -441,14 +441,16 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
               />
             </label>
           </div>
-          <div className="order-environment-config">
-            <div className="form-list-heading"><div><Network size={16} /><strong>测试环境</strong></div><small>可选</small></div>
+          <div className="order-physical-environment-config">
+            <div className="form-list-heading"><div><Network size={16} /><strong>物理环境</strong></div><small>可选</small></div>
             <div className="modal-grid">
               <label className="field full-width">
-                <span>实验环境</span>
-                <select value={dialog.form.environmentId} onChange={(event) => selectEnvironment(event.target.value)}>
-                  <option value="">不使用实验环境</option>
-                  {environments.map((environment) => <option key={environment.id} value={environment.id}>{environment.name}</option>)}
+                <span>物理环境</span>
+                <select value={dialog.form.physicalEnvironmentId} onChange={(event) => selectPhysicalEnvironment(event.target.value)}>
+                  <option value="">不使用物理环境</option>
+                  {physicalEnvironments.map((physicalEnvironment) => (
+                    <option key={physicalEnvironment.id} value={physicalEnvironment.id}>{physicalEnvironment.name}</option>
+                  ))}
                 </select>
               </label>
             </div>
