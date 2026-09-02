@@ -74,6 +74,79 @@ export interface TestCase {
   updatedAt: string;
 }
 
+export type ControlInterfaceType = "web" | "ssh" | "telnet" | "serial" | "api" | "other";
+
+export interface ControlInterface {
+  id: string;
+  name: string;
+  type: ControlInterfaceType;
+  address: string;
+  username: string;
+  hasPassword: boolean;
+}
+
+export interface ControlInterfaceInput extends Omit<ControlInterface, "hasPassword"> {
+  password: string;
+}
+
+export interface DeviceResource {
+  id: string;
+  name: string;
+  type: string;
+  model: string;
+  description: string;
+  controlInterfaces: ControlInterface[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface EnvironmentConnection {
+  id: string;
+  sourceDeviceId: string;
+  sourcePort: string;
+  targetDeviceId: string;
+  targetPort: string;
+  description: string;
+}
+
+export interface LabEnvironment {
+  id: string;
+  name: string;
+  description: string;
+  deviceIds: string[];
+  connections: EnvironmentConnection[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ScenarioRole {
+  id: string;
+  key: string;
+  name: string;
+  deviceType: string;
+}
+
+export interface ScenarioParameter {
+  id: string;
+  key: string;
+  name: string;
+  defaultValue: string;
+}
+
+export interface TestScenario {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  roles: ScenarioRole[];
+  parameters: ScenarioParameter[];
+  setupInstructions: string;
+  verificationInstructions: string;
+  cleanupInstructions: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface CaseRun {
   id: string;
   testCaseId: string;
@@ -107,6 +180,11 @@ export interface TestOrderSummary {
   description: string;
   targetUrl: string;
   username: string;
+  environmentId: string;
+  environmentName: string;
+  scenarioId: string;
+  scenarioName: string;
+  roleBindings: Record<string, string>;
   caseIds: string[];
   caseCount: number;
   hasPassword: boolean;
@@ -118,6 +196,9 @@ export interface TestOrderSummary {
 export interface TestOrderDetail extends TestOrderSummary {
   cases: TestCase[];
   runs: TestRun[];
+  environment?: LabEnvironment;
+  scenario?: TestScenario;
+  boundDevices: DeviceResource[];
 }
 
 export interface ProductInput {
@@ -139,8 +220,21 @@ export interface TestOrderInput {
   targetUrl: string;
   username: string;
   password: string;
+  environmentId: string;
+  scenarioId: string;
+  roleBindings: Record<string, string>;
   caseIds: string[];
 }
+
+export interface DeviceResourceInput {
+  name: string;
+  type: string;
+  model: string;
+  description: string;
+  controlInterfaces: ControlInterfaceInput[];
+}
+export type LabEnvironmentInput = Omit<LabEnvironment, "id" | "createdAt" | "updatedAt">;
+export type TestScenarioInput = Omit<TestScenario, "id" | "createdAt" | "updatedAt">;
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
@@ -177,6 +271,24 @@ export const api = {
   updateTestCase: (id: string, input: TestCaseInput) =>
     request<TestCase>(`/api/test-cases/${id}`, { method: "PUT", body: JSON.stringify(input) }),
   deleteTestCase: (id: string) => request<void>(`/api/test-cases/${id}`, { method: "DELETE" }),
+  getDeviceResources: () => request<DeviceResource[]>("/api/device-resources"),
+  createDeviceResource: (input: DeviceResourceInput) =>
+    request<DeviceResource>("/api/device-resources", { method: "POST", body: JSON.stringify(input) }),
+  updateDeviceResource: (id: string, input: DeviceResourceInput) =>
+    request<DeviceResource>(`/api/device-resources/${id}`, { method: "PUT", body: JSON.stringify(input) }),
+  deleteDeviceResource: (id: string) => request<void>(`/api/device-resources/${id}`, { method: "DELETE" }),
+  getLabEnvironments: () => request<LabEnvironment[]>("/api/lab-environments"),
+  createLabEnvironment: (input: LabEnvironmentInput) =>
+    request<LabEnvironment>("/api/lab-environments", { method: "POST", body: JSON.stringify(input) }),
+  updateLabEnvironment: (id: string, input: LabEnvironmentInput) =>
+    request<LabEnvironment>(`/api/lab-environments/${id}`, { method: "PUT", body: JSON.stringify(input) }),
+  deleteLabEnvironment: (id: string) => request<void>(`/api/lab-environments/${id}`, { method: "DELETE" }),
+  getTestScenarios: () => request<TestScenario[]>("/api/test-scenarios"),
+  createTestScenario: (input: TestScenarioInput) =>
+    request<TestScenario>("/api/test-scenarios", { method: "POST", body: JSON.stringify(input) }),
+  updateTestScenario: (id: string, input: TestScenarioInput) =>
+    request<TestScenario>(`/api/test-scenarios/${id}`, { method: "PUT", body: JSON.stringify(input) }),
+  deleteTestScenario: (id: string) => request<void>(`/api/test-scenarios/${id}`, { method: "DELETE" }),
   getTestOrders: () => request<TestOrderSummary[]>("/api/test-orders"),
   getTestOrder: (id: string) => request<TestOrderDetail>(`/api/test-orders/${id}`),
   createTestOrder: (input: TestOrderInput) =>

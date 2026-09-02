@@ -11,6 +11,7 @@ import {
   KeyRound,
   LoaderCircle,
   ClipboardList,
+  Network,
   Package,
   Play,
   Save,
@@ -23,9 +24,10 @@ import { api, type ModelSettings, type RunEvent, type RunStatus } from "./api";
 import { RunMonitor } from "./components/RunMonitor";
 import { InlineNotice, PageHeader, type Notice } from "./components/ui";
 import { ProductsPage } from "./pages/ProductsPage";
+import { ResourcesPage } from "./pages/ResourcesPage";
 import { TestOrdersPage } from "./pages/TestOrdersPage";
 
-type PageName = "products" | "orders" | "run" | "settings";
+type PageName = "products" | "resources" | "orders" | "run" | "settings";
 
 interface ProviderPreset {
   id: string;
@@ -90,7 +92,7 @@ const STATUS_LABELS: Record<RunStatus, string> = {
 
 function readPage(): PageName {
   const page = window.location.hash.replace(/^#/, "");
-  return page === "orders" || page === "run" || page === "settings" ? page : "products";
+  return page === "resources" || page === "orders" || page === "run" || page === "settings" ? page : "products";
 }
 
 function App() {
@@ -138,6 +140,11 @@ function App() {
             <span>产品管理</span>
             {page === "products" && <ChevronRight className="nav-chevron" size={16} />}
           </button>
+          <button className={`nav-item ${page === "resources" ? "active" : ""}`} onClick={() => navigate("resources")} title="资源与环境">
+            <Network size={18} />
+            <span>资源与环境</span>
+            {page === "resources" && <ChevronRight className="nav-chevron" size={16} />}
+          </button>
           <button className={`nav-item ${page === "orders" ? "active" : ""}`} onClick={() => navigate("orders")} title="测试单">
             <ClipboardList size={18} />
             <span>测试单</span>
@@ -167,6 +174,8 @@ function App() {
       <main className="main-content">
         {page === "products" ? (
           <ProductsPage />
+        ) : page === "resources" ? (
+          <ResourcesPage />
         ) : page === "orders" ? (
           <TestOrdersPage />
         ) : page === "run" ? (
