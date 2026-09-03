@@ -16,7 +16,6 @@ export interface ModelSettings {
 
 export interface ZentaoSettings {
   baseUrl: string;
-  apiBasePath: string;
   account: string;
   password?: string;
   hasPassword: boolean;
@@ -81,6 +80,9 @@ export interface TestCase {
   id: string;
   productId: string;
   scenarioId: string;
+  source: "local" | "zentao";
+  zentaoCaseId?: number;
+  lastImportedAt?: string;
   name: string;
   steps: string;
   expectedResult: string;
@@ -243,6 +245,27 @@ export interface TestCaseInput {
   expectedResult: string;
 }
 
+export interface ZentaoCaseSummary {
+  id: number;
+  title: string;
+  status: string;
+  moduleId?: number;
+}
+
+export interface ZentaoTestTaskSummary {
+  id: number;
+  name: string;
+  status: string;
+  begin: string;
+  end: string;
+}
+
+export interface ZentaoCaseImportResult {
+  created: number;
+  updated: number;
+  skipped: number;
+}
+
 export interface TestOrderInput {
   name: string;
   description: string;
@@ -284,9 +307,14 @@ export const api = {
     }),
   testSettings: () => request<{ ok: true; message: string }>("/api/settings/test", { method: "POST" }),
   getZentaoSettings: () => request<ZentaoSettings>("/api/settings/zentao"),
-  saveZentaoSettings: (settings: Pick<ZentaoSettings, "baseUrl" | "apiBasePath" | "account" | "password">) =>
+  saveZentaoSettings: (settings: Pick<ZentaoSettings, "baseUrl" | "account" | "password">) =>
     request<ZentaoSettings>("/api/settings/zentao", {
       method: "PUT",
+      body: JSON.stringify(settings),
+    }),
+  testZentaoConnection: (settings: Pick<ZentaoSettings, "baseUrl" | "account" | "password">) =>
+    request<{ ok: true; message: string }>("/api/settings/zentao/test", {
+      method: "POST",
       body: JSON.stringify(settings),
     }),
   getProducts: () => request<ProductSummary[]>("/api/products"),
@@ -302,6 +330,17 @@ export const api = {
     request<TestCase>(`/api/products/${productId}/test-cases/${id}`, { method: "PUT", body: JSON.stringify(input) }),
   deleteTestCase: (productId: string, id: string) =>
     request<void>(`/api/products/${productId}/test-cases/${id}`, { method: "DELETE" }),
+  getZentaoTestTasks: (productId: string) =>
+    request<ZentaoTestTaskSummary[]>(`/api/products/${productId}/zentao/test-tasks`),
+  getZentaoTestCases: (productId: string, testTaskId?: number) => {
+    const query = testTaskId ? `?source=testTask&testTaskId=${testTaskId}` : "";
+    return request<ZentaoCaseSummary[]>(`/api/products/${productId}/zentao/test-cases${query}`);
+  },
+  importZentaoTestCases: (productId: string, caseIds: number[], overwrite: boolean) =>
+    request<ZentaoCaseImportResult>(`/api/products/${productId}/zentao/import-cases`, {
+      method: "POST",
+      body: JSON.stringify({ caseIds, overwrite }),
+    }),
   getDeviceResources: (productId: string) => request<DeviceResource[]>(`/api/products/${productId}/device-resources`),
   createDeviceResource: (productId: string, input: DeviceResourceInput) =>
     request<DeviceResource>(`/api/products/${productId}/device-resources`, { method: "POST", body: JSON.stringify(input) }),

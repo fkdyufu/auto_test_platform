@@ -20,7 +20,6 @@ test("returns default Zentao settings when no configuration exists", async (t) =
 
   assert.deepEqual(await readZentaoSettings(filePath), {
     baseUrl: "",
-    apiBasePath: "/api.php/v1",
     account: "",
     password: "",
   });
@@ -30,21 +29,18 @@ test("saves Zentao settings and never exposes the password publicly", async (t) 
   const filePath = await createSettingsPath(t);
   const saved = await saveZentaoSettings({
     baseUrl: "https://zentao.example.com/",
-    apiBasePath: "/api.php/v1/",
     account: " tester ",
     password: "secret-value",
   }, filePath);
 
   assert.deepEqual(saved, {
     baseUrl: "https://zentao.example.com",
-    apiBasePath: "/api.php/v1",
     account: "tester",
     password: "secret-value",
   });
   const publicSettings = toPublicZentaoSettings(saved);
   assert.deepEqual(publicSettings, {
     baseUrl: "https://zentao.example.com",
-    apiBasePath: "/api.php/v1",
     account: "tester",
     hasPassword: true,
     configured: true,
@@ -57,14 +53,12 @@ test("keeps the saved Zentao password when an update leaves it blank", async (t)
   const filePath = await createSettingsPath(t);
   await saveZentaoSettings({
     baseUrl: "https://zentao.example.com",
-    apiBasePath: "/api.php/v1",
     account: "tester",
     password: "first-password",
   }, filePath);
 
   const updated = await saveZentaoSettings({
     baseUrl: "https://new-zentao.example.com",
-    apiBasePath: "/api.php/v1",
     account: "tester",
     password: "",
   }, filePath);
@@ -77,15 +71,11 @@ test("validates required Zentao connection fields", async (t) => {
   const filePath = await createSettingsPath(t);
 
   await assert.rejects(
-    saveZentaoSettings({ baseUrl: "ftp://zentao.example.com", apiBasePath: "/api.php/v1", account: "tester", password: "secret" }, filePath),
+    saveZentaoSettings({ baseUrl: "ftp://zentao.example.com", account: "tester", password: "secret" }, filePath),
     /必须使用 http 或 https/,
   );
   await assert.rejects(
-    saveZentaoSettings({ baseUrl: "https://zentao.example.com", apiBasePath: "api.php/v1", account: "tester", password: "secret" }, filePath),
-    /必须以 \/ 开头/,
-  );
-  await assert.rejects(
-    saveZentaoSettings({ baseUrl: "https://zentao.example.com", apiBasePath: "/api.php/v1", account: "", password: "secret" }, filePath),
+    saveZentaoSettings({ baseUrl: "https://zentao.example.com", account: "", password: "secret" }, filePath),
     /禅道账号不能为空/,
   );
 });

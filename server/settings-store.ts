@@ -32,7 +32,6 @@ export interface PublicModelSettings extends Omit<ModelSettings, "apiKey"> {
 
 export interface ZentaoSettings {
   baseUrl: string;
-  apiBasePath: string;
   account: string;
   password: string;
 }
@@ -54,10 +53,11 @@ const DEFAULT_SETTINGS: ModelSettings = {
 
 const DEFAULT_ZENTAO_SETTINGS: ZentaoSettings = {
   baseUrl: "",
-  apiBasePath: "/api.php/v1",
   account: "",
   password: "",
 };
+
+export const ZENTAO_API_BASE_PATH = "/api.php/v1";
 
 const dataDirectory = path.resolve(process.cwd(), ".data");
 const settingsPath = path.join(dataDirectory, "model-settings.json");
@@ -99,23 +99,6 @@ function normalizeUrl(value: unknown, label = "API 地址"): string {
   }
 
   return url.toString().replace(/\/$/, "");
-}
-
-function normalizeApiBasePath(value: unknown): string {
-  if (typeof value !== "string" || !value.trim()) {
-    throw new Error("API 基础路径不能为空");
-  }
-  const apiBasePath = value.trim();
-  if (!apiBasePath.startsWith("/")) {
-    throw new Error("API 基础路径必须以 / 开头");
-  }
-  if (apiBasePath.includes("?") || apiBasePath.includes("#")) {
-    throw new Error("API 基础路径不能包含查询参数或锚点");
-  }
-  if (apiBasePath.length > 500) {
-    throw new Error("API 基础路径不能超过 500 个字符");
-  }
-  return apiBasePath.replace(/\/$/, "") || "/";
 }
 
 function usesLocalEndpoint(baseUrl: string): boolean {
@@ -214,7 +197,6 @@ export async function readZentaoSettings(filePath = zentaoSettingsPath): Promise
     const raw = JSON.parse(await readFile(filePath, "utf8")) as Partial<ZentaoSettings>;
     return {
       baseUrl: typeof raw.baseUrl === "string" ? raw.baseUrl : DEFAULT_ZENTAO_SETTINGS.baseUrl,
-      apiBasePath: typeof raw.apiBasePath === "string" ? raw.apiBasePath : DEFAULT_ZENTAO_SETTINGS.apiBasePath,
       account: typeof raw.account === "string" ? raw.account : DEFAULT_ZENTAO_SETTINGS.account,
       password: typeof raw.password === "string" ? raw.password : DEFAULT_ZENTAO_SETTINGS.password,
     };
@@ -232,8 +214,22 @@ export async function saveZentaoSettings(input: unknown, filePath = zentaoSettin
   }
 
   const current = await readZentaoSettings(filePath);
+  const settings = resolveZentaoSettings(input, current);
+
+  await mkdir(path.dirname(filePath), { recursive: true });
+  const temporaryPath = `${filePath}.tmp`;
+  await writeFile(temporaryPath, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 });
+  await rename(temporaryPath, filePath);
+  return settings;
+}
+
+export function resolveZentaoSettings(input: unknown, current: ZentaoSettings): ZentaoSettings {
+  if (!input || typeof input !== "object") {
+    throw new Error("配置格式不正确");
+  }
   const value = input as Record<string, unknown>;
-  const account = typeof value.account === "string" ? value.account.trim() : "";
+  const baseUrl = typeof value.baseUrl === "string" && value.baseUrl.trim() ? value.baseUrl : current.baseUrl;
+  const account = typeof value.account === "string" && value.account.trim() ? value.account.trim() : current.account;
   const password = typeof value.password === "string" && value.password ? value.password : current.password;
 
   if (!account) {
@@ -246,28 +242,20 @@ export async function saveZentaoSettings(input: unknown, filePath = zentaoSettin
     throw new Error("禅道密码不能为空");
   }
 
-  const settings: ZentaoSettings = {
-    baseUrl: normalizeUrl(value.baseUrl, "禅道地址"),
-    apiBasePath: normalizeApiBasePath(value.apiBasePath),
+  return {
+    baseUrl: normalizeUrl(baseUrl, "禅道地址"),
     account,
     password,
   };
-
-  await mkdir(path.dirname(filePath), { recursive: true });
-  const temporaryPath = `${filePath}.tmp`;
-  await writeFile(temporaryPath, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 });
-  await rename(temporaryPath, filePath);
-  return settings;
 }
 
 export function toPublicZentaoSettings(settings: ZentaoSettings): PublicZentaoSettings {
   const hasPassword = Boolean(settings.password);
   return {
     baseUrl: settings.baseUrl,
-    apiBasePath: settings.apiBasePath,
     account: settings.account,
     hasPassword,
-    configured: Boolean(settings.baseUrl && settings.apiBasePath && settings.account && hasPassword),
+    configured: Boolean(settings.baseUrl && settings.account && hasPassword),
   };
 }
 

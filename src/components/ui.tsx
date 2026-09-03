@@ -44,6 +44,8 @@ export function Modal({
   onSubmit,
   submitting,
   submitLabel = "保存",
+  submitDisabled = false,
+  className = "",
 }: {
   title: string;
   children: ReactNode;
@@ -51,6 +53,8 @@ export function Modal({
   onSubmit: (event: FormEvent) => void;
   submitting: boolean;
   submitLabel?: string;
+  submitDisabled?: boolean;
+  className?: string;
 }) {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -62,7 +66,7 @@ export function Modal({
 
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <form className="modal" role="dialog" aria-modal="true" aria-label={title} onSubmit={onSubmit}>
+      <form className={`modal ${className}`.trim()} role="dialog" aria-modal="true" aria-label={title} onSubmit={onSubmit}>
         <header className="modal-header">
           <h2>{title}</h2>
           <button type="button" className="icon-button static" onClick={onClose} disabled={submitting} title="关闭">
@@ -74,7 +78,7 @@ export function Modal({
           <button type="button" className="button secondary" onClick={onClose} disabled={submitting}>
             取消
           </button>
-          <button type="submit" className="button primary" disabled={submitting}>
+          <button type="submit" className="button primary" disabled={submitting || submitDisabled}>
             {submitting ? "保存中..." : submitLabel}
           </button>
         </footer>

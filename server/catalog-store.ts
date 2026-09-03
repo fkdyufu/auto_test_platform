@@ -19,6 +19,9 @@ export interface TestCase {
   id: string;
   productId: string;
   scenarioId: string;
+  source: "local" | "zentao";
+  zentaoCaseId?: number;
+  lastImportedAt?: string;
   name: string;
   steps: string;
   expectedResult: string;
@@ -170,7 +173,7 @@ export interface TestRun {
 }
 
 interface CatalogData {
-  version: 7;
+  version: 8;
   products: Product[];
   testCases: TestCase[];
   deviceResources: DeviceResource[];
@@ -180,7 +183,10 @@ interface CatalogData {
   testRuns: TestRun[];
 }
 
-type LegacyTestCase = Omit<TestCase, "scenarioId"> & { scenarioId?: string };
+type LegacyTestCase = Omit<TestCase, "scenarioId" | "source"> & {
+  scenarioId?: string;
+  source?: TestCase["source"];
+};
 type LegacyCaseRun = Omit<CaseRun, "scenarioRunId"> & { scenarioRunId?: string };
 type LegacyTestRun = Omit<TestRun, "scenarioRuns" | "caseRuns"> & {
   scenarioRuns?: ScenarioRun[];
@@ -217,6 +223,19 @@ export interface TestOrderExecutionContext {
   physicalEnvironment?: PhysicalEnvironment;
   devices: DeviceResource[];
   scenarios: TestScenario[];
+}
+
+export interface ImportedTestCaseInput {
+  zentaoCaseId: number;
+  name: string;
+  steps: string;
+  expectedResult: string;
+}
+
+export interface TestCaseImportResult {
+  created: number;
+  updated: number;
+  skipped: number;
 }
 
 export class CatalogError extends Error {
@@ -289,7 +308,7 @@ function defaultData(): CatalogData {
     updatedAt: timestamp,
   }));
   return {
-    version: 7,
+    version: 8,
     products,
     testCases: [],
     deviceResources: [],
@@ -326,11 +345,11 @@ export class CatalogStore {
     this.initializePromise ??= this.initialize();
     await this.initializePromise;
     const data = JSON.parse(await readFile(this.filePath, "utf8")) as CatalogData & { version: number };
-    if (![1, 2, 3, 4, 5, 6, 7].includes(data.version) || !Array.isArray(data.products) || !Array.isArray(data.testCases)) {
+    if (![1, 2, 3, 4, 5, 6, 7, 8].includes(data.version) || !Array.isArray(data.products) || !Array.isArray(data.testCases)) {
       throw new CatalogError("业务数据文件格式不正确", 500);
     }
     const legacyData = data as typeof data & { labEnvironments?: PhysicalEnvironment[] };
-    data.version = 7;
+    data.version = 8;
     data.deviceResources ??= [];
     data.physicalEnvironments ??= legacyData.labEnvironments ?? [];
     delete legacyData.labEnvironments;
@@ -390,6 +409,9 @@ export class CatalogStore {
         id: testCase.id,
         productId: testCase.productId,
         scenarioId: scenario?.productId === testCase.productId ? scenario.id : defaultScenarioId(testCase.productId),
+        source: testCase.source === "zentao" && Number.isInteger(testCase.zentaoCaseId) ? "zentao" : "local",
+        zentaoCaseId: Number.isInteger(testCase.zentaoCaseId) ? testCase.zentaoCaseId : undefined,
+        lastImportedAt: typeof testCase.lastImportedAt === "string" ? testCase.lastImportedAt : undefined,
         name: testCase.name,
         steps: testCase.steps,
         expectedResult: testCase.expectedResult,
@@ -604,6 +626,7 @@ export class CatalogStore {
         id: randomUUID(),
         productId,
         scenarioId: this.validateTestCaseScenario(data, productId, input.scenarioId),
+        source: "local",
         name: requiredText(input.name, "用例名称", 200),
         steps: requiredText(input.steps, "测试步骤", 20_000),
         expectedResult: requiredText(input.expectedResult, "预期结果", 10_000),
@@ -625,6 +648,70 @@ export class CatalogStore {
       testCase.expectedResult = requiredText(input.expectedResult, "预期结果", 10_000);
       testCase.updatedAt = new Date().toISOString();
       return clone(testCase);
+    });
+  }
+
+  async importZentaoTestCases(
+    productId: string,
+    importedCases: ImportedTestCaseInput[],
+    overwriteExisting = false,
+  ): Promise<TestCaseImportResult> {
+    if (!Array.isArray(importedCases) || !importedCases.length) throw new CatalogError("请选择要导入的禅道用例");
+    if (importedCases.length > 500) throw new CatalogError("单次最多导入 500 个禅道用例");
+    return this.mutate((data) => {
+      const product = data.products.find((item) => item.id === productId && !item.archivedAt);
+      if (!product) throw new CatalogError("产品不存在", 404);
+      const timestamp = new Date().toISOString();
+      const uniqueCases = new Map<number, ImportedTestCaseInput>();
+      importedCases.forEach((item) => {
+        if (!Number.isInteger(item.zentaoCaseId) || item.zentaoCaseId <= 0) {
+          throw new CatalogError("禅道用例 ID 不正确");
+        }
+        uniqueCases.set(item.zentaoCaseId, item);
+      });
+
+      const result: TestCaseImportResult = { created: 0, updated: 0, skipped: 0 };
+      for (const item of uniqueCases.values()) {
+        const existing = data.testCases.find(
+          (testCase) => testCase.productId === productId
+            && testCase.zentaoCaseId === item.zentaoCaseId
+            && !testCase.archivedAt,
+        );
+        if (existing && !overwriteExisting) {
+          result.skipped += 1;
+          continue;
+        }
+
+        const name = requiredText(item.name, "用例名称", 200);
+        const steps = requiredText(item.steps, "测试步骤", 20_000);
+        const expectedResult = requiredText(item.expectedResult, "预期结果", 10_000);
+        if (existing) {
+          existing.source = "zentao";
+          existing.name = name;
+          existing.steps = steps;
+          existing.expectedResult = expectedResult;
+          existing.lastImportedAt = timestamp;
+          existing.updatedAt = timestamp;
+          result.updated += 1;
+          continue;
+        }
+
+        data.testCases.push({
+          id: randomUUID(),
+          productId,
+          scenarioId: defaultScenarioId(productId),
+          source: "zentao",
+          zentaoCaseId: item.zentaoCaseId,
+          lastImportedAt: timestamp,
+          name,
+          steps,
+          expectedResult,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        });
+        result.created += 1;
+      }
+      return result;
     });
   }
 

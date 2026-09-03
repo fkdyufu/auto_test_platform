@@ -10,6 +10,7 @@ import {
   Globe2,
   KeyRound,
   Link2,
+  Library,
   LoaderCircle,
   ClipboardList,
   Network,
@@ -34,9 +35,10 @@ import { RunMonitor } from "./components/RunMonitor";
 import { InlineNotice, PageHeader, type Notice } from "./components/ui";
 import { ProductsPage } from "./pages/ProductsPage";
 import { ResourcesPage } from "./pages/ResourcesPage";
+import { TestCasesPage } from "./pages/TestCasesPage";
 import { TestOrdersPage } from "./pages/TestOrdersPage";
 
-type PageName = "products" | "resources" | "orders" | "run" | "settings";
+type PageName = "products" | "resources" | "cases" | "orders" | "run" | "settings";
 
 interface ProviderPreset {
   id: string;
@@ -103,7 +105,7 @@ const ACTIVE_PRODUCT_KEY = "ai-test-runner.active-product";
 
 function readPage(): PageName {
   const page = window.location.hash.replace(/^#/, "");
-  return page === "resources" || page === "orders" || page === "run" || page === "settings" ? page : "products";
+  return page === "resources" || page === "cases" || page === "orders" || page === "run" || page === "settings" ? page : "products";
 }
 
 function App() {
@@ -197,6 +199,11 @@ function App() {
             <span>资源与环境</span>
             {page === "resources" && <ChevronRight className="nav-chevron" size={16} />}
           </button>
+          <button className={`nav-item ${page === "cases" ? "active" : ""}`} onClick={() => navigate("cases")} title="用例库" disabled={!activeProduct}>
+            <Library size={18} />
+            <span>用例库</span>
+            {page === "cases" && <ChevronRight className="nav-chevron" size={16} />}
+          </button>
           <button className={`nav-item ${page === "orders" ? "active" : ""}`} onClick={() => navigate("orders")} title="测试单" disabled={!activeProduct}>
             <ClipboardList size={18} />
             <span>测试单</span>
@@ -224,10 +231,12 @@ function App() {
       </aside>
 
       <main className="main-content">
-        {page === "products" || (!activeProduct && (page === "resources" || page === "orders")) ? (
+        {page === "products" || (!activeProduct && (page === "resources" || page === "cases" || page === "orders")) ? (
           <ProductsPage product={activeProduct} onProductsChanged={refreshProducts} />
         ) : page === "resources" && activeProduct ? (
           <ResourcesPage key={activeProduct.id} product={activeProduct} />
+        ) : page === "cases" && activeProduct ? (
+          <TestCasesPage key={activeProduct.id} product={activeProduct} onCasesChanged={() => refreshProducts(activeProduct.id)} />
         ) : page === "orders" && activeProduct ? (
           <TestOrdersPage key={activeProduct.id} product={activeProduct} />
         ) : page === "run" ? (
@@ -679,19 +688,18 @@ function ZentaoSettingsForm({
 }) {
   const [form, setForm] = useState({
     baseUrl: "",
-    apiBasePath: "/api.php/v1",
     account: "",
     password: "",
   });
   const [showPassword, setShowPassword] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
 
   useEffect(() => {
     if (!initialSettings) return;
     setForm({
       baseUrl: initialSettings.baseUrl,
-      apiBasePath: initialSettings.apiBasePath,
       account: initialSettings.account,
       password: "",
     });
@@ -714,6 +722,19 @@ function ZentaoSettingsForm({
       setNotice({ kind: "error", message: error instanceof Error ? error.message : "保存失败" });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const testConnection = async () => {
+    try {
+      setTesting(true);
+      setNotice(null);
+      const result = await api.testZentaoConnection(form);
+      setNotice({ kind: "success", message: result.message });
+    } catch (error) {
+      setNotice({ kind: "error", message: error instanceof Error ? error.message : "禅道连接测试失败" });
+    } finally {
+      setTesting(false);
     }
   };
 
@@ -746,16 +767,6 @@ function ZentaoSettingsForm({
               </div>
             </label>
 
-            <label className="field full-width">
-              <span>API 基础路径</span>
-              <input
-                value={form.apiBasePath}
-                onChange={(event) => setForm((current) => ({ ...current, apiBasePath: event.target.value }))}
-                placeholder="/api.php/v1"
-                spellCheck={false}
-                autoComplete="off"
-              />
-            </label>
           </div>
         </section>
 
@@ -802,7 +813,11 @@ function ZentaoSettingsForm({
         </section>
 
         <footer className="settings-actions">
-          <button type="submit" className="button primary" disabled={saving}>
+          <button type="button" className="button secondary" onClick={testConnection} disabled={saving || testing}>
+            {testing ? <LoaderCircle className="spin" size={17} /> : <Server size={17} />}
+            测试连接
+          </button>
+          <button type="submit" className="button primary" disabled={saving || testing}>
             {saving ? <LoaderCircle className="spin" size={17} /> : <Save size={17} />}
             保存配置
           </button>

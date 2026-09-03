@@ -20,11 +20,14 @@ import { resolveRunResult } from "./run-result.js";
 import {
   readModelSettings,
   readZentaoSettings,
+  resolveZentaoSettings,
   saveModelSettings,
   saveZentaoSettings,
   toPublicSettings,
   toPublicZentaoSettings,
 } from "./settings-store.js";
+import { getZentaoClient } from "./zentao-client.js";
+import { zentaoRouter } from "./zentao-routes.js";
 
 type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 
@@ -643,6 +646,17 @@ app.put("/api/settings/zentao", async (request, response, next) => {
   }
 });
 
+app.post("/api/settings/zentao/test", async (request, response, next) => {
+  try {
+    const current = await readZentaoSettings();
+    const settings = resolveZentaoSettings(request.body, current);
+    await getZentaoClient(settings).testConnection();
+    response.json({ ok: true, message: "禅道连接成功" });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/products/:productId/test-orders/:id/runs", async (request, response, next) => {
   try {
     const settings = await readModelSettings();
@@ -697,6 +711,7 @@ app.post("/api/products/:productId/test-orders/:id/runs", async (request, respon
   }
 });
 
+app.use("/api", zentaoRouter);
 app.use("/api", catalogRouter);
 
 app.post("/api/runs", async (request, response, next) => {

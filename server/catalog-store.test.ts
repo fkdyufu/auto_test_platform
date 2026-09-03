@@ -367,6 +367,70 @@ test("assigns cases to a validated product scenario", async (t) => {
   );
 });
 
+test("imports Zentao cases without overwriting local changes by default", async (t) => {
+  const store = await createStore(t);
+  const [product] = await store.listProducts();
+  const firstImport = await store.importZentaoTestCases(product.id, [{
+    zentaoCaseId: 101,
+    name: "禅道原始名称",
+    steps: "1. 原始步骤",
+    expectedResult: "1. 原始结果",
+  }]);
+  assert.deepEqual(firstImport, { created: 1, updated: 0, skipped: 0 });
+
+  const [imported] = await store.listTestCases(product.id);
+  assert.equal(imported.source, "zentao");
+  assert.equal(imported.zentaoCaseId, 101);
+  assert.ok(imported.lastImportedAt);
+  await store.updateTestCase(product.id, imported.id, {
+    scenarioId: imported.scenarioId,
+    name: "平台修改名称",
+    steps: "平台修改步骤",
+    expectedResult: "平台修改结果",
+  });
+
+  const skipped = await store.importZentaoTestCases(product.id, [{
+    zentaoCaseId: 101,
+    name: "禅道新名称",
+    steps: "禅道新步骤",
+    expectedResult: "禅道新结果",
+  }]);
+  assert.deepEqual(skipped, { created: 0, updated: 0, skipped: 1 });
+  assert.equal((await store.listTestCases(product.id))[0].name, "平台修改名称");
+
+  const overwritten = await store.importZentaoTestCases(product.id, [{
+    zentaoCaseId: 101,
+    name: "禅道新名称",
+    steps: "禅道新步骤",
+    expectedResult: "禅道新结果",
+  }], true);
+  const [updated] = await store.listTestCases(product.id);
+  assert.deepEqual(overwritten, { created: 0, updated: 1, skipped: 0 });
+  assert.equal(updated.name, "禅道新名称");
+  assert.equal(updated.scenarioId, imported.scenarioId);
+});
+
+test("keeps local and same-named Zentao cases as separate records", async (t) => {
+  const store = await createStore(t);
+  const [product] = await store.listProducts();
+  const local = await store.createTestCase(product.id, {
+    name: "重复名称",
+    steps: "本地步骤",
+    expectedResult: "本地结果",
+  });
+  await store.importZentaoTestCases(product.id, [{
+    zentaoCaseId: 202,
+    name: "重复名称",
+    steps: "禅道步骤",
+    expectedResult: "禅道结果",
+  }]);
+
+  const cases = await store.listTestCases(product.id);
+  assert.equal(cases.length, 2);
+  assert.equal(cases.find((item) => item.id === local.id)?.source, "local");
+  assert.equal(cases.find((item) => item.zentaoCaseId === 202)?.source, "zentao");
+});
+
 test("groups a test run by each case scenario", async (t) => {
   const store = await createStore(t);
   const [product] = await store.listProducts();
@@ -458,6 +522,7 @@ test("migrates legacy cases and runs into the default scenario", async (t) => {
   const [defaultScenario] = await migratedStore.listTestScenarios(product.id);
   assert.equal(defaultScenario.isDefault, true);
   assert.equal(detail.cases[0].scenarioId, defaultScenario.id);
+  assert.equal(detail.cases[0].source, "local");
   assert.equal(detail.runs[0].scenarioRuns.length, 1);
   assert.equal(detail.runs[0].scenarioRuns[0].testScenarioId, defaultScenario.id);
   assert.equal(detail.runs[0].caseRuns[0].scenarioRunId, detail.runs[0].scenarioRuns[0].id);
