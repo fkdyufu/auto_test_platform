@@ -17,7 +17,14 @@ import {
 import { sanitizeToolEvent } from "./event-sanitizer.js";
 import { executePiRun, testModelConnection, type RunnerEvent } from "./pi-runner.js";
 import { resolveRunResult } from "./run-result.js";
-import { readModelSettings, saveModelSettings, toPublicSettings } from "./settings-store.js";
+import {
+  readModelSettings,
+  readZentaoSettings,
+  saveModelSettings,
+  saveZentaoSettings,
+  toPublicSettings,
+  toPublicZentaoSettings,
+} from "./settings-store.js";
 
 type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 
@@ -614,6 +621,23 @@ app.post("/api/settings/test", async (_request, response, next) => {
     }
     const message = await testModelConnection(settings);
     response.json({ ok: true, message });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/settings/zentao", async (_request, response, next) => {
+  try {
+    response.json(toPublicZentaoSettings(await readZentaoSettings()));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/settings/zentao", async (request, response, next) => {
+  try {
+    const settings = await saveZentaoSettings(request.body);
+    response.json(toPublicZentaoSettings(settings));
   } catch (error) {
     next(error);
   }

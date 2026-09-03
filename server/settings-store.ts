@@ -30,6 +30,18 @@ export interface PublicModelSettings extends Omit<ModelSettings, "apiKey"> {
   configured: boolean;
 }
 
+export interface ZentaoSettings {
+  baseUrl: string;
+  apiBasePath: string;
+  account: string;
+  password: string;
+}
+
+export interface PublicZentaoSettings extends Omit<ZentaoSettings, "password"> {
+  hasPassword: boolean;
+  configured: boolean;
+}
+
 const DEFAULT_SETTINGS: ModelSettings = {
   providerPreset: "openai",
   apiType: "openai-responses",
@@ -40,8 +52,16 @@ const DEFAULT_SETTINGS: ModelSettings = {
   reasoningLevel: "medium",
 };
 
+const DEFAULT_ZENTAO_SETTINGS: ZentaoSettings = {
+  baseUrl: "",
+  apiBasePath: "/api.php/v1",
+  account: "",
+  password: "",
+};
+
 const dataDirectory = path.resolve(process.cwd(), ".data");
 const settingsPath = path.join(dataDirectory, "model-settings.json");
+const zentaoSettingsPath = path.join(dataDirectory, "zentao-settings.json");
 
 function isApiType(value: unknown): value is ApiType {
   return typeof value === "string" && API_TYPES.includes(value as ApiType);
@@ -63,17 +83,39 @@ function normalizeUserAgent(value: unknown): string {
   return userAgent;
 }
 
-function normalizeUrl(value: unknown): string {
+function normalizeUrl(value: unknown, label = "API 地址"): string {
   if (typeof value !== "string" || !value.trim()) {
-    throw new Error("API 地址不能为空");
+    throw new Error(`${label}不能为空`);
   }
 
-  const url = new URL(value.trim());
+  let url: URL;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    throw new Error(`${label}格式不正确`);
+  }
   if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error("API 地址必须使用 http 或 https");
+    throw new Error(`${label}必须使用 http 或 https`);
   }
 
   return url.toString().replace(/\/$/, "");
+}
+
+function normalizeApiBasePath(value: unknown): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error("API 基础路径不能为空");
+  }
+  const apiBasePath = value.trim();
+  if (!apiBasePath.startsWith("/")) {
+    throw new Error("API 基础路径必须以 / 开头");
+  }
+  if (apiBasePath.includes("?") || apiBasePath.includes("#")) {
+    throw new Error("API 基础路径不能包含查询参数或锚点");
+  }
+  if (apiBasePath.length > 500) {
+    throw new Error("API 基础路径不能超过 500 个字符");
+  }
+  return apiBasePath.replace(/\/$/, "") || "/";
 }
 
 function usesLocalEndpoint(baseUrl: string): boolean {
@@ -164,6 +206,68 @@ export function toPublicSettings(settings: ModelSettings): PublicModelSettings {
     hasApiKey,
     maskedApiKey,
     configured: Boolean(settings.model && settings.baseUrl && (hasApiKey || usesLocalEndpoint(settings.baseUrl))),
+  };
+}
+
+export async function readZentaoSettings(filePath = zentaoSettingsPath): Promise<ZentaoSettings> {
+  try {
+    const raw = JSON.parse(await readFile(filePath, "utf8")) as Partial<ZentaoSettings>;
+    return {
+      baseUrl: typeof raw.baseUrl === "string" ? raw.baseUrl : DEFAULT_ZENTAO_SETTINGS.baseUrl,
+      apiBasePath: typeof raw.apiBasePath === "string" ? raw.apiBasePath : DEFAULT_ZENTAO_SETTINGS.apiBasePath,
+      account: typeof raw.account === "string" ? raw.account : DEFAULT_ZENTAO_SETTINGS.account,
+      password: typeof raw.password === "string" ? raw.password : DEFAULT_ZENTAO_SETTINGS.password,
+    };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { ...DEFAULT_ZENTAO_SETTINGS };
+    }
+    throw error;
+  }
+}
+
+export async function saveZentaoSettings(input: unknown, filePath = zentaoSettingsPath): Promise<ZentaoSettings> {
+  if (!input || typeof input !== "object") {
+    throw new Error("配置格式不正确");
+  }
+
+  const current = await readZentaoSettings(filePath);
+  const value = input as Record<string, unknown>;
+  const account = typeof value.account === "string" ? value.account.trim() : "";
+  const password = typeof value.password === "string" && value.password ? value.password : current.password;
+
+  if (!account) {
+    throw new Error("禅道账号不能为空");
+  }
+  if (account.length > 200) {
+    throw new Error("禅道账号不能超过 200 个字符");
+  }
+  if (!password) {
+    throw new Error("禅道密码不能为空");
+  }
+
+  const settings: ZentaoSettings = {
+    baseUrl: normalizeUrl(value.baseUrl, "禅道地址"),
+    apiBasePath: normalizeApiBasePath(value.apiBasePath),
+    account,
+    password,
+  };
+
+  await mkdir(path.dirname(filePath), { recursive: true });
+  const temporaryPath = `${filePath}.tmp`;
+  await writeFile(temporaryPath, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 });
+  await rename(temporaryPath, filePath);
+  return settings;
+}
+
+export function toPublicZentaoSettings(settings: ZentaoSettings): PublicZentaoSettings {
+  const hasPassword = Boolean(settings.password);
+  return {
+    baseUrl: settings.baseUrl,
+    apiBasePath: settings.apiBasePath,
+    account: settings.account,
+    hasPassword,
+    configured: Boolean(settings.baseUrl && settings.apiBasePath && settings.account && hasPassword),
   };
 }
 

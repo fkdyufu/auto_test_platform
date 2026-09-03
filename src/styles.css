@@ -677,6 +677,37 @@ button:disabled {
   max-width: 1060px;
 }
 
+.settings-tabs {
+  display: flex;
+  min-height: 52px;
+  align-items: flex-end;
+  gap: 24px;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-tabs button {
+  display: inline-flex;
+  height: 52px;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: #687482;
+  padding: 0 2px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.settings-tabs button:hover {
+  color: #344252;
+}
+
+.settings-tabs button.active {
+  border-bottom-color: var(--accent);
+  color: #174e8d;
+}
+
 .settings-form {
   margin-top: 22px;
   border: 1px solid var(--border);

@@ -14,6 +14,15 @@ export interface ModelSettings {
   configured: boolean;
 }
 
+export interface ZentaoSettings {
+  baseUrl: string;
+  apiBasePath: string;
+  account: string;
+  password?: string;
+  hasPassword: boolean;
+  configured: boolean;
+}
+
 export interface RunEvent {
   id: number;
   timestamp: string;
@@ -274,6 +283,12 @@ export const api = {
       body: JSON.stringify(settings),
     }),
   testSettings: () => request<{ ok: true; message: string }>("/api/settings/test", { method: "POST" }),
+  getZentaoSettings: () => request<ZentaoSettings>("/api/settings/zentao"),
+  saveZentaoSettings: (settings: Pick<ZentaoSettings, "baseUrl" | "apiBasePath" | "account" | "password">) =>
+    request<ZentaoSettings>("/api/settings/zentao", {
+      method: "PUT",
+      body: JSON.stringify(settings),
+    }),
   getProducts: () => request<ProductSummary[]>("/api/products"),
   createProduct: (input: ProductInput) =>
     request<Product>("/api/products", { method: "POST", body: JSON.stringify(input) }),

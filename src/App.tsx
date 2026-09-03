@@ -9,6 +9,7 @@ import {
   EyeOff,
   Globe2,
   KeyRound,
+  Link2,
   LoaderCircle,
   ClipboardList,
   Network,
@@ -19,8 +20,16 @@ import {
   Settings2,
   TerminalSquare,
   TestTubeDiagonal,
+  UserRound,
 } from "lucide-react";
-import { api, type ModelSettings, type ProductSummary, type RunEvent, type RunStatus } from "./api";
+import {
+  api,
+  type ModelSettings,
+  type ProductSummary,
+  type RunEvent,
+  type RunStatus,
+  type ZentaoSettings,
+} from "./api";
 import { RunMonitor } from "./components/RunMonitor";
 import { InlineNotice, PageHeader, type Notice } from "./components/ui";
 import { ProductsPage } from "./pages/ProductsPage";
@@ -101,6 +110,8 @@ function App() {
   const [page, setPage] = useState<PageName>(readPage);
   const [settings, setSettings] = useState<ModelSettings | null>(null);
   const [settingsError, setSettingsError] = useState("");
+  const [zentaoSettings, setZentaoSettings] = useState<ZentaoSettings | null>(null);
+  const [zentaoSettingsError, setZentaoSettingsError] = useState("");
   const [products, setProducts] = useState<ProductSummary[]>([]);
   const [productId, setProductId] = useState("");
 
@@ -119,6 +130,15 @@ function App() {
     }
   };
 
+  const refreshZentaoSettings = async () => {
+    try {
+      setZentaoSettingsError("");
+      setZentaoSettings(await api.getZentaoSettings());
+    } catch (error) {
+      setZentaoSettingsError(error instanceof Error ? error.message : "读取禅道配置失败");
+    }
+  };
+
   const refreshProducts = async (preferredId?: string) => {
     const nextProducts = await api.getProducts();
     const storedId = localStorage.getItem(ACTIVE_PRODUCT_KEY) || "";
@@ -132,6 +152,7 @@ function App() {
 
   useEffect(() => {
     void refreshSettings();
+    void refreshZentaoSettings();
     void refreshProducts();
   }, []);
 
@@ -186,9 +207,9 @@ function App() {
             <span>自由执行</span>
             {page === "run" && <ChevronRight className="nav-chevron" size={16} />}
           </button>
-          <button className={`nav-item ${page === "settings" ? "active" : ""}`} onClick={() => navigate("settings")} title="模型设置">
+          <button className={`nav-item ${page === "settings" ? "active" : ""}`} onClick={() => navigate("settings")} title="设置">
             <Settings2 size={18} />
-            <span>模型设置</span>
+            <span>设置</span>
             {page === "settings" && <ChevronRight className="nav-chevron" size={16} />}
           </button>
         </nav>
@@ -212,7 +233,13 @@ function App() {
         ) : page === "run" ? (
           <RunPage settings={settings} onOpenSettings={() => navigate("settings")} />
         ) : (
-          <SettingsPage initialSettings={settings} onSaved={refreshSettings} />
+          <SettingsPage
+            initialModelSettings={settings}
+            initialZentaoSettings={zentaoSettings}
+            zentaoSettingsError={zentaoSettingsError}
+            onModelSaved={refreshSettings}
+            onZentaoSaved={refreshZentaoSettings}
+          />
         )}
       </main>
     </div>
@@ -364,7 +391,63 @@ function RunPage({ settings, onOpenSettings }: { settings: ModelSettings | null;
   );
 }
 
+type SettingsSection = "model" | "zentao";
+
 function SettingsPage({
+  initialModelSettings,
+  initialZentaoSettings,
+  zentaoSettingsError,
+  onModelSaved,
+  onZentaoSaved,
+}: {
+  initialModelSettings: ModelSettings | null;
+  initialZentaoSettings: ZentaoSettings | null;
+  zentaoSettingsError: string;
+  onModelSaved: () => Promise<void>;
+  onZentaoSaved: () => Promise<void>;
+}) {
+  const [section, setSection] = useState<SettingsSection>("model");
+  const configured = section === "model" ? initialModelSettings?.configured : initialZentaoSettings?.configured;
+
+  return (
+    <div className="page settings-page">
+      <PageHeader
+        icon={<Settings2 size={19} />}
+        title="设置"
+        status={
+          <div className={`run-status ${configured ? "completed" : "idle"}`}>
+            <span className="status-dot" />
+            <span>{configured ? "已配置" : "未配置"}</span>
+          </div>
+        }
+      />
+
+      <div className="settings-tabs" role="tablist" aria-label="设置分类">
+        <button type="button" role="tab" aria-selected={section === "model"} className={section === "model" ? "active" : ""} onClick={() => setSection("model")}>
+          <Cpu size={16} />
+          模型设置
+        </button>
+        <button type="button" role="tab" aria-selected={section === "zentao"} className={section === "zentao" ? "active" : ""} onClick={() => setSection("zentao")}>
+          <Link2 size={16} />
+          禅道设置
+        </button>
+      </div>
+
+      <div hidden={section !== "model"} role="tabpanel">
+        <ModelSettingsForm initialSettings={initialModelSettings} onSaved={onModelSaved} />
+      </div>
+      <div hidden={section !== "zentao"} role="tabpanel">
+        <ZentaoSettingsForm
+          initialSettings={initialZentaoSettings}
+          loadingError={zentaoSettingsError}
+          onSaved={onZentaoSaved}
+        />
+      </div>
+    </div>
+  );
+}
+
+function ModelSettingsForm({
   initialSettings,
   onSaved,
 }: {
@@ -441,18 +524,7 @@ function SettingsPage({
   };
 
   return (
-    <div className="page settings-page">
-      <PageHeader
-        icon={<Settings2 size={19} />}
-        title="模型设置"
-        status={
-          <div className={`run-status ${initialSettings?.configured ? "completed" : "idle"}`}>
-            <span className="status-dot" />
-            <span>{initialSettings?.configured ? "已配置" : "未配置"}</span>
-          </div>
-        }
-      />
-
+    <div className="settings-panel">
       {notice && <InlineNotice notice={notice} onClose={() => setNotice(null)} />}
 
       <form className="settings-form" onSubmit={save}>
@@ -587,6 +659,150 @@ function SettingsPage({
             测试连接
           </button>
           <button type="submit" className="button primary" disabled={saving || testing}>
+            {saving ? <LoaderCircle className="spin" size={17} /> : <Save size={17} />}
+            保存配置
+          </button>
+        </footer>
+      </form>
+    </div>
+  );
+}
+
+function ZentaoSettingsForm({
+  initialSettings,
+  loadingError,
+  onSaved,
+}: {
+  initialSettings: ZentaoSettings | null;
+  loadingError: string;
+  onSaved: () => Promise<void>;
+}) {
+  const [form, setForm] = useState({
+    baseUrl: "",
+    apiBasePath: "/api.php/v1",
+    account: "",
+    password: "",
+  });
+  const [showPassword, setShowPassword] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState<Notice>(null);
+
+  useEffect(() => {
+    if (!initialSettings) return;
+    setForm({
+      baseUrl: initialSettings.baseUrl,
+      apiBasePath: initialSettings.apiBasePath,
+      account: initialSettings.account,
+      password: "",
+    });
+  }, [initialSettings]);
+
+  useEffect(() => {
+    if (loadingError) setNotice({ kind: "error", message: loadingError });
+  }, [loadingError]);
+
+  const save = async (event: FormEvent) => {
+    event.preventDefault();
+    try {
+      setSaving(true);
+      setNotice(null);
+      await api.saveZentaoSettings(form);
+      await onSaved();
+      setForm((current) => ({ ...current, password: "" }));
+      setNotice({ kind: "success", message: "禅道配置已保存" });
+    } catch (error) {
+      setNotice({ kind: "error", message: error instanceof Error ? error.message : "保存失败" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="settings-panel">
+      {notice && <InlineNotice notice={notice} onClose={() => setNotice(null)} />}
+
+      <form className="settings-form" onSubmit={save}>
+        <section className="settings-section">
+          <div className="settings-section-title">
+            <Link2 size={18} />
+            <div>
+              <span className="section-index">01</span>
+              <h2>禅道接口</h2>
+            </div>
+          </div>
+
+          <div className="form-grid">
+            <label className="field full-width">
+              <span>禅道地址</span>
+              <div className="input-with-icon">
+                <Globe2 size={17} />
+                <input
+                  value={form.baseUrl}
+                  onChange={(event) => setForm((current) => ({ ...current, baseUrl: event.target.value }))}
+                  placeholder="https://zentao.example.com"
+                  spellCheck={false}
+                  autoComplete="url"
+                />
+              </div>
+            </label>
+
+            <label className="field full-width">
+              <span>API 基础路径</span>
+              <input
+                value={form.apiBasePath}
+                onChange={(event) => setForm((current) => ({ ...current, apiBasePath: event.target.value }))}
+                placeholder="/api.php/v1"
+                spellCheck={false}
+                autoComplete="off"
+              />
+            </label>
+          </div>
+        </section>
+
+        <section className="settings-section credentials-section">
+          <div className="settings-section-title">
+            <KeyRound size={18} />
+            <div>
+              <span className="section-index">02</span>
+              <h2>登录凭据</h2>
+            </div>
+          </div>
+
+          <div className="form-grid">
+            <label className="field">
+              <span>账号</span>
+              <div className="input-with-icon">
+                <UserRound size={17} />
+                <input
+                  value={form.account}
+                  onChange={(event) => setForm((current) => ({ ...current, account: event.target.value }))}
+                  placeholder="输入禅道账号"
+                  autoComplete="username"
+                />
+              </div>
+            </label>
+
+            <label className="field">
+              <span>密码</span>
+              <div className="input-with-icon key-input">
+                <KeyRound size={17} />
+                <input
+                  type={showPassword ? "text" : "password"}
+                  value={form.password}
+                  onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))}
+                  placeholder={initialSettings?.hasPassword ? "已保存（留空保持不变）" : "输入禅道密码"}
+                  autoComplete="new-password"
+                />
+                <button type="button" className="icon-button" onClick={() => setShowPassword((current) => !current)} title={showPassword ? "隐藏密码" : "显示密码"}>
+                  {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
+                </button>
+              </div>
+            </label>
+          </div>
+        </section>
+
+        <footer className="settings-actions">
+          <button type="submit" className="button primary" disabled={saving}>
             {saving ? <LoaderCircle className="spin" size={17} /> : <Save size={17} />}
             保存配置
           </button>
