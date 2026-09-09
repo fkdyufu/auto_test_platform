@@ -84,6 +84,17 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
   const loadDetail = async (id: string) => {
     const nextDetail = await api.getTestOrder(product.id, id);
     setDetail(nextDetail);
+    const latestRun = nextDetail.runs[0];
+    if (latestRun) {
+      try {
+        await restoreRun(latestRun.id);
+      } catch {
+        setActiveRun(null);
+      }
+    } else {
+      eventSourceRef.current?.close();
+      setActiveRun(null);
+    }
     return nextDetail;
   };
 
@@ -218,6 +229,16 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
     };
   };
 
+  const restoreRun = async (runId: string) => {
+    const run = await api.getRun(runId);
+    if (run.status === "queued" || run.status === "running") connectEvents(run);
+    else {
+      eventSourceRef.current?.close();
+      setActiveRun(run);
+    }
+    return run;
+  };
+
   const execute = async (order: TestOrderSummary | TestOrderDetail, testCaseId?: string) => {
     try {
       setNotice(null);
@@ -234,6 +255,15 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
       await api.cancelRun(activeRun.id);
     } catch (error) {
       setNotice({ kind: "error", message: error instanceof Error ? error.message : "取消执行失败" });
+    }
+  };
+
+  const viewRun = async (run: TestRun) => {
+    try {
+      setNotice(null);
+      await restoreRun(run.id);
+    } catch (error) {
+      setNotice({ kind: "error", message: error instanceof Error ? error.message : "读取执行过程失败" });
     }
   };
 
@@ -296,7 +326,13 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
                     </td>
                     <td>{order.physicalEnvironmentName || "未配置"}</td>
                     <td>{order.caseCount}</td>
-                    <td><StatusBadge run={order.latestRun} /></td>
+                    <td>
+                      {order.latestRun ? (
+                        <button className="link-button" onClick={() => setSelectedId(order.id)} title="查看最近执行过程">
+                          <StatusBadge run={order.latestRun} />
+                        </button>
+                      ) : <StatusBadge run={order.latestRun} />}
+                    </td>
                     <td>{formatDateTime(order.updatedAt)}</td>
                     <td>
                       <div className="row-actions">
@@ -418,7 +454,7 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
             </div>
             <div className="table-wrap">
               <table className="data-table history-table">
-                <thead><tr><th>执行时间</th><th>范围</th><th>用例结果</th><th>状态</th><th>耗时</th></tr></thead>
+                <thead><tr><th>执行时间</th><th>范围</th><th>用例结果</th><th>状态</th><th>耗时</th><th aria-label="操作" /></tr></thead>
                 <tbody>
                   {detail.runs.map((run) => {
                     const passed = run.caseRuns.filter((item) => item.outcome === "passed").length;
@@ -433,10 +469,15 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
                         <td>{passed} 通过 / {failed} 失败</td>
                         <td><StatusBadge run={run} /></td>
                         <td>{duration}</td>
+                        <td>
+                          <button className="icon-action" onClick={() => void viewRun(run)} title="查看执行过程">
+                            <Eye size={16} />
+                          </button>
+                        </td>
                       </tr>
                     );
                   })}
-                  {!detail.runs.length && <tr><td colSpan={5} className="table-empty">暂无执行记录</td></tr>}
+                  {!detail.runs.length && <tr><td colSpan={6} className="table-empty">暂无执行记录</td></tr>}
                 </tbody>
               </table>
             </div>

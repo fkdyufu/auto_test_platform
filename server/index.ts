@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { appendFile, mkdir, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express, { type Response } from "express";
@@ -72,6 +72,15 @@ interface RunRecord {
   testOrderId?: string;
 }
 
+interface RunLogHeader {
+  type: "run_created";
+  id: string;
+  source?: RunRecord["source"];
+  testOrderId?: string;
+  requirement?: string;
+  createdAt: string;
+}
+
 const app = express();
 const port = Number(process.env.PORT || 3001);
 const runs = new Map<string, RunRecord>();
@@ -101,6 +110,45 @@ function publish(run: RunRecord, event: Omit<StreamEvent, "id" | "timestamp">): 
 function updateStatus(run: RunRecord, status: RunStatus, message: string): void {
   run.status = status;
   publish(run, { type: "run_state", status, message });
+}
+
+async function hydrateRun(runId: string): Promise<RunRecord | undefined> {
+  if (!/^[a-zA-Z0-9-]+$/.test(runId)) return undefined;
+  const logPath = path.join(runLogsDirectory, `${runId}.jsonl`);
+  try {
+    const lines = (await readFile(logPath, "utf8")).split("\n").filter(Boolean);
+    const records = lines
+      .map((line) => {
+        try {
+          return JSON.parse(line) as RunLogHeader | StreamEvent;
+        } catch {
+          return undefined;
+        }
+      })
+      .filter((record): record is RunLogHeader | StreamEvent => Boolean(record));
+    const header = records.find((record): record is RunLogHeader => record.type === "run_created");
+    if (!header || header.id !== runId) return undefined;
+    const events = records.filter((record): record is StreamEvent => record.type !== "run_created");
+    const lastState = [...events].reverse().find((event) => event.type === "run_state");
+    const run: RunRecord = {
+      id: runId,
+      requirement: header.requirement || "",
+      status: lastState?.status || "queued",
+      createdAt: header.createdAt,
+      events,
+      listeners: new Set(),
+      cancelRequested: false,
+      logPath,
+      logWrite: Promise.resolve(),
+      source: header.source || "adhoc",
+      testOrderId: header.testOrderId,
+    };
+    runs.set(runId, run);
+    return run;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
 }
 
 function publicRun(run: RunRecord) {
@@ -136,7 +184,7 @@ async function createRunRecord(
   await mkdir(runLogsDirectory, { recursive: true });
   await writeFile(
     run.logPath,
-    `${JSON.stringify({ type: "run_created", id: run.id, source: run.source, testOrderId: run.testOrderId, createdAt: run.createdAt })}\n`,
+    `${JSON.stringify({ type: "run_created", id: run.id, source: run.source, testOrderId: run.testOrderId, requirement, createdAt: run.createdAt })}\n`,
     { mode: 0o600 },
   );
   runs.set(run.id, run);
@@ -773,34 +821,42 @@ app.post("/api/runs", async (request, response, next) => {
   }
 });
 
-app.get("/api/runs/:id", (request, response) => {
-  const run = runs.get(request.params.id);
-  if (!run) {
-    response.status(404).json({ error: "任务不存在" });
-    return;
+app.get("/api/runs/:id", async (request, response, next) => {
+  try {
+    const run = runs.get(request.params.id) || await hydrateRun(request.params.id);
+    if (!run) {
+      response.status(404).json({ error: "任务不存在" });
+      return;
+    }
+    response.json(publicRun(run));
+  } catch (error) {
+    next(error);
   }
-  response.json(publicRun(run));
 });
 
-app.get("/api/runs/:id/events", (request, response) => {
-  const run = runs.get(request.params.id);
-  if (!run) {
-    response.status(404).end();
-    return;
+app.get("/api/runs/:id/events", async (request, response, next) => {
+  try {
+    const run = runs.get(request.params.id) || await hydrateRun(request.params.id);
+    if (!run) {
+      response.status(404).end();
+      return;
+    }
+
+    response.setHeader("Content-Type", "text/event-stream");
+    response.setHeader("Cache-Control", "no-cache");
+    response.setHeader("Connection", "keep-alive");
+    response.flushHeaders();
+    run.events.forEach((event) => writeSse(response, event));
+    run.listeners.add(response);
+
+    const heartbeat = setInterval(() => response.write(": ping\n\n"), 15_000);
+    request.on("close", () => {
+      clearInterval(heartbeat);
+      run.listeners.delete(response);
+    });
+  } catch (error) {
+    next(error);
   }
-
-  response.setHeader("Content-Type", "text/event-stream");
-  response.setHeader("Cache-Control", "no-cache");
-  response.setHeader("Connection", "keep-alive");
-  response.flushHeaders();
-  run.events.forEach((event) => writeSse(response, event));
-  run.listeners.add(response);
-
-  const heartbeat = setInterval(() => response.write(": ping\n\n"), 15_000);
-  request.on("close", () => {
-    clearInterval(heartbeat);
-    run.listeners.delete(response);
-  });
 });
 
 app.post("/api/runs/:id/cancel", async (request, response) => {
