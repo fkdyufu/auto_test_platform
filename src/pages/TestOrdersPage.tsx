@@ -21,6 +21,7 @@ import {
   type RunResponse,
   type RunStatus,
   type TestCase,
+  type TestCaseInput,
   type TestOrderDetail,
   type TestOrderInput,
   type TestOrderSummary,
@@ -43,6 +44,11 @@ const EMPTY_ORDER: TestOrderInput = {
   description: "",
   physicalEnvironmentId: "",
   caseIds: [],
+};
+
+type CaseDialog = {
+  testCase: TestCase;
+  form: TestCaseInput;
 };
 
 function formatDateTime(value?: string): string {
@@ -70,6 +76,7 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
   const [selectedId, setSelectedId] = useState("");
   const [detail, setDetail] = useState<TestOrderDetail | null>(null);
   const [dialog, setDialog] = useState<{ id?: string; form: TestOrderInput } | null>(null);
+  const [caseDialog, setCaseDialog] = useState<CaseDialog | null>(null);
   const [availableCases, setAvailableCases] = useState<TestCase[]>([]);
   const [dialogError, setDialogError] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -102,6 +109,7 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
     setSelectedId("");
     setDetail(null);
     setDialog(null);
+    setCaseDialog(null);
     setActiveRun(null);
     void Promise.all([
       api.getTestOrders(product.id),
@@ -188,6 +196,36 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
       setNotice({ kind: "success", message: dialog.id ? "测试单已更新" : "测试单已创建" });
     } catch (error) {
       setDialogError(error instanceof Error ? error.message : "保存测试单失败");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const openCaseDialog = (testCase: TestCase) => {
+    setDialogError("");
+    setCaseDialog({
+      testCase,
+      form: {
+        scenarioId: testCase.scenarioId,
+        name: testCase.name,
+        steps: testCase.steps,
+        expectedResult: testCase.expectedResult,
+      },
+    });
+  };
+
+  const saveCase = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!caseDialog || !detail) return;
+    try {
+      setSubmitting(true);
+      setDialogError("");
+      await api.updateTestCase(product.id, caseDialog.testCase.id, caseDialog.form);
+      await Promise.all([loadDetail(detail.id), loadOrders()]);
+      setCaseDialog(null);
+      setNotice({ kind: "success", message: "测试用例已更新" });
+    } catch (error) {
+      setDialogError(error instanceof Error ? error.message : "保存测试用例失败");
     } finally {
       setSubmitting(false);
     }
@@ -420,7 +458,11 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
                       <tr key={testCase.id}>
                         <td className="order-index">{String(executionPlanCases.indexOf(testCase) + 1).padStart(2, "0")}</td>
                         <td><span className="category-label">{scenarioName(testCase.scenarioId)}</span></td>
-                        <td className="name-cell">{testCase.name}</td>
+                        <td className="name-cell">
+                          <button className="link-button" onClick={() => openCaseDialog(testCase)} title="查看并编辑用例">
+                            {testCase.name}
+                          </button>
+                        </td>
                         <td className="truncate-cell">{testCase.steps}</td>
                         <td className="truncate-cell">{testCase.expectedResult}</td>
                         <td>
@@ -543,6 +585,63 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
               </label>
             ))}
             {!availableCases.length && <div className="list-empty">{product.name} 暂无测试用例</div>}
+          </div>
+        </Modal>
+      )}
+
+      {caseDialog && (
+        <Modal
+          title="测试用例详情"
+          className="test-case-detail-modal"
+          onClose={() => setCaseDialog(null)}
+          onSubmit={saveCase}
+          submitting={submitting}
+        >
+          {dialogError && <div className="form-error">{dialogError}</div>}
+          <div className="case-detail-metadata">
+            <span className={`source-label ${caseDialog.testCase.source}`}>
+              {caseDialog.testCase.source === "zentao" ? "禅道" : "本地"}
+            </span>
+            <span className="mono-cell" title={caseDialog.testCase.id}>
+              {caseDialog.testCase.zentaoCaseId ? `禅道用例 #${caseDialog.testCase.zentaoCaseId}` : `用例 ID ${caseDialog.testCase.id}`}
+            </span>
+          </div>
+          <div className="modal-grid">
+            <label className="field">
+              <span>用例名称</span>
+              <input
+                value={caseDialog.form.name}
+                onChange={(event) => setCaseDialog({ ...caseDialog, form: { ...caseDialog.form, name: event.target.value } })}
+                autoFocus
+              />
+            </label>
+            <label className="field">
+              <span>测试场景</span>
+              <select
+                value={caseDialog.form.scenarioId}
+                onChange={(event) => setCaseDialog({ ...caseDialog, form: { ...caseDialog.form, scenarioId: event.target.value } })}
+              >
+                {scenarios.map((scenario) => (
+                  <option key={scenario.id} value={scenario.id}>{scenario.name}{scenario.isDefault ? "（系统默认）" : ""}</option>
+                ))}
+              </select>
+            </label>
+            <label className="field full-width">
+              <span>测试步骤</span>
+              <textarea
+                value={caseDialog.form.steps}
+                onChange={(event) => setCaseDialog({ ...caseDialog, form: { ...caseDialog.form, steps: event.target.value } })}
+                rows={9}
+              />
+            </label>
+            <label className="field full-width">
+              <span>预期结果</span>
+              <textarea
+                value={caseDialog.form.expectedResult}
+                onChange={(event) => setCaseDialog({ ...caseDialog, form: { ...caseDialog.form, expectedResult: event.target.value } })}
+                rows={6}
+              />
+            </label>
           </div>
         </Modal>
       )}

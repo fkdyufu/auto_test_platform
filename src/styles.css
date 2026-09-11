@@ -886,6 +886,23 @@ button:disabled {
   width: min(980px, 100%);
 }
 
+.test-case-detail-modal {
+  width: min(820px, 100%);
+}
+
+.case-detail-metadata {
+  display: flex;
+  min-height: 24px;
+  align-items: center;
+  gap: 10px;
+  color: #75808d;
+}
+
+.case-detail-metadata .mono-cell {
+  margin-left: auto;
+  overflow-wrap: anywhere;
+}
+
 .import-controls {
   display: grid;
   grid-template-columns: minmax(160px, 0.7fr) minmax(220px, 1.2fr) minmax(220px, 1fr);
