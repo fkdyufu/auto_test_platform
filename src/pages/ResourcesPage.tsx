@@ -324,7 +324,7 @@ function DeviceForm({ dialog, setDialog }: { dialog: Extract<ResourceDialog, { k
         <label><span>名称</span><input value={item.name} placeholder="例如 Web 管理" onChange={(event) => updateControl(item.id, { name: event.target.value })} /></label>
         <label className="grow"><span>接口地址</span><input value={item.address} placeholder={INTERFACE_ADDRESS_PLACEHOLDERS[item.type]} onChange={(event) => updateControl(item.id, { address: event.target.value })} /></label>
         <label><span>账号</span><input value={item.username} placeholder="可选" autoComplete="off" onChange={(event) => updateControl(item.id, { username: event.target.value })} /></label>
-        <label><span>密码</span><input type="password" value={item.password} placeholder={dialog.id ? "留空保持不变" : "可选"} autoComplete="new-password" onChange={(event) => updateControl(item.id, { password: event.target.value })} /></label>
+        <label><span>密码</span><input value={item.password} placeholder={dialog.id ? "留空保持不变" : "可选"} autoComplete="off" onChange={(event) => updateControl(item.id, { password: event.target.value })} /></label>
         <button type="button" className="icon-action danger row-remove" title="删除接口" onClick={() => update({ controlInterfaces: dialog.form.controlInterfaces.filter((control) => control.id !== item.id) })}><Trash2 size={16} /></button>
       </div>)}
       {!dialog.form.controlInterfaces.length && <div className="structured-empty">暂未配置控制接口</div>}
