@@ -367,6 +367,78 @@ test("assigns cases to a validated product scenario", async (t) => {
   );
 });
 
+test("updates a scenario and its case assignments atomically", async (t) => {
+  const store = await createStore(t);
+  const [product, otherProduct] = await store.listProducts();
+  const firstScenario = await store.createTestScenario(product.id, {
+    name: "端口镜像",
+    category: "交换",
+    roles: [{ key: "dut", name: "被测设备", deviceType: "TAU" }],
+    setupInstructions: "配置端口镜像",
+    verificationInstructions: "确认镜像报文",
+  });
+  const secondScenario = await store.createTestScenario(product.id, {
+    name: "端口转发",
+    category: "转发",
+    roles: [{ key: "dut", name: "被测设备", deviceType: "TAU" }],
+    setupInstructions: "配置端口转发",
+    verificationInstructions: "确认报文转发",
+  });
+  const originalCase = await store.createTestCase(product.id, {
+    scenarioId: firstScenario.id,
+    name: "原镜像用例",
+    steps: "发送流量",
+    expectedResult: "收到镜像流量",
+  });
+  const movedCase = await store.createTestCase(product.id, {
+    scenarioId: secondScenario.id,
+    name: "待移动用例",
+    steps: "发送流量",
+    expectedResult: "流量正常",
+  });
+  const defaultCase = await store.createTestCase(product.id, {
+    name: "默认场景用例",
+    steps: "读取状态",
+    expectedResult: "状态正常",
+  });
+  const foreignCase = await store.createTestCase(otherProduct.id, {
+    name: "其他产品用例",
+    steps: "读取状态",
+    expectedResult: "状态正常",
+  });
+
+  const updatedScenario = await store.updateTestScenario(product.id, firstScenario.id, {
+    name: "端口镜像批量场景",
+    category: firstScenario.category,
+    description: firstScenario.description,
+    roles: firstScenario.roles,
+    parameters: firstScenario.parameters,
+    setupInstructions: firstScenario.setupInstructions,
+    verificationInstructions: firstScenario.verificationInstructions,
+    cleanupInstructions: firstScenario.cleanupInstructions,
+    caseIds: [movedCase.id, defaultCase.id],
+  });
+  const cases = await store.listTestCases(product.id);
+  const caseById = new Map(cases.map((testCase) => [testCase.id, testCase]));
+  const defaultScenario = (await store.listTestScenarios(product.id)).find((scenario) => scenario.isDefault);
+
+  assert.equal(updatedScenario.name, "端口镜像批量场景");
+  assert.equal(caseById.get(originalCase.id)?.scenarioId, defaultScenario?.id);
+  assert.equal(caseById.get(movedCase.id)?.scenarioId, firstScenario.id);
+  assert.equal(caseById.get(defaultCase.id)?.scenarioId, firstScenario.id);
+
+  await assert.rejects(
+    store.updateTestScenario(product.id, firstScenario.id, {
+      ...updatedScenario,
+      name: "不应保存的名称",
+      caseIds: [foreignCase.id],
+    }),
+    (error: unknown) => error instanceof CatalogError && error.message.includes("其他产品"),
+  );
+  const scenarioAfterFailure = (await store.listTestScenarios(product.id)).find((scenario) => scenario.id === firstScenario.id);
+  assert.equal(scenarioAfterFailure?.name, "端口镜像批量场景");
+});
+
 test("imports Zentao cases without overwriting local changes by default", async (t) => {
   const store = await createStore(t);
   const [product] = await store.listProducts();

@@ -282,6 +282,7 @@ export interface DeviceResourceInput {
 }
 export type PhysicalEnvironmentInput = Omit<PhysicalEnvironment, "id" | "productId" | "createdAt" | "updatedAt">;
 export type TestScenarioInput = Omit<TestScenario, "id" | "productId" | "isDefault" | "createdAt" | "updatedAt">;
+export type TestScenarioUpdateInput = TestScenarioInput & { caseIds: string[] };
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
@@ -365,7 +366,7 @@ export const api = {
   getTestScenarios: (productId: string) => request<TestScenario[]>(`/api/products/${productId}/test-scenarios`),
   createTestScenario: (productId: string, input: TestScenarioInput) =>
     request<TestScenario>(`/api/products/${productId}/test-scenarios`, { method: "POST", body: JSON.stringify(input) }),
-  updateTestScenario: (productId: string, id: string, input: TestScenarioInput) =>
+  updateTestScenario: (productId: string, id: string, input: TestScenarioUpdateInput) =>
     request<TestScenario>(`/api/products/${productId}/test-scenarios/${id}`, { method: "PUT", body: JSON.stringify(input) }),
   deleteTestScenario: (productId: string, id: string) =>
     request<void>(`/api/products/${productId}/test-scenarios/${id}`, { method: "DELETE" }),

@@ -1923,6 +1923,34 @@ button:disabled {
   padding-top: 16px;
 }
 
+.scenario-case-heading {
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+}
+
+.scenario-case-controls {
+  display: grid;
+  flex: 0 0 auto;
+  grid-template-columns: minmax(240px, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+}
+
+.scenario-case-picker {
+  display: grid;
+  max-height: 280px;
+  flex: 0 0 auto;
+  grid-template-columns: 1fr 1fr;
+}
+
+.scenario-case-picker .case-option:nth-child(odd) {
+  border-right: 1px solid #e9ecef;
+}
+
+.scenario-case-picker .list-empty {
+  grid-column: 1 / -1;
+}
+
 .order-physical-environment-config {
   display: flex;
   flex-direction: column;
@@ -2196,8 +2224,14 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 
-  .resource-picker .case-option:nth-child(odd) {
+  .resource-picker .case-option:nth-child(odd),
+  .scenario-case-picker .case-option:nth-child(odd) {
     border-right: 0;
+  }
+
+  .scenario-case-controls,
+  .scenario-case-picker {
+    grid-template-columns: 1fr;
   }
 }
 

@@ -961,6 +961,20 @@ export class CatalogStore {
     return parameters;
   }
 
+  private validateScenarioCaseIds(data: CatalogData, productId: string, value: unknown): string[] {
+    if (!Array.isArray(value)) throw new CatalogError("关联用例格式不正确");
+    if (value.length > 10_000) throw new CatalogError("单个场景关联用例不能超过 10000 个");
+    if (value.some((item) => typeof item !== "string")) throw new CatalogError("关联用例 ID 格式不正确");
+    const caseIds = [...new Set(value as string[])];
+    const validIds = new Set(
+      data.testCases.filter((item) => item.productId === productId && !item.archivedAt).map((item) => item.id),
+    );
+    if (caseIds.some((caseId) => !validIds.has(caseId))) {
+      throw new CatalogError("关联用例包含其他产品或不存在的用例");
+    }
+    return caseIds;
+  }
+
   async listTestScenarios(productId: string): Promise<TestScenario[]> {
     await this.getProduct(productId);
     const data = await this.read();
@@ -1002,7 +1016,9 @@ export class CatalogStore {
       if (!scenario) throw new CatalogError("测试场景不存在", 404);
       if (scenario.isDefault) throw new CatalogError("默认场景由系统维护，不能编辑", 409);
       const name = requiredText(input.name, "场景名称", 160);
+      const caseIds = input.caseIds === undefined ? undefined : this.validateScenarioCaseIds(data, productId, input.caseIds);
       uniqueName(data.testScenarios.filter((item) => item.productId === productId), name, "场景名称", id);
+      const timestamp = new Date().toISOString();
       scenario.name = name;
       scenario.category = requiredText(input.category, "功能分类", 120);
       scenario.description = optionalText(input.description, 4_000);
@@ -1011,7 +1027,23 @@ export class CatalogStore {
       scenario.setupInstructions = requiredText(input.setupInstructions, "场景搭建要求", 20_000);
       scenario.verificationInstructions = requiredText(input.verificationInstructions, "场景验证要求", 10_000);
       scenario.cleanupInstructions = optionalText(input.cleanupInstructions, 10_000);
-      scenario.updatedAt = new Date().toISOString();
+      scenario.updatedAt = timestamp;
+      if (caseIds) {
+        const selectedIds = new Set(caseIds);
+        data.testCases
+          .filter((testCase) => testCase.productId === productId && !testCase.archivedAt)
+          .forEach((testCase) => {
+            const nextScenarioId = selectedIds.has(testCase.id)
+              ? id
+              : testCase.scenarioId === id
+                ? defaultScenarioId(productId)
+                : testCase.scenarioId;
+            if (nextScenarioId !== testCase.scenarioId) {
+              testCase.scenarioId = nextScenarioId;
+              testCase.updatedAt = timestamp;
+            }
+          });
+      }
       return clone(scenario);
     });
   }
