@@ -1270,6 +1270,39 @@ export class CatalogStore {
       return clone(run);
     });
   }
+
+  async failInterruptedTestRuns(reason: string): Promise<string[]> {
+    return this.mutate((data) => {
+      const finishedAt = new Date().toISOString();
+      const interruptedRunIds: string[] = [];
+      for (const run of data.testRuns) {
+        if (run.status !== "queued" && run.status !== "running") continue;
+        interruptedRunIds.push(run.id);
+        run.status = "failed";
+        run.outcome = "failed";
+        run.finishedAt = finishedAt;
+        run.caseRuns.forEach((caseRun) => {
+          if (caseRun.status !== "queued" && caseRun.status !== "running") return;
+          const wasRunning = caseRun.status === "running";
+          caseRun.status = "failed";
+          caseRun.outcome = "failed";
+          caseRun.summary = wasRunning ? `执行中断：${reason}` : `未执行：${reason}`;
+          caseRun.finishedAt = finishedAt;
+        });
+        run.scenarioRuns.forEach((scenarioRun) => {
+          if (scenarioRun.status !== "queued" && scenarioRun.status !== "running") return;
+          const prefix = scenarioRun.status === "running" ? "执行中断" : "未执行";
+          scenarioRun.status = "failed";
+          scenarioRun.outcome = "failed";
+          scenarioRun.summary = scenarioRun.summary
+            ? `${scenarioRun.summary}\n${prefix}：${reason}`
+            : `${prefix}：${reason}`;
+          scenarioRun.finishedAt = finishedAt;
+        });
+      }
+      return interruptedRunIds;
+    });
+  }
 }
 
 export const catalogStore = new CatalogStore(path.resolve(process.cwd(), ".data", "catalog.json"));

@@ -150,6 +150,38 @@ test("keeps case snapshots stable after the source case changes", async (t) => {
   assert.equal(run.caseRuns[0].expectedResultSnapshot, "原始预期");
 });
 
+test("marks active test runs as failed after a service restart", async (t) => {
+  const store = await createStore(t);
+  const [product] = await store.listProducts();
+  const testCase = await store.createTestCase(product.id, {
+    name: "重启恢复用例",
+    steps: "执行一个长时间任务",
+    expectedResult: "任务完成",
+  });
+  const order = await store.createTestOrder(product.id, {
+    name: "重启恢复测试单",
+    caseIds: [testCase.id],
+  });
+  const run = await store.createTestRun("interrupted-run", order.id);
+  await store.updateTestRun(run.id, (storedRun) => {
+    storedRun.status = "running";
+    storedRun.scenarioRuns[0].status = "running";
+    storedRun.caseRuns[0].status = "running";
+  });
+
+  const recoveredIds = await store.failInterruptedTestRuns("平台服务重启");
+  const detail = await store.getTestOrderDetail(product.id, order.id);
+  const recoveredRun = detail.runs.find((item) => item.id === run.id);
+
+  assert.deepEqual(recoveredIds, [run.id]);
+  assert.equal(recoveredRun?.status, "failed");
+  assert.equal(recoveredRun?.outcome, "failed");
+  assert.equal(recoveredRun?.scenarioRuns[0].status, "failed");
+  assert.match(recoveredRun?.scenarioRuns[0].summary || "", /执行中断：平台服务重启/);
+  assert.equal(recoveredRun?.caseRuns[0].status, "failed");
+  assert.equal(recoveredRun?.caseRuns[0].summary, "执行中断：平台服务重启");
+});
+
 test("creates structured resources, a physical environment, and an independent scenario", async (t) => {
   const store = await createStore(t);
   const [product] = await store.listProducts();

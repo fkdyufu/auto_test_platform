@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express, { type Response } from "express";
@@ -85,6 +85,7 @@ const app = express();
 const port = Number(process.env.PORT || 3001);
 const runs = new Map<string, RunRecord>();
 const runLogsDirectory = path.resolve(process.cwd(), ".data", "runs");
+const INTERRUPTED_RUN_REASON = "平台服务重启，原执行进程已终止";
 
 app.use(express.json({ limit: "1mb" }));
 
@@ -148,6 +149,32 @@ async function hydrateRun(runId: string): Promise<RunRecord | undefined> {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
+  }
+}
+
+async function recoverInterruptedRuns(): Promise<void> {
+  const catalogRunIds = new Set(await catalogStore.failInterruptedTestRuns(INTERRUPTED_RUN_REASON));
+  await mkdir(runLogsDirectory, { recursive: true });
+  const fileNames = await readdir(runLogsDirectory);
+  let recoveredCount = 0;
+
+  for (const fileName of fileNames) {
+    const match = /^([a-zA-Z0-9-]+)\.jsonl$/.exec(fileName);
+    if (!match) continue;
+    const run = await hydrateRun(match[1]);
+    if (!run) continue;
+    if (run.status === "queued" || run.status === "running") {
+      publish(run, { type: "error", message: INTERRUPTED_RUN_REASON, error: true });
+      updateStatus(run, "failed", "执行因平台服务重启而中断");
+      await run.logWrite;
+      recoveredCount += 1;
+    } else if (!catalogRunIds.has(run.id)) {
+      runs.delete(run.id);
+    }
+  }
+
+  if (recoveredCount > 0) {
+    console.warn(`已将 ${recoveredCount} 个遗留执行任务标记为失败`);
   }
 }
 
@@ -892,6 +919,15 @@ app.use((error: unknown, _request: express.Request, response: express.Response, 
   response.status(error instanceof CatalogError ? error.status : 400).json({ error: message });
 });
 
-app.listen(port, "127.0.0.1", () => {
-  console.log(`API server listening on http://127.0.0.1:${port}`);
-});
+async function startServer(): Promise<void> {
+  try {
+    await recoverInterruptedRuns();
+  } catch (error) {
+    console.error("恢复遗留执行任务失败", error);
+  }
+  app.listen(port, "127.0.0.1", () => {
+    console.log(`API server listening on http://127.0.0.1:${port}`);
+  });
+}
+
+void startServer();

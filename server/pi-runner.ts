@@ -7,12 +7,15 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { createBrowserTools, type FinishResult } from "./browser-tools.js";
+import { createInactivityGuard, createTextDeltaBatcher } from "./agent-event-control.js";
 import type { DeviceResource } from "./catalog-store.js";
 import { createDeviceTools } from "./device-tools.js";
 import { modelRuntimePaths, type ModelSettings } from "./settings-store.js";
 import { createToolEvidence } from "./tool-evidence.js";
 
 const RUNTIME_PROVIDER_ID = "test-runner";
+const AGENT_INACTIVITY_TIMEOUT_MS = 5 * 60_000;
+const ASSISTANT_DELTA_BATCH_MS = 250;
 
 const SYSTEM_PROMPT = `你是一个自动化测试执行 Agent。你会收到一段测试需求，并通过当前提供的浏览器或设备控制工具直接完成它。
 
@@ -156,6 +159,11 @@ export async function executePiRun(options: PiRunOptions): Promise<{ result?: Fi
     settingsManager,
     sessionManager: SessionManager.inMemory(modelRuntimePaths.workspaceDirectory),
   });
+  const inactivityGuard = createInactivityGuard(AGENT_INACTIVITY_TIMEOUT_MS, () => session.abort());
+  const deltaBatcher = createTextDeltaBatcher(
+    (message) => options.onEvent({ type: "assistant_delta", message }),
+    ASSISTANT_DELTA_BATCH_MS,
+  );
 
   options.onAbortReady(async () => {
     await session.abort();
@@ -163,18 +171,25 @@ export async function executePiRun(options: PiRunOptions): Promise<{ result?: Fi
   });
 
   session.subscribe((event) => {
+    inactivityGuard.touch();
     if (event.type === "agent_start") {
+      deltaBatcher.flush();
       options.onEvent({ type: "status", message: "Agent 已开始执行" });
     } else if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-      options.onEvent({ type: "assistant_delta", message: event.assistantMessageEvent.delta });
+      deltaBatcher.push(event.assistantMessageEvent.delta);
     } else if (event.type === "message_end" && (event.message as { role?: string }).role === "assistant") {
+      deltaBatcher.flush();
       const assistantMessage = event.message as { stopReason?: string; errorMessage?: string };
       if (assistantMessage.stopReason === "error" || assistantMessage.stopReason === "aborted") {
         modelError = assistantMessage.errorMessage || "模型请求失败";
       }
-      finalText = getMessageText(event.message) || finalText;
-      if (finalText) options.onEvent({ type: "assistant", message: finalText });
+      const messageText = getMessageText(event.message);
+      if (messageText) {
+        finalText = messageText;
+        options.onEvent({ type: "assistant", message: messageText });
+      }
     } else if (event.type === "tool_execution_start") {
+      deltaBatcher.flush();
       options.onEvent({
         type: "tool_start",
         tool: event.toolName,
@@ -182,6 +197,7 @@ export async function executePiRun(options: PiRunOptions): Promise<{ result?: Fi
         args: event.args,
       });
     } else if (event.type === "tool_execution_end") {
+      deltaBatcher.flush();
       options.onEvent({
         type: "tool_end",
         tool: event.toolName,
@@ -193,10 +209,13 @@ export async function executePiRun(options: PiRunOptions): Promise<{ result?: Fi
   });
 
   try {
-    await session.prompt(options.requirement);
+    inactivityGuard.touch();
+    await Promise.race([session.prompt(options.requirement), inactivityGuard.timeout]);
     if (modelError) throw new Error(modelError);
     return { result: finishResult, finalText };
   } finally {
+    inactivityGuard.dispose();
+    deltaBatcher.flush();
     session.dispose();
     await Promise.all([browserToolset.driver.close(), deviceToolset.driver.close()]);
   }
