@@ -1892,6 +1892,7 @@ button:disabled {
 .resource-picker {
   display: grid;
   max-height: 190px;
+  flex: 0 0 auto;
   grid-template-columns: 1fr 1fr;
 }
 
