@@ -5,6 +5,7 @@ import {
   CircleStop,
   ClipboardList,
   Eye,
+  FileText,
   LoaderCircle,
   Network,
   Pencil,
@@ -29,6 +30,7 @@ import {
   type TestScenario,
 } from "../api";
 import { RunMonitor } from "../components/RunMonitor";
+import { TestRunReportDialog } from "../components/TestRunReport";
 import { InlineNotice, Modal, PageHeader, type Notice } from "../components/ui";
 
 const STATUS_LABELS: Record<RunStatus, string> = {
@@ -82,6 +84,7 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
   const [submitting, setSubmitting] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
   const [activeRun, setActiveRun] = useState<RunResponse | null>(null);
+  const [reportRun, setReportRun] = useState<TestRun | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
 
   const active = activeRun?.status === "queued" || activeRun?.status === "running";
@@ -110,6 +113,7 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
     setDetail(null);
     setDialog(null);
     setCaseDialog(null);
+    setReportRun(null);
     setActiveRun(null);
     void Promise.all([
       api.getTestOrders(product.id),
@@ -319,6 +323,7 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
       )
     : [];
   const executionPlanCases = groupedCases.flatMap(([, testCases]) => testCases);
+  const activeTestRun = activeRun ? detail?.runs.find((run) => run.id === activeRun.id) : undefined;
 
   return (
     <div className="page orders-page">
@@ -483,7 +488,15 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
             <section className="detail-section run-monitor-section">
               <div className="content-toolbar">
                 <div><LoaderCircle className={active ? "spin" : ""} size={17} /><strong>执行过程</strong></div>
-                <span className="run-id">{activeRun.id.slice(0, 8)}</span>
+                <div className="run-monitor-actions">
+                  {activeTestRun && !active && (
+                    <button className="button secondary compact" onClick={() => setReportRun(activeTestRun)}>
+                      <FileText size={15} />
+                      查看报告
+                    </button>
+                  )}
+                  <span className="run-id">{activeRun.id.slice(0, 8)}</span>
+                </div>
               </div>
               <RunMonitor events={activeRun.events} status={activeRun.status} emptyText="等待执行" />
             </section>
@@ -512,9 +525,14 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
                         <td><StatusBadge run={run} /></td>
                         <td>{duration}</td>
                         <td>
-                          <button className="icon-action" onClick={() => void viewRun(run)} title="查看执行过程">
-                            <Eye size={16} />
-                          </button>
+                          <div className="row-actions">
+                            <button className="icon-action" onClick={() => setReportRun(run)} title="查看执行报告">
+                              <FileText size={16} />
+                            </button>
+                            <button className="icon-action" onClick={() => void viewRun(run)} title="查看执行过程">
+                              <Eye size={16} />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );
@@ -644,6 +662,15 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
             </label>
           </div>
         </Modal>
+      )}
+
+      {reportRun && detail && (
+        <TestRunReportDialog
+          run={reportRun}
+          orderName={detail.name}
+          physicalEnvironmentName={detail.physicalEnvironmentName}
+          onClose={() => setReportRun(null)}
+        />
       )}
     </div>
   );
