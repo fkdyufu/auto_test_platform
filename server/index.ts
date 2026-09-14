@@ -925,8 +925,8 @@ async function startServer(): Promise<void> {
   } catch (error) {
     console.error("恢复遗留执行任务失败", error);
   }
-  app.listen(port, "127.0.0.1", () => {
-    console.log(`API server listening on http://127.0.0.1:${port}`);
+  app.listen(port, "0.0.0.0", () => {
+    console.log(`API server listening on http://0.0.0.0:${port}`);
   });
 }
 
