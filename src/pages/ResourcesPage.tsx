@@ -81,7 +81,7 @@ function newId(): string {
 function emptyDevice(): DeviceResourceInput {
   return {
     name: "",
-    type: "",
+    types: [""],
     model: "",
     description: "",
     controlInterfaces: [],
@@ -244,7 +244,7 @@ export function ResourcesPage({ product }: { product: ProductSummary }) {
                 {devices.map((device) => (
                   <tr key={device.id}>
                     <td className="name-cell"><strong>{device.name}</strong><small>{device.description || "暂无说明"}</small></td>
-                    <td>{device.type}<span className="cell-subtext">{device.model || "未配置型号"}</span></td>
+                    <td>{device.types.join("、")}<span className="cell-subtext">{device.model || "未配置型号"}</span></td>
                     <td>{device.controlInterfaces.length}<span className="cell-subtext">{device.controlInterfaces.slice(0, 2).map((item) => `${INTERFACE_LABELS[item.type]} ${item.address}`).join("；") || "未配置"}</span></td>
                     <td className="truncate-cell">{device.description || "-"}</td>
                     <td><div className="row-actions">
@@ -330,9 +330,15 @@ function DeviceForm({ dialog, setDialog }: { dialog: Extract<ResourceDialog, { k
   return <>
     <div className="modal-grid">
       <label className="field"><span>设备名称</span><input autoFocus value={dialog.form.name} onChange={(event) => update({ name: event.target.value })} /></label>
-      <label className="field"><span>设备类型</span><input value={dialog.form.type} placeholder="例如 TAU、交换机、终端主机" onChange={(event) => update({ type: event.target.value })} /></label>
       <label className="field"><span>设备型号</span><input value={dialog.form.model} onChange={(event) => update({ model: event.target.value })} /></label>
       <label className="field full-width"><span>设备说明</span><textarea rows={2} value={dialog.form.description} onChange={(event) => update({ description: event.target.value })} /></label>
+    </div>
+    <div className="form-list-heading"><div><Server size={16} /><strong>设备类型</strong></div><button type="button" className="button secondary compact" onClick={() => update({ types: [...dialog.form.types, ""] })}><Plus size={15} />添加类型</button></div>
+    <div className="structured-list">
+      {dialog.form.types.map((type, index) => <div className="structured-row device-type-row" key={index}>
+        <label className="grow"><span>类型 {index + 1}</span><input value={type} placeholder="例如 host、peer、TAU" onChange={(event) => update({ types: dialog.form.types.map((item, itemIndex) => itemIndex === index ? event.target.value : item) })} /></label>
+        <button type="button" className="icon-action danger row-remove" title="删除类型" disabled={dialog.form.types.length === 1} onClick={() => update({ types: dialog.form.types.filter((_, itemIndex) => itemIndex !== index) })}><Trash2 size={16} /></button>
+      </div>)}
     </div>
     <div className="form-list-heading"><div><Server size={16} /><strong>控制接口</strong></div><button type="button" className="button secondary compact" onClick={() => update({ controlInterfaces: [...dialog.form.controlInterfaces, { id: newId(), name: "", type: "web", address: "", username: "", password: "" }] })}><Plus size={15} />添加接口</button></div>
     <div className="structured-list">
@@ -366,7 +372,7 @@ function PhysicalEnvironmentForm({ dialog, setDialog, devices }: { dialog: Extra
     </div>
     <div className="form-list-heading"><div><Server size={16} /><strong>环境设备</strong></div><small>已选择 {dialog.form.deviceIds.length} 台</small></div>
     <div className="case-picker resource-picker">
-      {devices.map((device) => <label key={device.id} className="case-option"><input type="checkbox" checked={dialog.form.deviceIds.includes(device.id)} onChange={() => toggleDevice(device.id)} /><span><strong>{device.name}</strong><small>{device.type}{device.model ? ` / ${device.model}` : ""}</small></span></label>)}
+      {devices.map((device) => <label key={device.id} className="case-option"><input type="checkbox" checked={dialog.form.deviceIds.includes(device.id)} onChange={() => toggleDevice(device.id)} /><span><strong>{device.name}</strong><small>{device.types.join("、")}{device.model ? ` / ${device.model}` : ""}</small></span></label>)}
       {!devices.length && <div className="list-empty">请先创建设备资源</div>}
     </div>
     <div className="form-list-heading"><div><Cable size={16} /><strong>物理连接</strong></div><button type="button" className="button secondary compact" disabled={selectedDevices.length < 2} onClick={() => update({ connections: [...dialog.form.connections, { id: newId(), sourceDeviceId: selectedDevices[0]?.id || "", sourcePort: "", targetDeviceId: selectedDevices[1]?.id || "", targetPort: "", description: "" }] })}><Plus size={15} />添加连接</button></div>

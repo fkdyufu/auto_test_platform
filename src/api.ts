@@ -136,7 +136,7 @@ export interface DeviceResource {
   id: string;
   productId: string;
   name: string;
-  type: string;
+  types: string[];
   model: string;
   description: string;
   controlInterfaces: ControlInterface[];
@@ -302,7 +302,7 @@ export interface TestOrderInput {
 
 export interface DeviceResourceInput {
   name: string;
-  type: string;
+  types: string[];
   model: string;
   description: string;
   controlInterfaces: ControlInterfaceInput[];

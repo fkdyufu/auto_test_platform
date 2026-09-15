@@ -45,7 +45,7 @@ export interface DeviceResource {
   id: string;
   productId: string;
   name: string;
-  type: string;
+  types: string[];
   model: string;
   description: string;
   controlInterfaces: ControlInterface[];
@@ -173,7 +173,7 @@ export interface TestRun {
 }
 
 interface CatalogData {
-  version: 8;
+  version: 9;
   products: Product[];
   testCases: TestCase[];
   deviceResources: DeviceResource[];
@@ -191,6 +191,10 @@ type LegacyCaseRun = Omit<CaseRun, "scenarioRunId"> & { scenarioRunId?: string }
 type LegacyTestRun = Omit<TestRun, "scenarioRuns" | "caseRuns"> & {
   scenarioRuns?: ScenarioRun[];
   caseRuns: LegacyCaseRun[];
+};
+type LegacyDeviceResource = Omit<DeviceResource, "types"> & {
+  type?: string;
+  types?: string[];
 };
 
 export interface ProductSummary extends Product {
@@ -270,6 +274,26 @@ function optionalText(value: unknown, maxLength = 10_000): string {
   return text;
 }
 
+function normalizeDeviceTypes(value: unknown): string[] {
+  const values = Array.isArray(value) ? value : typeof value === "string" ? [value] : [];
+  const types = values
+    .flatMap((item) => typeof item === "string" ? item.split(/[/,，]/) : [])
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (!types.length) throw new CatalogError("设备类型不能为空");
+  if (types.length > 20) throw new CatalogError("设备类型不能超过 20 个");
+  types.forEach((item) => {
+    if (item.length > 120) throw new CatalogError("单个设备类型不能超过 120 个字符");
+  });
+  const seen = new Set<string>();
+  return types.filter((item) => {
+    const normalized = item.toLowerCase();
+    if (seen.has(normalized)) return false;
+    seen.add(normalized);
+    return true;
+  });
+}
+
 function recordValue(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
@@ -317,7 +341,7 @@ function defaultData(): CatalogData {
     updatedAt: timestamp,
   }));
   return {
-    version: 8,
+    version: 9,
     products,
     testCases: [],
     deviceResources: [],
@@ -354,11 +378,11 @@ export class CatalogStore {
     this.initializePromise ??= this.initialize();
     await this.initializePromise;
     const data = JSON.parse(await readFile(this.filePath, "utf8")) as CatalogData & { version: number };
-    if (![1, 2, 3, 4, 5, 6, 7, 8].includes(data.version) || !Array.isArray(data.products) || !Array.isArray(data.testCases)) {
+    if (![1, 2, 3, 4, 5, 6, 7, 8, 9].includes(data.version) || !Array.isArray(data.products) || !Array.isArray(data.testCases)) {
       throw new CatalogError("业务数据文件格式不正确", 500);
     }
     const legacyData = data as typeof data & { labEnvironments?: PhysicalEnvironment[] };
-    data.version = 8;
+    data.version = 9;
     data.deviceResources ??= [];
     data.physicalEnvironments ??= legacyData.labEnvironments ?? [];
     delete legacyData.labEnvironments;
@@ -435,11 +459,11 @@ export class CatalogStore {
         if (!deviceOwners.has(deviceId)) deviceOwners.set(deviceId, physicalEnvironment.productId);
       });
     });
-    data.deviceResources = data.deviceResources.map((device) => ({
+    data.deviceResources = (data.deviceResources as LegacyDeviceResource[]).map((device) => ({
       id: device.id,
       productId: productIds.has(device.productId) ? device.productId : deviceOwners.get(device.id) || fallbackProductId,
       name: device.name,
-      type: device.type,
+      types: normalizeDeviceTypes(device.types?.length ? device.types : device.type),
       model: device.model || "",
       description: device.description || "",
       controlInterfaces: (device.controlInterfaces || []).map((control) => ({
@@ -791,7 +815,7 @@ export class CatalogStore {
         id: randomUUID(),
         productId,
         name,
-        type: requiredText(input.type, "设备类型", 120),
+        types: normalizeDeviceTypes(input.types ?? input.type),
         model: optionalText(input.model, 160),
         description: optionalText(input.description, 4_000),
         controlInterfaces: this.normalizeControlInterfaces(input.controlInterfaces ?? []),
@@ -810,7 +834,7 @@ export class CatalogStore {
       const name = requiredText(input.name, "设备名称", 160);
       uniqueName(data.deviceResources.filter((item) => item.productId === productId), name, "设备名称", id);
       device.name = name;
-      device.type = requiredText(input.type, "设备类型", 120);
+      device.types = normalizeDeviceTypes(input.types ?? input.type);
       device.model = optionalText(input.model, 160);
       device.description = optionalText(input.description, 4_000);
       device.controlInterfaces = this.normalizeControlInterfaces(input.controlInterfaces ?? [], device.controlInterfaces);

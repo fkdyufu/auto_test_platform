@@ -2378,6 +2378,11 @@ button:disabled {
   grid-template-columns: 90px 130px minmax(210px, 1fr) 130px 150px 34px;
 }
 
+.device-type-row {
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) 34px;
+}
+
 .connection-row {
   grid-template-columns: 140px 105px 20px 140px 105px minmax(130px, 1fr) 34px;
 }

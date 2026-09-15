@@ -40,7 +40,7 @@ const context = {
   devices: [{
     id: "device-1",
     name: "TAU1",
-    type: "TAU",
+    types: ["TAU"],
     model: "WKCJ-II",
     controlInterfaces: [{
       id: "ssh-1",

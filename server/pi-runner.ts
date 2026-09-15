@@ -63,6 +63,17 @@ export interface PiDiagnosticOptions extends Omit<PiRunOptions, "requirement" | 
   prompt: string;
 }
 
+export class ModelRequestError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ModelRequestError";
+  }
+}
+
+export function isModelRequestError(error: unknown): error is ModelRequestError {
+  return error instanceof ModelRequestError;
+}
+
 function getMessageText(message: unknown): string {
   if (!message || typeof message !== "object") return "";
   const content = (message as { content?: unknown }).content;
@@ -231,7 +242,7 @@ async function executePiAgent(options: PiAgentOptions): Promise<{ result?: Finis
   try {
     inactivityGuard.touch();
     await Promise.race([session.prompt(options.requirement), inactivityGuard.timeout]);
-    if (modelError) throw new Error(modelError);
+    if (modelError) throw new ModelRequestError(modelError);
     return { result: finishResult, finalText };
   } finally {
     inactivityGuard.dispose();
@@ -290,7 +301,7 @@ export async function testModelConnection(settings: ModelSettings): Promise<stri
 
   try {
     await session.prompt("只回复 CONNECTION_OK");
-    if (modelError) throw new Error(modelError);
+    if (modelError) throw new ModelRequestError(modelError);
     if (!finalText.includes("CONNECTION_OK")) {
       throw new Error("模型未返回预期的连接测试响应");
     }

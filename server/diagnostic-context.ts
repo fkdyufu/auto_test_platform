@@ -31,7 +31,7 @@ function formatDevices(context: DiagnosticExecutionContext): string {
           `${control.name || "未命名接口"}[${control.type}, ID: ${control.id}, 地址: ${control.address || "未配置"}${control.username ? `, 账号: ${control.username}` : ""}]`,
         ).join("；")
       : "未配置控制接口";
-    return `- ${device.name}（设备 ID: ${device.id}，类型: ${device.type}${device.model ? `，型号: ${device.model}` : ""}）\n  ${controls}`;
+    return `- ${device.name}（设备 ID: ${device.id}，类型: ${device.types.join("、")}${device.model ? `，型号: ${device.model}` : ""}）\n  ${controls}`;
   });
   const connections = context.physicalEnvironment.connections.map((connection) => {
     const source = deviceById.get(connection.sourceDeviceId)?.name || connection.sourceDeviceId;

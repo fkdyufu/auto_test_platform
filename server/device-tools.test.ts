@@ -20,7 +20,7 @@ function testDevice(): DeviceResource {
     id: "device-1",
     productId: "product-1",
     name: "TAU-1",
-    type: "TAU",
+    types: ["TAU"],
     model: "WKCJ-II",
     description: "",
     controlInterfaces: [

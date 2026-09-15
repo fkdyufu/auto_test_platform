@@ -88,3 +88,12 @@ test("formats report durations for quick scanning", () => {
   assert.equal(formatRunDuration(125_000), "2 分 5 秒");
   assert.equal(formatRunDuration(3_661_000), "1 小时 1 分");
 });
+
+test("surfaces possible residual configuration in scenario cleanup issues", () => {
+  const residualRiskRun = structuredClone(run);
+  residualRiskRun.scenarioRuns[0].cleanupSummary = "模型接口异常，无法执行自动清理，环境可能残留配置";
+
+  const report = buildTestRunReport(residualRiskRun);
+
+  assert.match(report.scenarioIssues[0].reason, /环境可能残留配置/);
+});

@@ -59,7 +59,7 @@ test("migrates legacy test order fields without losing the collection", async (t
   const [product] = await store.listProducts();
   const device = await store.createDeviceResource(product.id, {
     name: "旧版设备",
-    type: "TAU",
+    types: ["TAU"],
     controlInterfaces: [],
   });
   const physicalEnvironment = await store.createPhysicalEnvironment(product.id, {
@@ -105,6 +105,34 @@ test("migrates legacy test order fields without losing the collection", async (t
   assert.equal("password" in detail, false);
   assert.equal("scenarioId" in detail, false);
   assert.equal("roleBindings" in detail, false);
+});
+
+test("migrates a legacy slash-separated device type into multiple types", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "ai-test-catalog-device-types-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const filePath = path.join(directory, "catalog.json");
+  const store = new CatalogStore(filePath);
+  const [product] = await store.listProducts();
+  const device = await store.createDeviceResource(product.id, {
+    name: "多角色终端",
+    types: ["peer", "host"],
+    controlInterfaces: [],
+  });
+  const data = JSON.parse(await readFile(filePath, "utf8")) as {
+    version: number;
+    deviceResources: Array<Record<string, unknown>>;
+  };
+  const storedDevice = data.deviceResources.find((item) => item.id === device.id);
+  assert.ok(storedDevice);
+  data.version = 8;
+  storedDevice.type = "peer/host";
+  delete storedDevice.types;
+  await writeFile(filePath, `${JSON.stringify(data, null, 2)}\n`);
+
+  const [migratedDevice] = await new CatalogStore(filePath).listDeviceResources(product.id);
+
+  assert.deepEqual(migratedDevice.types, ["peer", "host"]);
+  assert.equal("type" in migratedDevice, false);
 });
 
 test("rejects cases from another product", async (t) => {
@@ -212,13 +240,13 @@ test("creates structured resources, a physical environment, and an independent s
   const [product] = await store.listProducts();
   const master = await store.createDeviceResource(product.id, {
     name: "TAU-01",
-    type: "TAU",
+    types: ["TAU"],
     model: "WKCJ-II",
     controlInterfaces: [{ name: "Web 管理", type: "web", address: "http://192.168.1.10", username: "root", password: "secret" }],
   });
   const backup = await store.createDeviceResource(product.id, {
     name: "TAU-02",
-    type: "TAU",
+    types: ["TAU"],
     controlInterfaces: [{ name: "Telnet 管理", type: "telnet", address: "192.168.1.11:23", username: "", password: "" }],
   });
   const physicalEnvironment = await store.createPhysicalEnvironment(product.id, {
@@ -269,7 +297,7 @@ test("creates structured resources, a physical environment, and an independent s
 
   await store.updateDeviceResource(product.id, master.id, {
     name: master.name,
-    type: master.type,
+    types: master.types,
     model: master.model,
     description: master.description,
     controlInterfaces: [{ ...master.controlInterfaces[0], password: "" }],
@@ -293,7 +321,7 @@ test("rejects relay as a control interface type", async (t) => {
   await assert.rejects(
     store.createDeviceResource(product.id, {
       name: "错误接口设备",
-      type: "TAU",
+      types: ["TAU"],
       controlInterfaces: [{ name: "继电器", type: "relay", address: "relay-01:1" }],
     }),
     (error: unknown) => error instanceof CatalogError && error.message === "控制接口类型不正确",
@@ -303,7 +331,7 @@ test("rejects relay as a control interface type", async (t) => {
 test("does not attach scenarios or role bindings to test orders", async (t) => {
   const store = await createStore(t);
   const [product] = await store.listProducts();
-  const device = await store.createDeviceResource(product.id, { name: "环境内设备", type: "TAU", controlInterfaces: [] });
+  const device = await store.createDeviceResource(product.id, { name: "环境内设备", types: ["TAU"], controlInterfaces: [] });
   const physicalEnvironment = await store.createPhysicalEnvironment(product.id, {
     name: "隔离环境",
     deviceIds: [device.id],
@@ -336,12 +364,12 @@ test("isolates resources, physical environments, and orders by product", async (
   const [firstProduct, secondProduct] = await store.listProducts();
   const firstDevice = await store.createDeviceResource(firstProduct.id, {
     name: "同名设备",
-    type: "TAU",
+    types: ["TAU"],
     controlInterfaces: [],
   });
   const secondDevice = await store.createDeviceResource(secondProduct.id, {
     name: "同名设备",
-    type: "TAU",
+    types: ["TAU"],
     controlInterfaces: [],
   });
 

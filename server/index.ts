@@ -17,8 +17,17 @@ import {
 import { sanitizeToolEvent } from "./event-sanitizer.js";
 import { buildDiagnosticPrompt } from "./diagnostic-context.js";
 import { diagnosticStore } from "./diagnostic-store.js";
-import { executePiDiagnostic, executePiRun, testModelConnection, type RunnerEvent } from "./pi-runner.js";
+import { deviceMatchesRoleType } from "./device-types.js";
+import {
+  executePiDiagnostic,
+  executePiRun,
+  isModelRequestError,
+  testModelConnection,
+  type ModelRequestError,
+  type RunnerEvent,
+} from "./pi-runner.js";
 import { resolveRunResult } from "./run-result.js";
+import { decideScenarioCleanup } from "./scenario-cleanup-policy.js";
 import {
   readModelSettings,
   readZentaoSettings,
@@ -27,6 +36,7 @@ import {
   saveZentaoSettings,
   toPublicSettings,
   toPublicZentaoSettings,
+  type ModelSettings,
 } from "./settings-store.js";
 import { getZentaoClient } from "./zentao-client.js";
 import { zentaoRouter } from "./zentao-routes.js";
@@ -242,7 +252,7 @@ function buildPhysicalEnvironmentDescription(context: TestOrderExecutionContext)
           })
           .join("；")
       : "未配置控制接口";
-    return `- ${device.name}（ID: ${device.id}，类型: ${device.type}${device.model ? `，型号: ${device.model}` : ""}）\n  控制接口: ${controls}`;
+    return `- ${device.name}（ID: ${device.id}，类型: ${device.types.join("、")}${device.model ? `，型号: ${device.model}` : ""}）\n  控制接口: ${controls}`;
   });
   const connectionLines = physicalEnvironment.connections.map((connection) => {
     const source = deviceById.get(connection.sourceDeviceId)?.name || connection.sourceDeviceId;
@@ -276,7 +286,7 @@ function buildScenarioSetupRequirement(
 ): string {
   const candidateLines = scenario.roles.map((role) => {
     const candidates = context.devices.filter(
-      (device) => device.type.trim().toLowerCase() === role.deviceType.trim().toLowerCase(),
+      (device) => deviceMatchesRoleType(device, role.deviceType),
     );
     return `- ${role.name}（${role.key}，类型: ${role.deviceType}）：${candidates.map((device) => `${device.name}[${device.id}]`).join("、") || "无匹配设备"}`;
   });
@@ -296,8 +306,9 @@ function buildScenarioCleanupRequirement(
   scenario: TestScenario,
   scenarioRun: ScenarioRun,
   context: TestOrderExecutionContext,
+  triggerReason: string,
 ): string {
-  return `测试用例组已经执行完毕，请清理测试场景。${buildPhysicalEnvironmentDescription(context)}\n\n${buildScenarioDescription(scenario, scenarioRun, context)}\n\n场景清理要求：\n${scenario.cleanupInstructions}\n\n请使用当前真正可用的工具执行清理并验证。当前未提供的控制接口不得假装已调用。完成后调用 finish_test 提交结论。`;
+  return `请清理测试场景。当前执行状态：${triggerReason}。无论此前执行是否成功，都应以恢复环境为目标。${buildPhysicalEnvironmentDescription(context)}\n\n${buildScenarioDescription(scenario, scenarioRun, context)}\n\n场景清理要求：\n${scenario.cleanupInstructions}\n\n请使用当前真正可用的工具执行清理并验证。当前未提供的控制接口不得假装已调用。完成后调用 finish_test 提交结论。`;
 }
 
 async function updateStoredCaseRun(runId: string, caseRunId: string, update: Partial<CaseRun>): Promise<void> {
@@ -325,10 +336,53 @@ function scenarioBindingDefinition(scenario: TestScenario, context: TestOrderExe
     roles: scenario.roles.map((role) => ({
       key: role.key,
       allowedDeviceIds: context.devices
-        .filter((device) => device.type.trim().toLowerCase() === role.deviceType.trim().toLowerCase())
+        .filter((device) => deviceMatchesRoleType(device, role.deviceType))
         .map((device) => device.id),
     })),
   };
+}
+
+async function executeScenarioCleanup(
+  run: RunRecord,
+  scenario: TestScenario,
+  scenarioRun: ScenarioRun,
+  context: TestOrderExecutionContext,
+  settings: ModelSettings,
+  triggerReason: string,
+): Promise<{ outcome: "passed" | "failed"; summary: string }> {
+  publish(run, {
+    type: "scenario_state",
+    status: "running",
+    message: `清理场景：${scenario.name}`,
+    scenarioRunId: scenarioRun.id,
+    scenarioName: scenario.name,
+  });
+  try {
+    const execution = await executePiRun({
+      runId: `${scenarioRun.id}-cleanup`,
+      requirement: buildScenarioCleanupRequirement(scenario, scenarioRun, context, triggerReason),
+      settings,
+      devices: context.devices,
+      onEvent: (event) => publish(run, {
+        ...event,
+        scenarioRunId: scenarioRun.id,
+        scenarioName: scenario.name,
+      }),
+      onAbortReady: (abort) => {
+        run.abort = abort;
+      },
+    });
+    const result = resolveRunResult(execution);
+    return { outcome: result.outcome, summary: result.message };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "场景清理失败";
+    return {
+      outcome: "failed",
+      summary: `自动清理失败，环境可能残留配置：${reason}`,
+    };
+  } finally {
+    run.abort = undefined;
+  }
 }
 
 async function executeTestOrderRun(run: RunRecord, order: TestOrder, testRun: TestRun): Promise<void> {
@@ -363,7 +417,9 @@ async function executeTestOrderRun(run: RunRecord, order: TestOrder, testRun: Te
     });
 
     let setupFailure = "";
+    let setupAttempted = false;
     let scenarioHasFailure = false;
+    let modelRequestFailure: ModelRequestError | undefined;
     if (!scenario) {
       setupFailure = "测试场景不存在或已删除";
     } else if (scenarioRun.isDefault) {
@@ -379,6 +435,7 @@ async function executeTestOrderRun(run: RunRecord, order: TestOrder, testRun: Te
     } else if (!executionContext.physicalEnvironment) {
       setupFailure = "测试单未选择物理环境，无法搭建非默认场景";
     } else {
+      setupAttempted = true;
       try {
         const execution = await executePiRun({
           runId: `${scenarioRun.id}-setup`,
@@ -416,22 +473,22 @@ async function executeTestOrderRun(run: RunRecord, order: TestOrder, testRun: Te
           }
         }
       } catch (error) {
-        if (!run.cancelRequested) setupFailure = error instanceof Error ? error.message : "场景搭建失败";
+        if (!run.cancelRequested) {
+          setupFailure = error instanceof Error ? error.message : "场景搭建失败";
+          if (isModelRequestError(error)) modelRequestFailure = error;
+        }
       }
     }
 
-    if (run.cancelRequested) break;
     if (setupFailure) {
       const finishedAt = new Date().toISOString();
       failedCount += scenarioCaseRuns.length;
       scenarioFailure = true;
+      scenarioHasFailure = true;
       await catalogStore.updateTestRun(testRun.id, (storedRun) => {
         const storedScenarioRun = storedRun.scenarioRuns.find((item) => item.id === scenarioRun.id);
         if (storedScenarioRun) Object.assign(storedScenarioRun, {
-          status: "failed",
-          outcome: "failed",
           summary: setupFailure,
-          finishedAt,
         });
         storedRun.caseRuns
           .filter((item) => scenarioRun.caseRunIds.includes(item.id))
@@ -456,159 +513,148 @@ async function executeTestOrderRun(run: RunRecord, order: TestOrder, testRun: Te
           scenarioName: scenarioRun.scenarioNameSnapshot,
         });
       }
-      publish(run, {
-        type: "scenario_result",
-        status: "failed",
-        outcome: "failed",
-        error: true,
-        message: `${scenarioRun.scenarioNameSnapshot}：${setupFailure}`,
-        scenarioRunId: scenarioRun.id,
-        scenarioName: scenarioRun.scenarioNameSnapshot,
-      });
-      continue;
     }
 
-    for (const caseRun of scenarioCaseRuns) {
-      if (run.cancelRequested) break;
-      const caseStartedAt = new Date().toISOString();
-      await updateStoredCaseRun(testRun.id, caseRun.id, { status: "running", startedAt: caseStartedAt });
-      publish(run, {
-        type: "case_state",
-        status: "running",
-        message: `开始执行：${caseRun.caseNameSnapshot}`,
-        testCaseId: caseRun.testCaseId,
-        caseRunId: caseRun.id,
-        caseName: caseRun.caseNameSnapshot,
-        scenarioRunId: scenarioRun.id,
-        scenarioName: scenarioRun.scenarioNameSnapshot,
-      });
-
-      try {
-        const execution = await executePiRun({
-          runId: caseRun.id,
-          requirement: buildCaseRequirement(caseRun, scenario!, scenarioRun, executionContext),
-          settings,
-          devices: executionContext.devices,
-          onEvent: (event) =>
-            publish(run, {
-              ...event,
-              testCaseId: caseRun.testCaseId,
-              caseRunId: caseRun.id,
-              caseName: caseRun.caseNameSnapshot,
-              scenarioRunId: scenarioRun.id,
-              scenarioName: scenarioRun.scenarioNameSnapshot,
-            }),
-          onAbortReady: (abort) => {
-            run.abort = abort;
-            if (run.cancelRequested) void abort();
-          },
+    if (!setupFailure && !run.cancelRequested) {
+      for (const caseRun of scenarioCaseRuns) {
+        if (run.cancelRequested) break;
+        const caseStartedAt = new Date().toISOString();
+        await updateStoredCaseRun(testRun.id, caseRun.id, { status: "running", startedAt: caseStartedAt });
+        publish(run, {
+          type: "case_state",
+          status: "running",
+          message: `开始执行：${caseRun.caseNameSnapshot}`,
+          testCaseId: caseRun.testCaseId,
+          caseRunId: caseRun.id,
+          caseName: caseRun.caseNameSnapshot,
+          scenarioRunId: scenarioRun.id,
+          scenarioName: scenarioRun.scenarioNameSnapshot,
         });
 
-        if (run.cancelRequested) {
+        try {
+          const execution = await executePiRun({
+            runId: caseRun.id,
+            requirement: buildCaseRequirement(caseRun, scenario!, scenarioRun, executionContext),
+            settings,
+            devices: executionContext.devices,
+            onEvent: (event) =>
+              publish(run, {
+                ...event,
+                testCaseId: caseRun.testCaseId,
+                caseRunId: caseRun.id,
+                caseName: caseRun.caseNameSnapshot,
+                scenarioRunId: scenarioRun.id,
+                scenarioName: scenarioRun.scenarioNameSnapshot,
+              }),
+            onAbortReady: (abort) => {
+              run.abort = abort;
+              if (run.cancelRequested) void abort();
+            },
+          });
+
+          if (run.cancelRequested) {
+            await updateStoredCaseRun(testRun.id, caseRun.id, {
+              status: "cancelled",
+              summary: "任务已取消",
+              finishedAt: new Date().toISOString(),
+            });
+            break;
+          }
+
+          const result = resolveRunResult(execution);
+          if (result.outcome === "passed") passedCount += 1;
+          else {
+            failedCount += 1;
+            scenarioHasFailure = true;
+          }
           await updateStoredCaseRun(testRun.id, caseRun.id, {
-            status: "cancelled",
-            summary: "任务已取消",
+            status: "completed",
+            outcome: result.outcome,
+            summary: result.message,
             finishedAt: new Date().toISOString(),
           });
-          break;
-        }
+          publish(run, {
+            type: "case_result",
+            status: "completed",
+            outcome: result.outcome,
+            error: result.outcome === "failed",
+            message: `${caseRun.caseNameSnapshot}：${result.message}`,
+            testCaseId: caseRun.testCaseId,
+            caseRunId: caseRun.id,
+            caseName: caseRun.caseNameSnapshot,
+            scenarioRunId: scenarioRun.id,
+            scenarioName: scenarioRun.scenarioNameSnapshot,
+          });
+        } catch (error) {
+          if (run.cancelRequested) {
+            await updateStoredCaseRun(testRun.id, caseRun.id, {
+              status: "cancelled",
+              summary: "任务已取消",
+              finishedAt: new Date().toISOString(),
+            });
+            break;
+          }
 
-        const result = resolveRunResult(execution);
-        if (result.outcome === "passed") passedCount += 1;
-        else {
           failedCount += 1;
           scenarioHasFailure = true;
-        }
-        await updateStoredCaseRun(testRun.id, caseRun.id, {
-          status: "completed",
-          outcome: result.outcome,
-          summary: result.message,
-          finishedAt: new Date().toISOString(),
-        });
-        publish(run, {
-          type: "case_result",
-          status: "completed",
-          outcome: result.outcome,
-          error: result.outcome === "failed",
-          message: `${caseRun.caseNameSnapshot}：${result.message}`,
-          testCaseId: caseRun.testCaseId,
-          caseRunId: caseRun.id,
-          caseName: caseRun.caseNameSnapshot,
-          scenarioRunId: scenarioRun.id,
-          scenarioName: scenarioRun.scenarioNameSnapshot,
-        });
-      } catch (error) {
-        if (run.cancelRequested) {
+          const message = error instanceof Error ? error.message : "用例执行失败";
           await updateStoredCaseRun(testRun.id, caseRun.id, {
-            status: "cancelled",
-            summary: "任务已取消",
+            status: "failed",
+            outcome: "failed",
+            summary: message,
             finishedAt: new Date().toISOString(),
           });
-          break;
+          publish(run, {
+            type: "case_result",
+            status: "failed",
+            outcome: "failed",
+            error: true,
+            message: `${caseRun.caseNameSnapshot}：${message}`,
+            testCaseId: caseRun.testCaseId,
+            caseRunId: caseRun.id,
+            caseName: caseRun.caseNameSnapshot,
+            scenarioRunId: scenarioRun.id,
+            scenarioName: scenarioRun.scenarioNameSnapshot,
+          });
+          if (isModelRequestError(error)) {
+            modelRequestFailure = error;
+            break;
+          }
         }
-
-        failedCount += 1;
-        scenarioHasFailure = true;
-        const message = error instanceof Error ? error.message : "用例执行失败";
-        await updateStoredCaseRun(testRun.id, caseRun.id, {
-          status: "failed",
-          outcome: "failed",
-          summary: message,
-          finishedAt: new Date().toISOString(),
-        });
-        publish(run, {
-          type: "case_result",
-          status: "failed",
-          outcome: "failed",
-          error: true,
-          message: `${caseRun.caseNameSnapshot}：${message}`,
-          testCaseId: caseRun.testCaseId,
-          caseRunId: caseRun.id,
-          caseName: caseRun.caseNameSnapshot,
-          scenarioRunId: scenarioRun.id,
-          scenarioName: scenarioRun.scenarioNameSnapshot,
-        });
       }
     }
 
-    if (run.cancelRequested) break;
-
     let cleanupOutcome: "passed" | "failed" | undefined;
     let cleanupSummary: string | undefined;
-    if (scenario && !scenario.isDefault && scenario.cleanupInstructions.trim()) {
-      publish(run, {
-        type: "scenario_state",
-        status: "running",
-        message: `清理场景：${scenario.name}`,
-        scenarioRunId: scenarioRun.id,
-        scenarioName: scenario.name,
+    if (scenario) {
+      const cleanupDecision = decideScenarioCleanup({
+        setupAttempted,
+        isDefault: scenario.isDefault,
+        hasCleanupInstructions: Boolean(scenario.cleanupInstructions.trim()),
+        recoveryRequired: Boolean(setupFailure || scenarioHasFailure || run.cancelRequested),
+        modelRequestFailed: Boolean(modelRequestFailure),
       });
-      try {
-        const execution = await executePiRun({
-          runId: `${scenarioRun.id}-cleanup`,
-          requirement: buildScenarioCleanupRequirement(scenario, scenarioRun, executionContext),
+      if (cleanupDecision.action === "run") {
+        const triggerReason = run.cancelRequested
+          ? "用户已取消测试"
+          : setupFailure
+            ? `场景搭建失败：${setupFailure}`
+            : scenarioHasFailure
+              ? "场景内存在失败用例"
+              : "场景内用例已经执行完毕";
+        const cleanup = await executeScenarioCleanup(
+          run,
+          scenario,
+          scenarioRun,
+          executionContext,
           settings,
-          devices: executionContext.devices,
-          onEvent: (event) => publish(run, {
-            ...event,
-            scenarioRunId: scenarioRun.id,
-            scenarioName: scenario.name,
-          }),
-          onAbortReady: (abort) => {
-            run.abort = abort;
-            if (run.cancelRequested) void abort();
-          },
-        });
-        if (!run.cancelRequested) {
-          const result = resolveRunResult(execution);
-          cleanupOutcome = result.outcome;
-          cleanupSummary = result.message;
-        }
-      } catch (error) {
-        if (!run.cancelRequested) {
-          cleanupOutcome = "failed";
-          cleanupSummary = error instanceof Error ? error.message : "场景清理失败";
-        }
+          triggerReason,
+        );
+        cleanupOutcome = cleanup.outcome;
+        cleanupSummary = cleanup.summary;
+      } else if (cleanupDecision.action === "blocked") {
+        cleanupOutcome = "failed";
+        cleanupSummary = cleanupDecision.summary;
       }
       if (cleanupOutcome === "failed") {
         scenarioHasFailure = true;
@@ -616,27 +662,58 @@ async function executeTestOrderRun(run: RunRecord, order: TestOrder, testRun: Te
       }
     }
 
-    if (run.cancelRequested) break;
+    if (run.cancelRequested) {
+      await updateStoredScenarioRun(testRun.id, scenarioRun.id, {
+        status: "cancelled",
+        cleanupOutcome,
+        cleanupSummary,
+        finishedAt: new Date().toISOString(),
+      });
+      publish(run, {
+        type: "scenario_result",
+        status: "cancelled",
+        error: cleanupOutcome === "failed",
+        message: cleanupOutcome === "failed"
+          ? `${scenarioRun.scenarioNameSnapshot}：测试已取消，且${cleanupSummary}`
+          : cleanupOutcome === "passed"
+            ? `${scenarioRun.scenarioNameSnapshot}：测试已取消，场景清理已完成`
+            : `${scenarioRun.scenarioNameSnapshot}：测试已取消，场景无需清理`,
+        scenarioRunId: scenarioRun.id,
+        scenarioName: scenarioRun.scenarioNameSnapshot,
+      });
+      break;
+    }
     if (scenarioHasFailure) scenarioFailure = true;
     const scenarioOutcome = scenarioHasFailure ? "failed" : "passed";
+    const scenarioStatus = setupFailure || modelRequestFailure ? "failed" : "completed";
+    const scenarioExecutionSummary = setupFailure
+      ? `场景搭建失败；${setupFailure}`
+      : modelRequestFailure
+        ? `执行中断；模型接口异常：${modelRequestFailure.message}`
+        : "场景组执行完成";
+    const scenarioResultMessage = cleanupOutcome === "failed"
+      ? `${scenarioExecutionSummary}；${cleanupSummary}`
+      : cleanupOutcome === "passed"
+        ? `${scenarioExecutionSummary}；场景清理已完成`
+        : scenarioExecutionSummary;
     await updateStoredScenarioRun(testRun.id, scenarioRun.id, {
-      status: "completed",
+      status: scenarioStatus,
       outcome: scenarioOutcome,
+      summary: setupFailure || modelRequestFailure ? scenarioExecutionSummary : scenarioRun.summary,
       cleanupOutcome,
       cleanupSummary,
       finishedAt: new Date().toISOString(),
     });
     publish(run, {
       type: "scenario_result",
-      status: "completed",
+      status: scenarioStatus,
       outcome: scenarioOutcome,
       error: scenarioOutcome === "failed",
-      message: cleanupOutcome === "failed"
-        ? `${scenarioRun.scenarioNameSnapshot}：用例已执行，但场景清理失败；${cleanupSummary}`
-        : `${scenarioRun.scenarioNameSnapshot}：场景组执行完成`,
+      message: `${scenarioRun.scenarioNameSnapshot}：${scenarioResultMessage}`,
       scenarioRunId: scenarioRun.id,
       scenarioName: scenarioRun.scenarioNameSnapshot,
     });
+    if (modelRequestFailure) throw modelRequestFailure;
   }
 
   if (run.cancelRequested) {
