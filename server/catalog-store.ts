@@ -23,6 +23,7 @@ export interface TestCase {
   zentaoCaseId?: number;
   lastImportedAt?: string;
   name: string;
+  precondition: string;
   steps: string;
   expectedResult: string;
   createdAt: string;
@@ -133,6 +134,7 @@ export interface CaseRun {
   testCaseId: string;
   scenarioRunId: string;
   caseNameSnapshot: string;
+  preconditionSnapshot: string;
   stepsSnapshot: string;
   expectedResultSnapshot: string;
   status: ExecutionStatus;
@@ -173,7 +175,7 @@ export interface TestRun {
 }
 
 interface CatalogData {
-  version: 9;
+  version: 10;
   products: Product[];
   testCases: TestCase[];
   deviceResources: DeviceResource[];
@@ -183,11 +185,15 @@ interface CatalogData {
   testRuns: TestRun[];
 }
 
-type LegacyTestCase = Omit<TestCase, "scenarioId" | "source"> & {
+type LegacyTestCase = Omit<TestCase, "scenarioId" | "source" | "precondition"> & {
   scenarioId?: string;
   source?: TestCase["source"];
+  precondition?: string;
 };
-type LegacyCaseRun = Omit<CaseRun, "scenarioRunId"> & { scenarioRunId?: string };
+type LegacyCaseRun = Omit<CaseRun, "scenarioRunId" | "preconditionSnapshot"> & {
+  scenarioRunId?: string;
+  preconditionSnapshot?: string;
+};
 type LegacyTestRun = Omit<TestRun, "scenarioRuns" | "caseRuns"> & {
   scenarioRuns?: ScenarioRun[];
   caseRuns: LegacyCaseRun[];
@@ -241,6 +247,7 @@ export interface DiagnosticExecutionContext extends TestOrderExecutionContext {
 export interface ImportedTestCaseInput {
   zentaoCaseId: number;
   name: string;
+  precondition: string;
   steps: string;
   expectedResult: string;
 }
@@ -341,7 +348,7 @@ function defaultData(): CatalogData {
     updatedAt: timestamp,
   }));
   return {
-    version: 9,
+    version: 10,
     products,
     testCases: [],
     deviceResources: [],
@@ -378,11 +385,12 @@ export class CatalogStore {
     this.initializePromise ??= this.initialize();
     await this.initializePromise;
     const data = JSON.parse(await readFile(this.filePath, "utf8")) as CatalogData & { version: number };
-    if (![1, 2, 3, 4, 5, 6, 7, 8, 9].includes(data.version) || !Array.isArray(data.products) || !Array.isArray(data.testCases)) {
+    if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10].includes(data.version) || !Array.isArray(data.products) || !Array.isArray(data.testCases)) {
       throw new CatalogError("业务数据文件格式不正确", 500);
     }
+    const sourceVersion = data.version;
     const legacyData = data as typeof data & { labEnvironments?: PhysicalEnvironment[] };
-    data.version = 9;
+    data.version = 10;
     data.deviceResources ??= [];
     data.physicalEnvironments ??= legacyData.labEnvironments ?? [];
     delete legacyData.labEnvironments;
@@ -438,6 +446,13 @@ export class CatalogStore {
     const scenarioById = new Map(data.testScenarios.map((scenario) => [scenario.id, scenario]));
     data.testCases = (data.testCases as LegacyTestCase[]).map((testCase) => {
       const scenario = testCase.scenarioId ? scenarioById.get(testCase.scenarioId) : undefined;
+      let precondition = typeof testCase.precondition === "string" ? testCase.precondition : "";
+      let steps = testCase.steps;
+      if (sourceVersion < 10 && !precondition && testCase.source === "zentao" && steps.startsWith("前置条件：")) {
+        const firstStepIndex = steps.indexOf("\n1. ");
+        precondition = steps.slice("前置条件：".length, firstStepIndex >= 0 ? firstStepIndex : undefined).trim();
+        steps = firstStepIndex >= 0 ? steps.slice(firstStepIndex + 1) : "禅道用例未提供测试步骤";
+      }
       return {
         id: testCase.id,
         productId: testCase.productId,
@@ -446,7 +461,8 @@ export class CatalogStore {
         zentaoCaseId: Number.isInteger(testCase.zentaoCaseId) ? testCase.zentaoCaseId : undefined,
         lastImportedAt: typeof testCase.lastImportedAt === "string" ? testCase.lastImportedAt : undefined,
         name: testCase.name,
-        steps: testCase.steps,
+        precondition,
+        steps,
         expectedResult: testCase.expectedResult,
         createdAt: testCase.createdAt,
         updatedAt: testCase.updatedAt,
@@ -507,7 +523,13 @@ export class CatalogStore {
     const testCaseById = new Map(data.testCases.map((testCase) => [testCase.id, testCase]));
     data.testRuns = (data.testRuns as LegacyTestRun[]).map((run) => {
       if (run.scenarioRuns && run.caseRuns.every((caseRun) => Boolean(caseRun.scenarioRunId))) {
-        return run as TestRun;
+        return {
+          ...run,
+          caseRuns: run.caseRuns.map((caseRun) => ({
+            ...caseRun,
+            preconditionSnapshot: caseRun.preconditionSnapshot || "",
+          })),
+        } as TestRun;
       }
       const runOrder = data.testOrders.find((order) => order.id === run.testOrderId);
       const scenarioRuns = new Map<string, ScenarioRun>();
@@ -533,7 +555,11 @@ export class CatalogStore {
           scenarioRuns.set(scenarioId, scenarioRun);
         }
         scenarioRun.caseRunIds.push(caseRun.id);
-        return { ...caseRun, scenarioRunId: scenarioRun.id };
+        return {
+          ...caseRun,
+          scenarioRunId: scenarioRun.id,
+          preconditionSnapshot: caseRun.preconditionSnapshot || "",
+        };
       });
       return { ...run, scenarioRuns: [...scenarioRuns.values()], caseRuns };
     });
@@ -661,6 +687,7 @@ export class CatalogStore {
         scenarioId: this.validateTestCaseScenario(data, productId, input.scenarioId),
         source: "local",
         name: requiredText(input.name, "用例名称", 200),
+        precondition: optionalText(input.precondition, 10_000),
         steps: requiredText(input.steps, "测试步骤", 20_000),
         expectedResult: requiredText(input.expectedResult, "预期结果", 10_000),
         createdAt: timestamp,
@@ -677,6 +704,7 @@ export class CatalogStore {
       if (!testCase) throw new CatalogError("测试用例不存在", 404);
       testCase.scenarioId = this.validateTestCaseScenario(data, productId, input.scenarioId ?? testCase.scenarioId);
       testCase.name = requiredText(input.name, "用例名称", 200);
+      testCase.precondition = optionalText(input.precondition, 10_000);
       testCase.steps = requiredText(input.steps, "测试步骤", 20_000);
       testCase.expectedResult = requiredText(input.expectedResult, "预期结果", 10_000);
       testCase.updatedAt = new Date().toISOString();
@@ -716,11 +744,13 @@ export class CatalogStore {
         }
 
         const name = requiredText(item.name, "用例名称", 200);
+        const precondition = optionalText(item.precondition, 10_000);
         const steps = requiredText(item.steps, "测试步骤", 20_000);
         const expectedResult = requiredText(item.expectedResult, "预期结果", 10_000);
         if (existing) {
           existing.source = "zentao";
           existing.name = name;
+          existing.precondition = precondition;
           existing.steps = steps;
           existing.expectedResult = expectedResult;
           existing.lastImportedAt = timestamp;
@@ -737,6 +767,7 @@ export class CatalogStore {
           zentaoCaseId: item.zentaoCaseId,
           lastImportedAt: timestamp,
           name,
+          precondition,
           steps,
           expectedResult,
           createdAt: timestamp,
@@ -1314,6 +1345,7 @@ export class CatalogStore {
           testCaseId: testCase.id,
           scenarioRunId: scenarioRun.id,
           caseNameSnapshot: testCase.name,
+          preconditionSnapshot: testCase.precondition,
           stepsSnapshot: testCase.steps,
           expectedResultSnapshot: testCase.expectedResult,
           status: "queued",

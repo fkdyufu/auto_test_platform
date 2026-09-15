@@ -10,6 +10,7 @@ const context = {
   caseRun: {
     id: "case-run-1",
     caseNameSnapshot: "检查主备切换",
+    preconditionSnapshot: "两台设备已经建立 VRRP 邻接",
     stepsSnapshot: "断开主设备上联",
     expectedResultSnapshot: "备设备接管",
     status: "completed",
@@ -87,6 +88,7 @@ test("builds a scoped diagnostic prompt without credentials or unrelated case ev
   }]);
 
   assert.match(prompt, /检查主备切换/);
+  assert.match(prompt, /两台设备已经建立 VRRP 邻接/);
   assert.match(prompt, /ip link: DOWN/);
   assert.match(prompt, /为什么没有切换/);
   assert.match(prompt, /管理 SSH\[ssh, ID: ssh-1/);

@@ -34,7 +34,7 @@ interface ImportDialogState {
   loading: boolean;
 }
 
-const EMPTY_CASE: TestCaseInput = { scenarioId: "", name: "", steps: "", expectedResult: "" };
+const EMPTY_CASE: TestCaseInput = { scenarioId: "", name: "", precondition: "", steps: "", expectedResult: "" };
 
 function shortId(testCase: TestCase): string {
   return testCase.zentaoCaseId ? `Z-${testCase.zentaoCaseId}` : testCase.id.slice(0, 8).toUpperCase();
@@ -81,6 +81,7 @@ export function TestCasesPage({
         ? {
             scenarioId: testCase.scenarioId,
             name: testCase.name,
+            precondition: testCase.precondition,
             steps: testCase.steps,
             expectedResult: testCase.expectedResult,
           }
@@ -254,7 +255,7 @@ export function TestCasesPage({
         <div className="table-wrap">
           {cases.length ? (
             <table className="data-table cases-table">
-              <thead><tr><th>ID</th><th>名称</th><th>来源</th><th>测试场景</th><th>步骤</th><th>预期结果</th><th aria-label="操作" /></tr></thead>
+              <thead><tr><th>ID</th><th>名称</th><th>来源</th><th>测试场景</th><th>前置条件</th><th>步骤</th><th>预期结果</th><th aria-label="操作" /></tr></thead>
               <tbody>
                 {cases.map((testCase) => (
                   <tr key={testCase.id}>
@@ -262,6 +263,7 @@ export function TestCasesPage({
                     <td className="name-cell">{testCase.name}</td>
                     <td><span className={`source-label ${testCase.source}`}>{testCase.source === "zentao" ? "禅道" : "本地"}</span></td>
                     <td><span className="category-label">{scenarioName(testCase.scenarioId)}</span></td>
+                    <td className="truncate-cell">{testCase.precondition || "-"}</td>
                     <td className="truncate-cell">{testCase.steps}</td>
                     <td className="truncate-cell">{testCase.expectedResult}</td>
                     <td><div className="row-actions">
@@ -283,6 +285,7 @@ export function TestCasesPage({
           {dialogError && <div className="form-error">{dialogError}</div>}
           <label className="field"><span>用例名称</span><input value={caseDialog.form.name} onChange={(event) => setCaseDialog({ ...caseDialog, form: { ...caseDialog.form, name: event.target.value } })} autoFocus /></label>
           <label className="field"><span>测试场景</span><select value={caseDialog.form.scenarioId} onChange={(event) => setCaseDialog({ ...caseDialog, form: { ...caseDialog.form, scenarioId: event.target.value } })}>{scenarios.map((scenario) => <option key={scenario.id} value={scenario.id}>{scenario.name}{scenario.isDefault ? "（系统默认）" : ""}</option>)}</select></label>
+          <label className="field"><span>前置条件</span><textarea value={caseDialog.form.precondition} onChange={(event) => setCaseDialog({ ...caseDialog, form: { ...caseDialog.form, precondition: event.target.value } })} rows={4} placeholder="可选" /></label>
           <label className="field"><span>测试步骤</span><textarea value={caseDialog.form.steps} onChange={(event) => setCaseDialog({ ...caseDialog, form: { ...caseDialog.form, steps: event.target.value } })} rows={7} /></label>
           <label className="field"><span>预期结果</span><textarea value={caseDialog.form.expectedResult} onChange={(event) => setCaseDialog({ ...caseDialog, form: { ...caseDialog.form, expectedResult: event.target.value } })} rows={5} /></label>
         </Modal>

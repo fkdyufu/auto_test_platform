@@ -111,6 +111,7 @@ export interface TestCase {
   zentaoCaseId?: number;
   lastImportedAt?: string;
   name: string;
+  precondition: string;
   steps: string;
   expectedResult: string;
   createdAt: string;
@@ -199,6 +200,7 @@ export interface CaseRun {
   testCaseId: string;
   scenarioRunId: string;
   caseNameSnapshot: string;
+  preconditionSnapshot: string;
   stepsSnapshot: string;
   expectedResultSnapshot: string;
   status: RunStatus;
@@ -268,6 +270,7 @@ export interface ProductInput {
 export interface TestCaseInput {
   scenarioId: string;
   name: string;
+  precondition: string;
   steps: string;
   expectedResult: string;
 }

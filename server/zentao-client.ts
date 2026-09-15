@@ -33,6 +33,7 @@ export interface ZentaoTestTaskSummary {
 export interface ZentaoCaseImportData {
   zentaoCaseId: number;
   name: string;
+  precondition: string;
   steps: string;
   expectedResult: string;
 }
@@ -236,12 +237,12 @@ export class ZentaoClient {
     const numberedExpectations = stepPairs.map(
       (step, index) => `${index + 1}. ${step.expectation || "未提供预期结果"}`,
     );
-    const stepText = [precondition ? `前置条件：${precondition}` : "", ...numberedSteps].filter(Boolean).join("\n");
 
     return {
       zentaoCaseId: positiveInteger(item.caseID ?? item.id) || caseId,
       name: normalizeZentaoText(item.title) || `禅道用例 #${caseId}`,
-      steps: stepText || "禅道用例未提供测试步骤",
+      precondition,
+      steps: numberedSteps.join("\n") || "禅道用例未提供测试步骤",
       expectedResult: numberedExpectations.join("\n") || "禅道用例未提供预期结果",
     };
   }

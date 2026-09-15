@@ -299,7 +299,7 @@ function buildCaseRequirement(
   scenarioRun: ScenarioRun,
   context: TestOrderExecutionContext,
 ): string {
-  return `执行产品测试用例。${buildPhysicalEnvironmentDescription(context)}\n\n${buildScenarioDescription(scenario, scenarioRun, context)}\n\n场景搭建结论：${scenarioRun.summary || "无"}\n\n用例名称：${caseRun.caseNameSnapshot}\n\n测试步骤：\n${caseRun.stepsSnapshot}\n\n预期结果：\n${caseRun.expectedResultSnapshot}\n\n请直接使用当前提供的工具执行，并根据实际观察调用 finish_test 提交结论。`;
+  return `执行产品测试用例。${buildPhysicalEnvironmentDescription(context)}\n\n${buildScenarioDescription(scenario, scenarioRun, context)}\n\n场景搭建结论：${scenarioRun.summary || "无"}\n\n用例名称：${caseRun.caseNameSnapshot}\n\n前置条件：\n${caseRun.preconditionSnapshot || "无"}\n\n测试步骤：\n${caseRun.stepsSnapshot}\n\n预期结果：\n${caseRun.expectedResultSnapshot}\n\n请先确认前置条件是否满足，再直接使用当前提供的工具执行，并根据实际观察调用 finish_test 提交结论。`;
 }
 
 function buildScenarioCleanupRequirement(

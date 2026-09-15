@@ -74,7 +74,8 @@ test("loads product cases, test tasks, task cases and case details", async () =>
   assert.deepEqual(await client.getCaseImportData(28, 8), {
     zentaoCaseId: 28,
     name: "接口检查",
-    steps: "前置条件：设备已启动\n1. 打开页面\n2. 查看状态",
+    precondition: "设备已启动",
+    steps: "1. 打开页面\n2. 查看状态",
     expectedResult: "1. 页面正常\n2. 状态正常",
   });
   assert.equal(tokenRequests, 1);

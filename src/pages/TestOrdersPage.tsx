@@ -215,6 +215,7 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
       form: {
         scenarioId: testCase.scenarioId,
         name: testCase.name,
+        precondition: testCase.precondition,
         steps: testCase.steps,
         expectedResult: testCase.expectedResult,
       },
@@ -455,12 +456,12 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
             <div className="table-wrap">
               <table className="data-table">
                 <thead>
-                  <tr><th>顺序</th><th>测试场景</th><th>用例名称</th><th>测试步骤</th><th>预期结果</th><th aria-label="操作" /></tr>
+                  <tr><th>顺序</th><th>测试场景</th><th>用例名称</th><th>前置条件</th><th>测试步骤</th><th>预期结果</th><th aria-label="操作" /></tr>
                 </thead>
                 <tbody>
                   {groupedCases.map(([scenarioId, testCases]) => <Fragment key={scenarioId}>
                     <tr className="scenario-group-row">
-                      <td colSpan={6}><div><Workflow size={14} /><strong>{scenarioName(scenarioId)}</strong><span>{testCases.length} 个用例</span></div></td>
+                      <td colSpan={7}><div><Workflow size={14} /><strong>{scenarioName(scenarioId)}</strong><span>{testCases.length} 个用例</span></div></td>
                     </tr>
                     {testCases.map((testCase) => (
                       <tr key={testCase.id}>
@@ -471,6 +472,7 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
                             {testCase.name}
                           </button>
                         </td>
+                        <td className="truncate-cell">{testCase.precondition || "-"}</td>
                         <td className="truncate-cell">{testCase.steps}</td>
                         <td className="truncate-cell">{testCase.expectedResult}</td>
                         <td>
@@ -646,6 +648,15 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
                   <option key={scenario.id} value={scenario.id}>{scenario.name}{scenario.isDefault ? "（系统默认）" : ""}</option>
                 ))}
               </select>
+            </label>
+            <label className="field full-width">
+              <span>前置条件</span>
+              <textarea
+                value={caseDialog.form.precondition}
+                onChange={(event) => setCaseDialog({ ...caseDialog, form: { ...caseDialog.form, precondition: event.target.value } })}
+                rows={5}
+                placeholder="可选"
+              />
             </label>
             <label className="field full-width">
               <span>测试步骤</span>

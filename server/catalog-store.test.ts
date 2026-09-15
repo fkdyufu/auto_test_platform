@@ -158,6 +158,7 @@ test("keeps case snapshots stable after the source case changes", async (t) => {
   const [product] = await store.listProducts();
   const testCase = await store.createTestCase(product.id, {
     name: "原始名称",
+    precondition: "原始前置条件",
     steps: "原始步骤",
     expectedResult: "原始预期",
   });
@@ -169,11 +170,13 @@ test("keeps case snapshots stable after the source case changes", async (t) => {
 
   await store.updateTestCase(product.id, testCase.id, {
     name: "修改后的名称",
+    precondition: "修改后的前置条件",
     steps: "修改后的步骤",
     expectedResult: "修改后的预期",
   });
 
   assert.equal(run.caseRuns[0].caseNameSnapshot, "原始名称");
+  assert.equal(run.caseRuns[0].preconditionSnapshot, "原始前置条件");
   assert.equal(run.caseRuns[0].stepsSnapshot, "原始步骤");
   assert.equal(run.caseRuns[0].expectedResultSnapshot, "原始预期");
 });
@@ -530,6 +533,7 @@ test("imports Zentao cases without overwriting local changes by default", async 
   const firstImport = await store.importZentaoTestCases(product.id, [{
     zentaoCaseId: 101,
     name: "禅道原始名称",
+    precondition: "设备已经启动",
     steps: "1. 原始步骤",
     expectedResult: "1. 原始结果",
   }]);
@@ -538,10 +542,12 @@ test("imports Zentao cases without overwriting local changes by default", async 
   const [imported] = await store.listTestCases(product.id);
   assert.equal(imported.source, "zentao");
   assert.equal(imported.zentaoCaseId, 101);
+  assert.equal(imported.precondition, "设备已经启动");
   assert.ok(imported.lastImportedAt);
   await store.updateTestCase(product.id, imported.id, {
     scenarioId: imported.scenarioId,
     name: "平台修改名称",
+    precondition: "平台修改前置条件",
     steps: "平台修改步骤",
     expectedResult: "平台修改结果",
   });
@@ -549,21 +555,25 @@ test("imports Zentao cases without overwriting local changes by default", async 
   const skipped = await store.importZentaoTestCases(product.id, [{
     zentaoCaseId: 101,
     name: "禅道新名称",
+    precondition: "禅道新前置条件",
     steps: "禅道新步骤",
     expectedResult: "禅道新结果",
   }]);
   assert.deepEqual(skipped, { created: 0, updated: 0, skipped: 1 });
   assert.equal((await store.listTestCases(product.id))[0].name, "平台修改名称");
+  assert.equal((await store.listTestCases(product.id))[0].precondition, "平台修改前置条件");
 
   const overwritten = await store.importZentaoTestCases(product.id, [{
     zentaoCaseId: 101,
     name: "禅道新名称",
+    precondition: "禅道新前置条件",
     steps: "禅道新步骤",
     expectedResult: "禅道新结果",
   }], true);
   const [updated] = await store.listTestCases(product.id);
   assert.deepEqual(overwritten, { created: 0, updated: 1, skipped: 0 });
   assert.equal(updated.name, "禅道新名称");
+  assert.equal(updated.precondition, "禅道新前置条件");
   assert.equal(updated.scenarioId, imported.scenarioId);
 });
 
@@ -578,6 +588,7 @@ test("keeps local and same-named Zentao cases as separate records", async (t) =>
   await store.importZentaoTestCases(product.id, [{
     zentaoCaseId: 202,
     name: "重复名称",
+    precondition: "",
     steps: "禅道步骤",
     expectedResult: "禅道结果",
   }]);
@@ -670,8 +681,10 @@ test("migrates legacy cases and runs into the default scenario", async (t) => {
   data.version = 6;
   data.testScenarios = [];
   delete data.testCases[0].scenarioId;
+  delete data.testCases[0].precondition;
   delete data.testRuns[0].scenarioRuns;
   delete data.testRuns[0].caseRuns[0].scenarioRunId;
+  delete data.testRuns[0].caseRuns[0].preconditionSnapshot;
   await writeFile(filePath, `${JSON.stringify(data, null, 2)}\n`);
 
   const migratedStore = new CatalogStore(filePath);
@@ -680,8 +693,38 @@ test("migrates legacy cases and runs into the default scenario", async (t) => {
   assert.equal(defaultScenario.isDefault, true);
   assert.equal(detail.cases[0].scenarioId, defaultScenario.id);
   assert.equal(detail.cases[0].source, "local");
+  assert.equal(detail.cases[0].precondition, "");
   assert.equal(detail.runs[0].scenarioRuns.length, 1);
   assert.equal(detail.runs[0].scenarioRuns[0].testScenarioId, defaultScenario.id);
   assert.equal(detail.runs[0].caseRuns[0].scenarioRunId, detail.runs[0].scenarioRuns[0].id);
+  assert.equal(detail.runs[0].caseRuns[0].preconditionSnapshot, "");
   assert.equal(detail.runs[0].caseRuns[0].summary, "历史结论");
+});
+
+test("extracts the precondition embedded by the legacy Zentao importer", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "ai-test-catalog-precondition-migration-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const filePath = path.join(directory, "catalog.json");
+  const store = new CatalogStore(filePath);
+  const [product] = await store.listProducts();
+  await store.importZentaoTestCases(product.id, [{
+    zentaoCaseId: 303,
+    name: "旧版禅道用例",
+    precondition: "",
+    steps: "占位步骤",
+    expectedResult: "预期结果",
+  }]);
+  const data = JSON.parse(await readFile(filePath, "utf8")) as {
+    version: number;
+    testCases: Array<Record<string, unknown>>;
+  };
+  data.version = 9;
+  delete data.testCases[0].precondition;
+  data.testCases[0].steps = "前置条件：设备已启动\n测试网络已连接\n1. 打开页面\n2. 检查状态";
+  await writeFile(filePath, `${JSON.stringify(data, null, 2)}\n`);
+
+  const [migrated] = await new CatalogStore(filePath).listTestCases(product.id);
+
+  assert.equal(migrated.precondition, "设备已启动\n测试网络已连接");
+  assert.equal(migrated.steps, "1. 打开页面\n2. 检查状态");
 });
