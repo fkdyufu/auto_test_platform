@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   Clock3,
   FileText,
+  MessageSquareText,
   MinusCircle,
   X,
   XCircle,
@@ -52,11 +53,13 @@ export function TestRunReportDialog({
   run,
   orderName,
   physicalEnvironmentName,
+  onDiagnose,
   onClose,
 }: {
   run: TestRun;
   orderName: string;
   physicalEnvironmentName: string;
+  onDiagnose: (target: { caseRunId: string; caseName: string; scenarioName: string }) => void;
   onClose: () => void;
 }) {
   const report = buildTestRunReport(run);
@@ -132,6 +135,14 @@ export function TestRunReportDialog({
                       <p>{item.summary}</p>
                     </div>
                     <small>{formatRunDuration(item.durationMs)}</small>
+                    <button
+                      type="button"
+                      className="button secondary compact"
+                      onClick={() => onDiagnose({ caseRunId: item.id, caseName: item.name, scenarioName: item.scenarioName })}
+                    >
+                      <MessageSquareText size={14} />
+                      深入分析
+                    </button>
                   </div>
                 ))}
               </div>
@@ -147,7 +158,7 @@ export function TestRunReportDialog({
             </div>
             <div className="table-wrap report-results-wrap">
               <table className="data-table report-results-table">
-                <thead><tr><th>结果</th><th>测试场景</th><th>用例名称</th><th>执行结论</th><th>耗时</th></tr></thead>
+                <thead><tr><th>结果</th><th>测试场景</th><th>用例名称</th><th>执行结论</th><th>耗时</th><th aria-label="操作" /></tr></thead>
                 <tbody>
                   {report.cases.map((item) => (
                     <tr key={item.id}>
@@ -158,6 +169,16 @@ export function TestRunReportDialog({
                       <td className="report-duration-cell">
                         {item.state === "passed" ? <CheckCircle2 size={13} /> : item.state === "failed" ? <XCircle size={13} /> : item.state === "cancelled" ? <MinusCircle size={13} /> : <Clock3 size={13} />}
                         {formatRunDuration(item.durationMs)}
+                      </td>
+                      <td>
+                        <button
+                          type="button"
+                          className="button secondary compact"
+                          onClick={() => onDiagnose({ caseRunId: item.id, caseName: item.name, scenarioName: item.scenarioName })}
+                        >
+                          <MessageSquareText size={14} />
+                          分析
+                        </button>
                       </td>
                     </tr>
                   ))}

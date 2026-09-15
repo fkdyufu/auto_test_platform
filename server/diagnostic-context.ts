@@ -1,0 +1,111 @@
+import type { DiagnosticExecutionContext } from "./catalog-store.js";
+import type { DiagnosticMessage } from "./diagnostic-store.js";
+
+const MAX_EVIDENCE_EVENTS = 40;
+const MAX_EVENT_TEXT = 1_800;
+const MAX_PROMPT_LENGTH = 48_000;
+const MAX_HISTORY_LENGTH = 12_000;
+
+export interface DiagnosticEvidenceEvent {
+  timestamp: string;
+  type: string;
+  message?: string;
+  tool?: string;
+  args?: unknown;
+  error?: boolean;
+  outcome?: string;
+  caseRunId?: string;
+  scenarioRunId?: string;
+}
+
+function limitText(value: string, maximum: number): string {
+  return value.length > maximum ? `${value.slice(0, maximum)}...（已截断）` : value;
+}
+
+function formatDevices(context: DiagnosticExecutionContext): string {
+  if (!context.physicalEnvironment) return "未配置物理环境";
+  const deviceById = new Map(context.devices.map((device) => [device.id, device]));
+  const devices = context.devices.map((device) => {
+    const controls = device.controlInterfaces.length
+      ? device.controlInterfaces.map((control) =>
+          `${control.name || "未命名接口"}[${control.type}, ID: ${control.id}, 地址: ${control.address || "未配置"}${control.username ? `, 账号: ${control.username}` : ""}]`,
+        ).join("；")
+      : "未配置控制接口";
+    return `- ${device.name}（设备 ID: ${device.id}，类型: ${device.type}${device.model ? `，型号: ${device.model}` : ""}）\n  ${controls}`;
+  });
+  const connections = context.physicalEnvironment.connections.map((connection) => {
+    const source = deviceById.get(connection.sourceDeviceId)?.name || connection.sourceDeviceId;
+    const target = deviceById.get(connection.targetDeviceId)?.name || connection.targetDeviceId;
+    return `- ${source}.${connection.sourcePort} <-> ${target}.${connection.targetPort}${connection.description ? `（${connection.description}）` : ""}`;
+  });
+  return `物理环境：${context.physicalEnvironment.name}\n${context.physicalEnvironment.description || "无补充说明"}\n设备：\n${devices.join("\n") || "无"}\n物理连接：\n${connections.join("\n") || "未配置连接关系"}`;
+}
+
+function formatScenario(context: DiagnosticExecutionContext): string {
+  const { scenario, scenarioRun } = context;
+  const deviceById = new Map(context.devices.map((device) => [device.id, device]));
+  if (!scenario) {
+    return `场景：${scenarioRun.scenarioNameSnapshot}（场景定义已删除）\n场景执行结论：${scenarioRun.summary || "无"}`;
+  }
+  const roles = scenario.roles.map((role) => {
+    const deviceId = scenarioRun.roleBindings[role.key];
+    const device = deviceId ? deviceById.get(deviceId) : undefined;
+    return `- ${role.name}（${role.key}）：${device ? `${device.name}[${device.id}]` : deviceId || "未绑定"}`;
+  });
+  const parameters = scenario.parameters.map((parameter) =>
+    `- ${parameter.name}（${parameter.key}）：${scenarioRun.parameterValues[parameter.key] || "未设置"}`,
+  );
+  return `场景：${scenario.name}${scenario.category ? `（${scenario.category}）` : ""}\n${scenario.description || "无补充说明"}\n角色绑定：\n${roles.join("\n") || "无"}\n场景参数：\n${parameters.join("\n") || "无"}\n搭建要求：${scenario.setupInstructions || "无"}\n验证要求：${scenario.verificationInstructions || "无"}\n场景执行结论：${scenarioRun.summary || "无"}`;
+}
+
+function relevantEvidence(context: DiagnosticExecutionContext, events: DiagnosticEvidenceEvent[]): DiagnosticEvidenceEvent[] {
+  const allowedTypes = new Set(["tool_start", "tool_end", "case_result", "scenario_result", "error"]);
+  return events.filter((event) => {
+    if (!allowedTypes.has(event.type)) return false;
+    if (event.caseRunId === context.caseRun.id) return true;
+    return !event.caseRunId && event.scenarioRunId === context.scenarioRun.id;
+  }).slice(-MAX_EVIDENCE_EVENTS);
+}
+
+function formatEvidence(context: DiagnosticExecutionContext, events: DiagnosticEvidenceEvent[]): string {
+  const evidence = relevantEvidence(context, events).map((event) => {
+    const record = {
+      time: event.timestamp,
+      type: event.type,
+      tool: event.tool,
+      args: event.args,
+      message: event.message,
+      error: event.error,
+      outcome: event.outcome,
+    };
+    return limitText(JSON.stringify(record), MAX_EVENT_TEXT);
+  });
+  const joined = evidence.join("\n");
+  if (!joined) return "未找到与该用例或其场景直接关联的工具事件";
+  if (joined.length <= 18_000) return joined;
+  return `（较早的执行证据已省略）\n${joined.slice(-18_000)}`;
+}
+
+function formatHistory(messages: DiagnosticMessage[]): string {
+  if (!messages.length) return "无";
+  const entries: string[] = [];
+  let length = 0;
+  for (const message of [...messages].reverse()) {
+    const entry = `${message.role === "user" ? "用户" : "诊断助手"}：${limitText(message.content, 4_000)}`;
+    if (entries.length && length + entry.length + 2 > MAX_HISTORY_LENGTH) break;
+    entries.unshift(entry);
+    length += entry.length + 2;
+  }
+  return `${entries.length < messages.length ? "（较早的对话已省略）\n\n" : ""}${entries.join("\n\n")}`;
+}
+
+export function buildDiagnosticPrompt(
+  context: DiagnosticExecutionContext,
+  events: DiagnosticEvidenceEvent[],
+  messages: DiagnosticMessage[],
+): string {
+  const history = formatHistory(messages);
+  const prefix = `请结合下列上下文回答诊断对话中的最新问题。必要时直接使用浏览器或设备工具继续检查。\n\n【上下文边界】\n- “执行快照”和“历史执行证据”来自当次测试，表示历史事实。\n- “当前资源与环境”来自平台此刻的配置，可能已在测试后发生变化，只能用于现在的补充检查。\n- 设备凭据由平台工具内部使用，不应询问、输出或猜测密码。\n\n【产品与测试单】\n产品：${context.product.name}（${context.product.id}）\n产品描述：${context.product.description || "无"}\n测试单：${context.testOrder.name}（${context.testOrder.id}）\n\n【当前资源与环境】\n${limitText(formatDevices(context), 8_000)}\n\n【测试场景】\n${limitText(formatScenario(context), 6_000)}\n\n【用例执行快照】\n用例：${context.caseRun.caseNameSnapshot}（用例执行 ID: ${context.caseRun.id}）\n步骤：\n${limitText(context.caseRun.stepsSnapshot, 6_000)}\n预期结果：\n${limitText(context.caseRun.expectedResultSnapshot, 6_000)}\n执行状态：${context.caseRun.status}\n执行结果：${context.caseRun.outcome || "无结论"}\n执行结论：${limitText(context.caseRun.summary || "未记录", 4_000)}\n\n【历史执行证据】\n${formatEvidence(context, events)}`;
+  const suffix = `\n\n【诊断对话】\n${history}`;
+  return `${limitText(prefix, Math.max(1_000, MAX_PROMPT_LENGTH - suffix.length))}${suffix}`;
+}

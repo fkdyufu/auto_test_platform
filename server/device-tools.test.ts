@@ -197,3 +197,17 @@ test("allows finish_test after evidence from a non-browser device tool", async (
   assert.deepEqual(finishResult, { status: "passed", summary: "SSH 检查通过" });
   await toolset.driver.close();
 });
+
+test("omits finish_test for diagnostic browser tools", async () => {
+  const toolset = createBrowserTools({
+    runId: "diagnostic-run",
+    artifactsDirectory: "/tmp",
+    evidence: createToolEvidence(),
+    includeFinishTool: false,
+    onFinish: () => undefined,
+  });
+
+  assert.equal(toolset.toolNames.includes("browser_open"), true);
+  assert.equal(toolset.toolNames.includes("finish_test"), false);
+  await toolset.driver.close();
+});

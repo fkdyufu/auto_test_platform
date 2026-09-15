@@ -182,6 +182,31 @@ test("marks active test runs as failed after a service restart", async (t) => {
   assert.equal(recoveredRun?.caseRuns[0].summary, "执行中断：平台服务重启");
 });
 
+test("resolves diagnostic context without crossing product boundaries", async (t) => {
+  const store = await createStore(t);
+  const [product, otherProduct] = await store.listProducts();
+  const testCase = await store.createTestCase(product.id, {
+    name: "待诊断用例",
+    steps: "检查设备状态",
+    expectedResult: "设备正常",
+  });
+  const order = await store.createTestOrder(product.id, {
+    name: "诊断测试单",
+    caseIds: [testCase.id],
+  });
+  const run = await store.createTestRun("diagnostic-source-run", order.id);
+
+  const context = await store.getDiagnosticExecutionContext(product.id, run.id, run.caseRuns[0].id);
+  assert.equal(context.product.id, product.id);
+  assert.equal(context.testOrder.id, order.id);
+  assert.equal(context.caseRun.caseNameSnapshot, "待诊断用例");
+  assert.equal(context.scenarioRun.id, run.caseRuns[0].scenarioRunId);
+  await assert.rejects(
+    store.getDiagnosticExecutionContext(otherProduct.id, run.id, run.caseRuns[0].id),
+    (error: unknown) => error instanceof CatalogError && error.status === 404,
+  );
+});
+
 test("creates structured resources, a physical environment, and an independent scenario", async (t) => {
   const store = await createStore(t);
   const [product] = await store.listProducts();

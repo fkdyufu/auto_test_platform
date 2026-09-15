@@ -225,6 +225,15 @@ export interface TestOrderExecutionContext {
   scenarios: TestScenario[];
 }
 
+export interface DiagnosticExecutionContext extends TestOrderExecutionContext {
+  product: Product;
+  testOrder: TestOrder;
+  testRun: TestRun;
+  caseRun: CaseRun;
+  scenarioRun: ScenarioRun;
+  scenario?: TestScenario;
+}
+
 export interface ImportedTestCaseInput {
   zentaoCaseId: number;
   name: string;
@@ -1201,6 +1210,46 @@ export class CatalogStore {
         .filter((scenario) => scenario.productId === order.productId && !scenario.archivedAt)
         .map(clone),
     };
+  }
+
+  async getDiagnosticExecutionContext(
+    productId: string,
+    testRunId: string,
+    caseRunId: string,
+  ): Promise<DiagnosticExecutionContext> {
+    const data = await this.read();
+    const product = data.products.find((item) => item.id === productId && !item.archivedAt);
+    if (!product) throw new CatalogError("产品不存在", 404);
+    const testRun = data.testRuns.find((item) => item.id === testRunId);
+    const testOrder = testRun
+      ? data.testOrders.find((item) => item.id === testRun.testOrderId && item.productId === productId)
+      : undefined;
+    if (!testRun || !testOrder) throw new CatalogError("测试执行记录不存在或不属于当前产品", 404);
+    const caseRun = testRun.caseRuns.find((item) => item.id === caseRunId);
+    if (!caseRun) throw new CatalogError("用例执行记录不存在", 404);
+    const scenarioRun = testRun.scenarioRuns.find((item) => item.id === caseRun.scenarioRunId);
+    if (!scenarioRun) throw new CatalogError("场景执行记录不存在", 404);
+    const scenario = data.testScenarios.find((item) => item.id === scenarioRun.testScenarioId);
+    const physicalEnvironment = data.physicalEnvironments.find(
+      (item) => item.id === testOrder.physicalEnvironmentId && !item.archivedAt,
+    );
+    const devices = physicalEnvironment
+      ? physicalEnvironment.deviceIds
+          .map((deviceId) => data.deviceResources.find((item) => item.id === deviceId && !item.archivedAt))
+          .filter((item): item is DeviceResource => Boolean(item))
+      : [];
+
+    return clone({
+      product,
+      testOrder,
+      testRun,
+      caseRun,
+      scenarioRun,
+      scenario,
+      physicalEnvironment,
+      devices,
+      scenarios: scenario ? [scenario] : [],
+    });
   }
 
   async createTestRun(runId: string, testOrderId: string, selectedCaseIds?: string[]): Promise<TestRun> {

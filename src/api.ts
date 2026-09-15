@@ -58,8 +58,35 @@ export interface RunResponse {
   status: RunStatus;
   createdAt: string;
   events: RunEvent[];
-  source: "adhoc" | "test_order";
+  source: "adhoc" | "test_order" | "diagnostic";
   testOrderId?: string;
+}
+
+export interface DiagnosticMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  error?: boolean;
+  runId: string;
+  createdAt: string;
+}
+
+export interface DiagnosticConversation {
+  id: string;
+  productId: string;
+  testRunId: string;
+  caseRunId: string;
+  title: string;
+  status: "idle" | "running";
+  activeRunId?: string;
+  messages: DiagnosticMessage[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DiagnosticTurnResponse {
+  conversation: DiagnosticConversation;
+  run: RunResponse;
 }
 
 export interface Product {
@@ -382,6 +409,22 @@ export const api = {
     request<RunResponse>(`/api/products/${productId}/test-orders/${id}/runs`, {
       method: "POST",
       body: JSON.stringify(testCaseId ? { testCaseId } : {}),
+    }),
+  getDiagnostics: (productId: string, testRunId: string, caseRunId: string) =>
+    request<DiagnosticConversation[]>(
+      `/api/products/${productId}/test-runs/${testRunId}/case-runs/${caseRunId}/diagnostics`,
+    ),
+  createDiagnostic: (productId: string, testRunId: string, caseRunId: string) =>
+    request<DiagnosticConversation>(
+      `/api/products/${productId}/test-runs/${testRunId}/case-runs/${caseRunId}/diagnostics`,
+      { method: "POST", body: "{}" },
+    ),
+  getDiagnostic: (productId: string, id: string) =>
+    request<DiagnosticConversation>(`/api/products/${productId}/diagnostics/${id}`),
+  sendDiagnosticMessage: (productId: string, id: string, content: string) =>
+    request<DiagnosticTurnResponse>(`/api/products/${productId}/diagnostics/${id}/messages`, {
+      method: "POST",
+      body: JSON.stringify({ content }),
     }),
   getRun: (id: string) => request<RunResponse>(`/api/runs/${id}`),
   createRun: (requirement: string) =>

@@ -30,6 +30,7 @@ import {
   type TestScenario,
 } from "../api";
 import { RunMonitor } from "../components/RunMonitor";
+import { DiagnosticAssistant, type DiagnosticTarget } from "../components/DiagnosticAssistant";
 import { TestRunReportDialog } from "../components/TestRunReport";
 import { InlineNotice, Modal, PageHeader, type Notice } from "../components/ui";
 
@@ -85,6 +86,7 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
   const [notice, setNotice] = useState<Notice>(null);
   const [activeRun, setActiveRun] = useState<RunResponse | null>(null);
   const [reportRun, setReportRun] = useState<TestRun | null>(null);
+  const [diagnosticTarget, setDiagnosticTarget] = useState<DiagnosticTarget | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
 
   const active = activeRun?.status === "queued" || activeRun?.status === "running";
@@ -114,6 +116,7 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
     setDialog(null);
     setCaseDialog(null);
     setReportRun(null);
+    setDiagnosticTarget(null);
     setActiveRun(null);
     void Promise.all([
       api.getTestOrders(product.id),
@@ -669,7 +672,19 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
           run={reportRun}
           orderName={detail.name}
           physicalEnvironmentName={detail.physicalEnvironmentName}
+          onDiagnose={(target) => {
+            setDiagnosticTarget({ testRunId: reportRun.id, ...target });
+            setReportRun(null);
+          }}
           onClose={() => setReportRun(null)}
+        />
+      )}
+
+      {diagnosticTarget && (
+        <DiagnosticAssistant
+          productId={product.id}
+          target={diagnosticTarget}
+          onClose={() => setDiagnosticTarget(null)}
         />
       )}
     </div>

@@ -16,6 +16,7 @@ interface BrowserToolsOptions {
   artifactsDirectory: string;
   onFinish: (result: FinishResult) => void;
   evidence: ToolEvidence;
+  includeFinishTool?: boolean;
   scenarioBinding?: {
     roles: Array<{ key: string; allowedDeviceIds: string[] }>;
   };
@@ -194,7 +195,7 @@ export function createBrowserTools(options: BrowserToolsOptions) {
     { additionalProperties: false },
   );
 
-  const tools = [
+  const browserTools = [
     defineTool({
       name: "browser_open",
       label: "打开页面",
@@ -266,7 +267,8 @@ export function createBrowserTools(options: BrowserToolsOptions) {
         return textResult(`截图已保存：${screenshotPath}`, { screenshotPath });
       },
     }),
-    defineTool({
+  ];
+  const finishTool = defineTool({
       name: "finish_test",
       label: "结束测试",
       description: scenarioBinding
@@ -302,8 +304,8 @@ export function createBrowserTools(options: BrowserToolsOptions) {
         options.onFinish(result);
         return textResult("测试结果已提交", { ...result });
       },
-    }),
-  ];
+    });
+  const tools = options.includeFinishTool === false ? browserTools : [...browserTools, finishTool];
 
   return {
     driver,

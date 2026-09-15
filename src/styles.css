@@ -1872,7 +1872,7 @@ button:disabled {
 
 .report-failure-row {
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) 72px;
+  grid-template-columns: 18px minmax(0, 1fr) 72px auto;
   align-items: flex-start;
   gap: 10px;
   background: #fffafa;
@@ -1888,6 +1888,11 @@ button:disabled {
   color: #7f8994;
   text-align: right;
   font-size: 10px;
+}
+
+.report-failure-row > .button {
+  align-self: center;
+  white-space: nowrap;
 }
 
 .report-result-title {
@@ -1918,7 +1923,7 @@ button:disabled {
 }
 
 .report-results-table {
-  min-width: 880px;
+  min-width: 980px;
   table-layout: auto;
 }
 
@@ -1937,10 +1942,15 @@ button:disabled {
   width: 190px;
 }
 
-.report-results-table th:last-child,
-.report-results-table td:last-child {
+.report-results-table th:nth-child(5),
+.report-results-table td:nth-child(5) {
   width: 104px;
   text-align: left;
+}
+
+.report-results-table th:last-child,
+.report-results-table td:last-child {
+  width: 88px;
 }
 
 .report-results-table td {
@@ -1965,6 +1975,225 @@ button:disabled {
   border-color: #d7dde3;
   background: #f7f8fa;
   color: #687481;
+}
+
+.diagnostic-modal {
+  width: min(920px, 100%);
+  height: min(760px, calc(100vh - 40px));
+}
+
+.diagnostic-title,
+.diagnostic-tool-badge,
+.diagnostic-tools-heading,
+.diagnostic-message-meta,
+.diagnostic-tool-item,
+.diagnostic-error {
+  display: flex;
+  align-items: center;
+}
+
+.diagnostic-title {
+  gap: 8px;
+  color: #526170;
+}
+
+.diagnostic-context-bar {
+  display: flex;
+  min-height: 58px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--border);
+  background: #f8fafc;
+  padding: 10px 20px;
+}
+
+.diagnostic-context-bar > div {
+  min-width: 0;
+}
+
+.diagnostic-context-bar strong,
+.diagnostic-context-bar span {
+  display: block;
+}
+
+.diagnostic-context-bar strong {
+  overflow: hidden;
+  color: #303b47;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diagnostic-context-bar > div > span {
+  margin-top: 3px;
+  color: #7c8793;
+  font-size: 10px;
+}
+
+.diagnostic-context-bar .diagnostic-tool-badge {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 5px;
+  color: #346449;
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.diagnostic-body {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.diagnostic-messages {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  padding: 0 22px;
+}
+
+.diagnostic-message {
+  border-bottom: 1px solid #e9edf1;
+  padding: 16px 2px;
+}
+
+.diagnostic-message.user {
+  background: #fafbfd;
+  box-shadow: -22px 0 #fafbfd, 22px 0 #fafbfd;
+}
+
+.diagnostic-message.error {
+  color: #9f3434;
+}
+
+.diagnostic-message-meta {
+  justify-content: space-between;
+  gap: 12px;
+  color: #77828f;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.diagnostic-message.assistant .diagnostic-message-meta span {
+  color: #315f96;
+}
+
+.diagnostic-message p {
+  margin: 7px 0 0;
+  color: #34404d;
+  font-size: 12px;
+  line-height: 1.75;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.diagnostic-message.streaming p {
+  color: #53606d;
+}
+
+.diagnostic-empty {
+  display: flex;
+  min-height: 260px;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 9px;
+  color: #8a95a1;
+  font-size: 11px;
+}
+
+.diagnostic-tools {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--border);
+  background: #f8fafb;
+  padding: 10px 20px 12px;
+}
+
+.diagnostic-tools-heading {
+  gap: 6px;
+  margin-bottom: 8px;
+  color: #5d6a77;
+  font-size: 10px;
+}
+
+.diagnostic-tool-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px 18px;
+}
+
+.diagnostic-tool-item {
+  min-width: 0;
+  gap: 6px;
+  color: #4f5d6a;
+  font-size: 10px;
+}
+
+.diagnostic-tool-item.failed {
+  color: #a43a3a;
+}
+
+.diagnostic-tool-item > span {
+  flex: 0 0 auto;
+  font-weight: 650;
+}
+
+.diagnostic-tool-item > small {
+  min-width: 0;
+  overflow: hidden;
+  color: #818c97;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diagnostic-error {
+  gap: 7px;
+  border-top: 1px solid #eccaca;
+  background: #fff5f5;
+  color: #a13737;
+  padding: 8px 20px;
+  font-size: 10px;
+}
+
+.diagnostic-composer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+  border-top: 1px solid var(--border);
+  background: #ffffff;
+  padding: 12px 20px 16px;
+}
+
+.diagnostic-composer textarea {
+  width: 100%;
+  min-height: 68px;
+  max-height: 150px;
+  resize: vertical;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  outline: none;
+  color: #2c3743;
+  padding: 9px 10px;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.diagnostic-composer textarea:focus {
+  border-color: #6f9bcf;
+  box-shadow: 0 0 0 2px rgb(25 103 210 / 9%);
+}
+
+.diagnostic-composer-actions {
+  min-width: 80px;
+}
+
+.diagnostic-composer-actions .button {
+  width: 100%;
 }
 
 .case-context {
@@ -2539,6 +2768,11 @@ button:disabled {
     text-align: left;
   }
 
+  .report-failure-row > .button {
+    grid-column: 2;
+    justify-self: start;
+  }
+
   .report-results-wrap {
     border: 0;
     overflow: visible;
@@ -2609,10 +2843,20 @@ button:disabled {
     padding-top: 8px;
   }
 
-  .report-results-table td:last-child {
+  .report-results-table td:nth-child(5) {
     grid-column: 3;
     grid-row: 1 / span 2;
     align-self: start;
+  }
+
+  .report-results-table td:last-child {
+    grid-column: 3;
+    grid-row: 2;
+    align-self: end;
+  }
+
+  .diagnostic-tool-list {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -2693,5 +2937,23 @@ button:disabled {
     border-bottom: 0;
     border-left: 0;
     border-radius: 6px 6px 0 0;
+  }
+
+  .diagnostic-modal {
+    height: 92vh;
+  }
+
+  .diagnostic-context-bar {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 7px;
+  }
+
+  .diagnostic-composer {
+    grid-template-columns: 1fr;
+  }
+
+  .diagnostic-composer-actions {
+    justify-self: end;
   }
 }

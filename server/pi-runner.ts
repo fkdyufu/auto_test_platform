@@ -17,7 +17,7 @@ const RUNTIME_PROVIDER_ID = "test-runner";
 const AGENT_INACTIVITY_TIMEOUT_MS = 5 * 60_000;
 const ASSISTANT_DELTA_BATCH_MS = 250;
 
-const SYSTEM_PROMPT = `你是一个自动化测试执行 Agent。你会收到一段测试需求，并通过当前提供的浏览器或设备控制工具直接完成它。
+const TEST_SYSTEM_PROMPT = `你是一个自动化测试执行 Agent。你会收到一段测试需求，并通过当前提供的浏览器或设备控制工具直接完成它。
 
 执行规则：
 1. 根据设备 ID 和控制接口 ID 选择工具，不要自行编造地址或凭据。
@@ -27,6 +27,16 @@ const SYSTEM_PROMPT = `你是一个自动化测试执行 Agent。你会收到一
 5. 只有实际观察到符合需求的结果后才能判定通过。
 6. 完成后必须调用 finish_test；无法完成时调用 finish_test 并标记 failed。
 7. 不要只描述操作步骤，直接执行需求。`;
+
+const DIAGNOSTIC_SYSTEM_PROMPT = `你是自动化测试平台中的用例诊断 Agent。你会收到产品、当前资源与环境、测试场景、用例执行快照、历史工具证据和诊断对话。
+
+诊断规则：
+1. 回答用户最新的问题，并区分已证实事实、合理推测和仍需验证的事项。
+2. 历史执行证据表示测试发生时的记录；当前资源配置和你新调用工具得到的结果表示当前状态，不要混为一谈。
+3. 必要时直接调用浏览器或 device_* 工具补充检查，只使用平台提供的设备 ID 和控制接口 ID。
+4. 默认优先采用只读命令和查询操作；用户明确要求修改或复现时可以执行写操作，但要说明实际做了什么。
+5. 不得输出、猜测或索要设备密码。凭据由平台在工具内部处理。
+6. 不要调用 finish_test，也不要改写原测试结果。最终以清晰、简洁的中文给出判断、依据和下一步建议。`;
 
 export interface RunnerEvent {
   type: "status" | "assistant_delta" | "assistant" | "tool_start" | "tool_end";
@@ -47,6 +57,10 @@ export interface PiRunOptions {
     roles: Array<{ key: string; allowedDeviceIds: string[] }>;
   };
   devices?: DeviceResource[];
+}
+
+export interface PiDiagnosticOptions extends Omit<PiRunOptions, "requirement" | "scenarioBinding"> {
+  prompt: string;
 }
 
 function getMessageText(message: unknown): string {
@@ -112,22 +126,27 @@ async function createRuntime(settings: ModelSettings): Promise<{ modelRuntime: M
   return { modelRuntime, model };
 }
 
-function createResourceLoader(settingsManager: SettingsManager) {
+function createResourceLoader(settingsManager: SettingsManager, systemPrompt = TEST_SYSTEM_PROMPT) {
   return new DefaultResourceLoader({
     cwd: modelRuntimePaths.workspaceDirectory,
     agentDir: modelRuntimePaths.agentDirectory,
     settingsManager,
-    systemPromptOverride: () => SYSTEM_PROMPT,
+    systemPromptOverride: () => systemPrompt,
   });
 }
 
-export async function executePiRun(options: PiRunOptions): Promise<{ result?: FinishResult; finalText: string }> {
+interface PiAgentOptions extends PiRunOptions {
+  systemPrompt: string;
+  includeFinishTool: boolean;
+}
+
+async function executePiAgent(options: PiAgentOptions): Promise<{ result?: FinishResult; finalText: string }> {
   const { modelRuntime, model } = await createRuntime(options.settings);
   const settingsManager = SettingsManager.inMemory({
     compaction: { enabled: true },
     retry: { enabled: true, maxRetries: 2 },
   });
-  const resourceLoader = createResourceLoader(settingsManager);
+  const resourceLoader = createResourceLoader(settingsManager, options.systemPrompt);
   await resourceLoader.reload();
 
   let finishResult: FinishResult | undefined;
@@ -138,6 +157,7 @@ export async function executePiRun(options: PiRunOptions): Promise<{ result?: Fi
     runId: options.runId,
     artifactsDirectory: modelRuntimePaths.artifactsDirectory,
     evidence,
+    includeFinishTool: options.includeFinishTool,
     onFinish: (result) => {
       finishResult = result;
     },
@@ -219,6 +239,23 @@ export async function executePiRun(options: PiRunOptions): Promise<{ result?: Fi
     session.dispose();
     await Promise.all([browserToolset.driver.close(), deviceToolset.driver.close()]);
   }
+}
+
+export function executePiRun(options: PiRunOptions): Promise<{ result?: FinishResult; finalText: string }> {
+  return executePiAgent({
+    ...options,
+    systemPrompt: TEST_SYSTEM_PROMPT,
+    includeFinishTool: true,
+  });
+}
+
+export function executePiDiagnostic(options: PiDiagnosticOptions): Promise<{ finalText: string }> {
+  return executePiAgent({
+    ...options,
+    requirement: options.prompt,
+    systemPrompt: DIAGNOSTIC_SYSTEM_PROMPT,
+    includeFinishTool: false,
+  });
 }
 
 export async function testModelConnection(settings: ModelSettings): Promise<string> {

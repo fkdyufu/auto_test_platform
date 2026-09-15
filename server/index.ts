@@ -15,7 +15,9 @@ import {
   type TestRun,
 } from "./catalog-store.js";
 import { sanitizeToolEvent } from "./event-sanitizer.js";
-import { executePiRun, testModelConnection, type RunnerEvent } from "./pi-runner.js";
+import { buildDiagnosticPrompt } from "./diagnostic-context.js";
+import { diagnosticStore } from "./diagnostic-store.js";
+import { executePiDiagnostic, executePiRun, testModelConnection, type RunnerEvent } from "./pi-runner.js";
 import { resolveRunResult } from "./run-result.js";
 import {
   readModelSettings,
@@ -68,7 +70,7 @@ interface RunRecord {
   cancelRequested: boolean;
   logPath: string;
   logWrite: Promise<void>;
-  source: "adhoc" | "test_order";
+  source: "adhoc" | "test_order" | "diagnostic";
   testOrderId?: string;
 }
 
@@ -154,6 +156,7 @@ async function hydrateRun(runId: string): Promise<RunRecord | undefined> {
 
 async function recoverInterruptedRuns(): Promise<void> {
   const catalogRunIds = new Set(await catalogStore.failInterruptedTestRuns(INTERRUPTED_RUN_REASON));
+  const diagnosticCount = await diagnosticStore.failInterruptedConversations(INTERRUPTED_RUN_REASON);
   await mkdir(runLogsDirectory, { recursive: true });
   const fileNames = await readdir(runLogsDirectory);
   let recoveredCount = 0;
@@ -176,6 +179,9 @@ async function recoverInterruptedRuns(): Promise<void> {
   if (recoveredCount > 0) {
     console.warn(`已将 ${recoveredCount} 个遗留执行任务标记为失败`);
   }
+  if (diagnosticCount > 0) {
+    console.warn(`已将 ${diagnosticCount} 个遗留诊断对话恢复为空闲状态`);
+  }
 }
 
 function publicRun(run: RunRecord) {
@@ -192,9 +198,9 @@ function publicRun(run: RunRecord) {
 
 async function createRunRecord(
   requirement: string,
-  metadata: { source?: RunRecord["source"]; testOrderId?: string } = {},
+  metadata: { id?: string; source?: RunRecord["source"]; testOrderId?: string } = {},
 ): Promise<RunRecord> {
-  const runId = randomUUID();
+  const runId = metadata.id || randomUUID();
   const run: RunRecord = {
     id: runId,
     requirement,
@@ -781,6 +787,170 @@ app.post("/api/products/:productId/test-orders/:id/runs", async (request, respon
       publish(run, { type: "error", message, error: true });
       updateStatus(run, "failed", "测试单执行失败");
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get(
+  "/api/products/:productId/test-runs/:runId/case-runs/:caseRunId/diagnostics",
+  async (request, response, next) => {
+    try {
+      await catalogStore.getDiagnosticExecutionContext(
+        request.params.productId,
+        request.params.runId,
+        request.params.caseRunId,
+      );
+      response.json(await diagnosticStore.list(
+        request.params.productId,
+        request.params.runId,
+        request.params.caseRunId,
+      ));
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+app.post(
+  "/api/products/:productId/test-runs/:runId/case-runs/:caseRunId/diagnostics",
+  async (request, response, next) => {
+    try {
+      const context = await catalogStore.getDiagnosticExecutionContext(
+        request.params.productId,
+        request.params.runId,
+        request.params.caseRunId,
+      );
+      response.status(201).json(await diagnosticStore.getOrCreate(
+        request.params.productId,
+        request.params.runId,
+        request.params.caseRunId,
+        context.caseRun.caseNameSnapshot,
+      ));
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+app.get("/api/products/:productId/diagnostics/:id", async (request, response, next) => {
+  try {
+    const conversation = await diagnosticStore.get(request.params.productId, request.params.id);
+    await catalogStore.getDiagnosticExecutionContext(
+      request.params.productId,
+      conversation.testRunId,
+      conversation.caseRunId,
+    );
+    response.json(conversation);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/products/:productId/diagnostics/:id/messages", async (request, response, next) => {
+  let startedConversation: Awaited<ReturnType<typeof diagnosticStore.startTurn>> | undefined;
+  let diagnosticRunId = "";
+  try {
+    const question = typeof request.body?.content === "string" ? request.body.content.trim() : "";
+    if (!question) throw new CatalogError("请输入诊断问题");
+
+    const settings = await readModelSettings();
+    if (!toPublicSettings(settings).configured) {
+      response.status(409).json({ error: "请先完成模型配置" });
+      return;
+    }
+
+    const conversation = await diagnosticStore.get(request.params.productId, request.params.id);
+    const context = await catalogStore.getDiagnosticExecutionContext(
+      request.params.productId,
+      conversation.testRunId,
+      conversation.caseRunId,
+    );
+    const testExecution = runs.get(conversation.testRunId) || await hydrateRun(conversation.testRunId);
+    diagnosticRunId = randomUUID();
+    startedConversation = await diagnosticStore.startTurn(
+      request.params.productId,
+      conversation.id,
+      question,
+      diagnosticRunId,
+    );
+
+    let run: RunRecord;
+    try {
+      run = await createRunRecord(`诊断：${context.caseRun.caseNameSnapshot} - ${question}`, {
+        id: diagnosticRunId,
+        source: "diagnostic",
+        testOrderId: context.testOrder.id,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "创建诊断任务失败";
+      await diagnosticStore.finishTurn(request.params.productId, conversation.id, diagnosticRunId, message, true);
+      throw error;
+    }
+
+    response.status(202).json({ conversation: startedConversation, run: publicRun(run) });
+
+    void (async () => {
+      try {
+        if (run.cancelRequested) {
+          await diagnosticStore.finishTurn(
+            request.params.productId,
+            conversation.id,
+            run.id,
+            "诊断已取消",
+            true,
+          );
+          updateStatus(run, "cancelled", "诊断已取消");
+          return;
+        }
+
+        updateStatus(run, "running", "正在分析用例执行结果");
+        const prompt = buildDiagnosticPrompt(context, testExecution?.events || [], startedConversation!.messages);
+        const execution = await executePiDiagnostic({
+          runId: run.id,
+          prompt,
+          settings,
+          devices: context.devices,
+          onEvent: (event) => publish(run, event),
+          onAbortReady: (abort) => {
+            run.abort = abort;
+            if (run.cancelRequested) void abort();
+          },
+        });
+
+        if (run.cancelRequested) {
+          await diagnosticStore.finishTurn(
+            request.params.productId,
+            conversation.id,
+            run.id,
+            "诊断已取消",
+            true,
+          );
+          updateStatus(run, "cancelled", "诊断已取消");
+          return;
+        }
+
+        await diagnosticStore.finishTurn(
+          request.params.productId,
+          conversation.id,
+          run.id,
+          execution.finalText,
+        );
+        updateStatus(run, "completed", "诊断完成");
+      } catch (error) {
+        const cancelled = run.cancelRequested;
+        const message = cancelled ? "诊断已取消" : error instanceof Error ? error.message : "诊断失败";
+        await diagnosticStore
+          .finishTurn(request.params.productId, conversation.id, run.id, message, true)
+          .catch(() => undefined);
+        if (cancelled) {
+          updateStatus(run, "cancelled", "诊断已取消");
+        } else {
+          publish(run, { type: "error", message, error: true });
+          updateStatus(run, "failed", "诊断失败");
+        }
+      }
+    })();
   } catch (error) {
     next(error);
   }
