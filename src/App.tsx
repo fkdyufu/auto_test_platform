@@ -194,9 +194,9 @@ function App() {
             <span>产品概览</span>
             {page === "products" && <ChevronRight className="nav-chevron" size={16} />}
           </button>
-          <button className={`nav-item ${page === "resources" ? "active" : ""}`} onClick={() => navigate("resources")} title="资源与环境" disabled={!activeProduct}>
+          <button className={`nav-item ${page === "resources" ? "active" : ""}`} onClick={() => navigate("resources")} title="资源与场景" disabled={!activeProduct}>
             <Network size={18} />
-            <span>资源与环境</span>
+            <span>资源与场景</span>
             {page === "resources" && <ChevronRight className="nav-chevron" size={16} />}
           </button>
           <button className={`nav-item ${page === "cases" ? "active" : ""}`} onClick={() => navigate("cases")} title="用例库" disabled={!activeProduct}>

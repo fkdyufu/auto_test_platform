@@ -361,7 +361,7 @@ export class DeviceToolDriver {
 
   resolve(deviceId: string, interfaceId: string | undefined, type: ControlInterfaceType): ResolvedControlInterface {
     const device = this.devices.find((item) => item.id === deviceId);
-    if (!device) throw new Error(`设备不在当前物理环境中：${deviceId}`);
+    if (!device) throw new Error(`设备不在当前场景绑定范围中：${deviceId}`);
     const controls = device.controlInterfaces.filter((item) => item.type === type);
     if (interfaceId) {
       const control = controls.find((item) => item.id === interfaceId);
@@ -453,7 +453,7 @@ export class DeviceToolDriver {
 }
 
 const commonParameters = {
-  deviceId: Type.String({ description: "当前物理环境中的设备 ID" }),
+  deviceId: Type.String({ description: "当前场景绑定的设备 ID" }),
   interfaceId: Type.Optional(Type.String({ description: "控制接口 ID；设备只有一个同类型接口时可省略" })),
 };
 

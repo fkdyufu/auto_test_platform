@@ -52,13 +52,11 @@ function runLabel(run: TestRun): string {
 export function TestRunReportDialog({
   run,
   orderName,
-  physicalEnvironmentName,
   onDiagnose,
   onClose,
 }: {
   run: TestRun;
   orderName: string;
-  physicalEnvironmentName: string;
   onDiagnose: (target: { caseRunId: string; caseName: string; scenarioName: string }) => void;
   onClose: () => void;
 }) {
@@ -90,7 +88,7 @@ export function TestRunReportDialog({
             <div>
               <span className="detail-kicker">{run.triggerType === "all" ? "整单执行" : "单用例执行"}</span>
               <h3>{orderName}</h3>
-              <p>{formatDateTime(run.startedAt || run.createdAt)} · {physicalEnvironmentName || "未配置物理环境"} · {formatRunDuration(totalDuration)}</p>
+              <p>{formatDateTime(run.startedAt || run.createdAt)} · {run.scenarioRuns.length} 个场景 · {formatRunDuration(totalDuration)}</p>
             </div>
             <span className={`status-badge report-status ${runAppearance(run)}`}>{runLabel(run)}</span>
           </section>

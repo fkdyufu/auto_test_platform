@@ -145,31 +145,10 @@ export interface DeviceResource {
   updatedAt: string;
 }
 
-export interface PhysicalConnection {
-  id: string;
-  sourceDeviceId: string;
-  sourcePort: string;
-  targetDeviceId: string;
-  targetPort: string;
-  description: string;
-}
-
-export interface PhysicalEnvironment {
-  id: string;
-  productId: string;
-  name: string;
-  description: string;
-  deviceIds: string[];
-  connections: PhysicalConnection[];
-  createdAt: string;
-  updatedAt: string;
-}
-
 export interface ScenarioRole {
   id: string;
   key: string;
-  name: string;
-  deviceType: string;
+  deviceId: string;
 }
 
 export interface ScenarioParameter {
@@ -218,6 +197,7 @@ export interface ScenarioRun {
   status: RunStatus;
   outcome?: TestOutcome;
   roleBindings: Record<string, string>;
+  scenarioSnapshot?: TestScenario;
   parameterValues: Record<string, string>;
   caseRunIds: string[];
   summary?: string;
@@ -246,8 +226,6 @@ export interface TestOrderSummary {
   productName: string;
   name: string;
   description: string;
-  physicalEnvironmentId: string;
-  physicalEnvironmentName: string;
   caseIds: string[];
   caseCount: number;
   createdAt: string;
@@ -258,7 +236,6 @@ export interface TestOrderSummary {
 export interface TestOrderDetail extends TestOrderSummary {
   cases: TestCase[];
   runs: TestRun[];
-  physicalEnvironment?: PhysicalEnvironment;
 }
 
 export interface ProductInput {
@@ -299,7 +276,6 @@ export interface ZentaoCaseImportResult {
 export interface TestOrderInput {
   name: string;
   description: string;
-  physicalEnvironmentId: string;
   caseIds: string[];
 }
 
@@ -310,7 +286,6 @@ export interface DeviceResourceInput {
   description: string;
   controlInterfaces: ControlInterfaceInput[];
 }
-export type PhysicalEnvironmentInput = Omit<PhysicalEnvironment, "id" | "productId" | "createdAt" | "updatedAt">;
 export type TestScenarioInput = Omit<TestScenario, "id" | "productId" | "isDefault" | "createdAt" | "updatedAt">;
 export type TestScenarioUpdateInput = TestScenarioInput & { caseIds: string[] };
 
@@ -379,20 +354,6 @@ export const api = {
     request<DeviceResource>(`/api/products/${productId}/device-resources/${id}`, { method: "PUT", body: JSON.stringify(input) }),
   deleteDeviceResource: (productId: string, id: string) =>
     request<void>(`/api/products/${productId}/device-resources/${id}`, { method: "DELETE" }),
-  getPhysicalEnvironments: (productId: string) =>
-    request<PhysicalEnvironment[]>(`/api/products/${productId}/physical-environments`),
-  createPhysicalEnvironment: (productId: string, input: PhysicalEnvironmentInput) =>
-    request<PhysicalEnvironment>(`/api/products/${productId}/physical-environments`, {
-      method: "POST",
-      body: JSON.stringify(input),
-    }),
-  updatePhysicalEnvironment: (productId: string, id: string, input: PhysicalEnvironmentInput) =>
-    request<PhysicalEnvironment>(`/api/products/${productId}/physical-environments/${id}`, {
-      method: "PUT",
-      body: JSON.stringify(input),
-    }),
-  deletePhysicalEnvironment: (productId: string, id: string) =>
-    request<void>(`/api/products/${productId}/physical-environments/${id}`, { method: "DELETE" }),
   getTestScenarios: (productId: string) => request<TestScenario[]>(`/api/products/${productId}/test-scenarios`),
   createTestScenario: (productId: string, input: TestScenarioInput) =>
     request<TestScenario>(`/api/products/${productId}/test-scenarios`, { method: "POST", body: JSON.stringify(input) }),

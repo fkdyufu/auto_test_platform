@@ -1,6 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
 import {
-  Cable,
   Layers3,
   Library,
   Network,
@@ -17,9 +16,6 @@ import {
   type ControlInterfaceType,
   type DeviceResource,
   type DeviceResourceInput,
-  type PhysicalConnection,
-  type PhysicalEnvironment,
-  type PhysicalEnvironmentInput,
   type ProductSummary,
   type ScenarioParameter,
   type ScenarioRole,
@@ -29,11 +25,10 @@ import {
 } from "../api";
 import { InlineNotice, Modal, PageHeader, type Notice } from "../components/ui";
 
-type ResourceTab = "devices" | "physicalEnvironments" | "scenarios";
+type ResourceTab = "devices" | "scenarios";
 
 type ResourceDialog =
   | { kind: "device"; id?: string; form: DeviceResourceInput }
-  | { kind: "physicalEnvironment"; id?: string; form: PhysicalEnvironmentInput }
   | { kind: "scenario"; id?: string; form: TestScenarioInput; caseIds: string[] };
 
 const INTERFACE_LABELS: Record<ControlInterfaceType, string> = {
@@ -56,7 +51,6 @@ const INTERFACE_ADDRESS_PLACEHOLDERS: Record<ControlInterfaceType, string> = {
 
 const TAB_META: Record<ResourceTab, { label: string; action: string }> = {
   devices: { label: "设备资源", action: "新增设备" },
-  physicalEnvironments: { label: "物理环境", action: "新增物理环境" },
   scenarios: { label: "测试场景", action: "新增场景" },
 };
 
@@ -88,16 +82,12 @@ function emptyDevice(): DeviceResourceInput {
   };
 }
 
-function emptyPhysicalEnvironment(): PhysicalEnvironmentInput {
-  return { name: "", description: "", deviceIds: [], connections: [] };
-}
-
 function emptyScenario(): TestScenarioInput {
   return {
     name: "",
     category: "",
     description: "",
-    roles: [{ id: newId(), key: "", name: "", deviceType: "" }],
+    roles: [{ id: newId(), key: "", deviceId: "" }],
     parameters: [],
     setupInstructions: "",
     verificationInstructions: "",
@@ -121,7 +111,6 @@ function scenarioInput(scenario: TestScenario): TestScenarioInput {
 export function ResourcesPage({ product }: { product: ProductSummary }) {
   const [tab, setTab] = useState<ResourceTab>("devices");
   const [devices, setDevices] = useState<DeviceResource[]>([]);
-  const [physicalEnvironments, setPhysicalEnvironments] = useState<PhysicalEnvironment[]>([]);
   const [scenarios, setScenarios] = useState<TestScenario[]>([]);
   const [testCases, setTestCases] = useState<TestCase[]>([]);
   const [dialog, setDialog] = useState<ResourceDialog | null>(null);
@@ -130,14 +119,12 @@ export function ResourcesPage({ product }: { product: ProductSummary }) {
   const [submitting, setSubmitting] = useState(false);
 
   const reload = async () => {
-    const [nextDevices, nextPhysicalEnvironments, nextScenarios, nextTestCases] = await Promise.all([
+    const [nextDevices, nextScenarios, nextTestCases] = await Promise.all([
       api.getDeviceResources(product.id),
-      api.getPhysicalEnvironments(product.id),
       api.getTestScenarios(product.id),
       api.getTestCases(product.id),
     ]);
     setDevices(nextDevices);
-    setPhysicalEnvironments(nextPhysicalEnvironments);
     setScenarios(nextScenarios);
     setTestCases(nextTestCases);
   };
@@ -153,9 +140,6 @@ export function ResourcesPage({ product }: { product: ProductSummary }) {
   const openCreate = () => {
     setDialogError("");
     if (tab === "devices") setDialog({ kind: "device", form: emptyDevice() });
-    else if (tab === "physicalEnvironments") {
-      setDialog({ kind: "physicalEnvironment", form: emptyPhysicalEnvironment() });
-    }
     else setDialog({ kind: "scenario", form: emptyScenario(), caseIds: [] });
   };
 
@@ -178,9 +162,6 @@ export function ResourcesPage({ product }: { product: ProductSummary }) {
       if (dialog.kind === "device") {
         if (dialog.id) await api.updateDeviceResource(product.id, dialog.id, dialog.form);
         else await api.createDeviceResource(product.id, dialog.form);
-      } else if (dialog.kind === "physicalEnvironment") {
-        if (dialog.id) await api.updatePhysicalEnvironment(product.id, dialog.id, dialog.form);
-        else await api.createPhysicalEnvironment(product.id, dialog.form);
       } else if (dialog.id) await api.updateTestScenario(product.id, dialog.id, { ...dialog.form, caseIds: dialog.caseIds });
       else await api.createTestScenario(product.id, dialog.form);
       await reload();
@@ -197,7 +178,6 @@ export function ResourcesPage({ product }: { product: ProductSummary }) {
     if (!window.confirm(`确定删除“${name}”吗？`)) return;
     try {
       if (kind === "device") await api.deleteDeviceResource(product.id, id);
-      else if (kind === "physicalEnvironment") await api.deletePhysicalEnvironment(product.id, id);
       else await api.deleteTestScenario(product.id, id);
       await reload();
       setNotice({ kind: "success", message: "配置已删除" });
@@ -212,7 +192,7 @@ export function ResourcesPage({ product }: { product: ProductSummary }) {
     <div className="page resource-config-page">
       <PageHeader
         icon={<Network size={19} />}
-        title="资源与环境"
+        title="资源与场景"
         actions={
           <button className="button primary" onClick={openCreate}>
             <Plus size={17} />
@@ -226,9 +206,6 @@ export function ResourcesPage({ product }: { product: ProductSummary }) {
       <div className="resource-tabs" role="tablist" aria-label="资源类型">
         <button className={tab === "devices" ? "active" : ""} onClick={() => setTab("devices")}>
           <Server size={16} />设备资源<span>{devices.length}</span>
-        </button>
-        <button className={tab === "physicalEnvironments" ? "active" : ""} onClick={() => setTab("physicalEnvironments")}>
-          <Cable size={16} />物理环境<span>{physicalEnvironments.length}</span>
         </button>
         <button className={tab === "scenarios" ? "active" : ""} onClick={() => setTab("scenarios")}>
           <Workflow size={16} />测试场景<span>{scenarios.length}</span>
@@ -257,27 +234,6 @@ export function ResourcesPage({ product }: { product: ProductSummary }) {
               </tbody>
             </table>
           </div>
-        ) : tab === "physicalEnvironments" ? (
-          <div className="table-wrap">
-            <table className="data-table">
-              <thead><tr><th>物理环境名称</th><th>设备</th><th>连接关系</th><th>物理环境说明</th><th aria-label="操作" /></tr></thead>
-              <tbody>
-                {physicalEnvironments.map((physicalEnvironment) => (
-                  <tr key={physicalEnvironment.id}>
-                    <td className="name-cell"><strong>{physicalEnvironment.name}</strong></td>
-                    <td>{physicalEnvironment.deviceIds.length}<span className="cell-subtext">{physicalEnvironment.deviceIds.slice(0, 3).map(deviceName).join("、")}</span></td>
-                    <td>{physicalEnvironment.connections.length}</td>
-                    <td className="truncate-cell">{physicalEnvironment.description || "-"}</td>
-                    <td><div className="row-actions">
-                      <button className="icon-action" title="编辑物理环境" onClick={() => setDialog({ kind: "physicalEnvironment", id: physicalEnvironment.id, form: { ...physicalEnvironment, deviceIds: [...physicalEnvironment.deviceIds], connections: structuredClone(physicalEnvironment.connections) } })}><Pencil size={16} /></button>
-                      <button className="icon-action danger" title="删除物理环境" onClick={() => void remove("physicalEnvironment", physicalEnvironment.id, physicalEnvironment.name)}><Trash2 size={16} /></button>
-                    </div></td>
-                  </tr>
-                ))}
-                {!physicalEnvironments.length && <tr><td colSpan={5} className="table-empty"><Layers3 size={24} />暂无物理环境</td></tr>}
-              </tbody>
-            </table>
-          </div>
         ) : (
           <div className="table-wrap">
             <table className="data-table">
@@ -287,13 +243,13 @@ export function ResourcesPage({ product }: { product: ProductSummary }) {
                   <tr key={scenario.id}>
                     <td className="name-cell"><strong>{scenario.name}</strong>{scenario.isDefault && <small>系统默认</small>}</td>
                     <td><span className="category-label">{scenario.category}</span></td>
-                    <td>{scenario.roles.length}<span className="cell-subtext">{scenario.roles.map((role) => role.name).join("、")}</span></td>
+                    <td>{scenario.roles.length}<span className="cell-subtext">{scenario.roles.map((role) => `${role.key} → ${role.deviceId ? deviceName(role.deviceId) : "待绑定"}`).join("、")}</span></td>
                     <td>{scenario.parameters.length}</td>
                     <td>{testCases.filter((testCase) => testCase.scenarioId === scenario.id).length}</td>
                     <td className="truncate-cell">{scenario.description || "-"}</td>
                     <td><div className="row-actions">
-                      {scenario.isDefault ? <span className="category-label">系统维护</span> : <>
-                        <button className="icon-action" title="编辑场景" onClick={() => setDialog({ kind: "scenario", id: scenario.id, form: scenarioInput(scenario), caseIds: testCases.filter((testCase) => testCase.scenarioId === scenario.id).map((testCase) => testCase.id) })}><Pencil size={16} /></button>
+                      <button className="icon-action" title="编辑场景" onClick={() => { setDialogError(""); setDialog({ kind: "scenario", id: scenario.id, form: scenarioInput(scenario), caseIds: testCases.filter((testCase) => testCase.scenarioId === scenario.id).map((testCase) => testCase.id) }); }}><Pencil size={16} /></button>
+                      {!scenario.isDefault && <>
                         <button className="icon-action danger" title="删除场景" onClick={() => void remove("scenario", scenario.id, scenario.name)}><Trash2 size={16} /></button>
                       </>}
                     </div></td>
@@ -308,15 +264,13 @@ export function ResourcesPage({ product }: { product: ProductSummary }) {
 
       {dialog && (
         <Modal
-          title={`${dialog.id ? "编辑" : "新增"}${dialog.kind === "device" ? "设备资源" : dialog.kind === "physicalEnvironment" ? "物理环境" : "测试场景"}`}
+          title={`${dialog.id ? "编辑" : "新增"}${dialog.kind === "device" ? "设备资源" : "测试场景"}`}
           onClose={() => setDialog(null)}
           onSubmit={save}
           submitting={submitting}
         >
           {dialogError && <div className="form-error">{dialogError}</div>}
-          {dialog.kind === "device" ? <DeviceForm dialog={dialog} setDialog={setDialog} /> : dialog.kind === "physicalEnvironment" ? (
-            <PhysicalEnvironmentForm dialog={dialog} setDialog={setDialog} devices={devices} />
-          ) : <ScenarioForm dialog={dialog} setDialog={setDialog} testCases={testCases} scenarios={scenarios} />}
+          {dialog.kind === "device" ? <DeviceForm dialog={dialog} setDialog={setDialog} /> : <ScenarioForm dialog={dialog} setDialog={setDialog} devices={devices} testCases={testCases} scenarios={scenarios} />}
         </Modal>
       )}
     </div>
@@ -355,50 +309,16 @@ function DeviceForm({ dialog, setDialog }: { dialog: Extract<ResourceDialog, { k
   </>;
 }
 
-function PhysicalEnvironmentForm({ dialog, setDialog, devices }: { dialog: Extract<ResourceDialog, { kind: "physicalEnvironment" }>; setDialog: (value: ResourceDialog) => void; devices: DeviceResource[] }) {
-  const update = (value: Partial<PhysicalEnvironmentInput>) => setDialog({ ...dialog, form: { ...dialog.form, ...value } });
-  const toggleDevice = (deviceId: string) => {
-    const selected = dialog.form.deviceIds.includes(deviceId);
-    const deviceIds = selected ? dialog.form.deviceIds.filter((id) => id !== deviceId) : [...dialog.form.deviceIds, deviceId];
-    update({ deviceIds, connections: dialog.form.connections.filter((item) => deviceIds.includes(item.sourceDeviceId) && deviceIds.includes(item.targetDeviceId)) });
-  };
-  const updateConnection = (id: string, value: Partial<PhysicalConnection>) =>
-    update({ connections: dialog.form.connections.map((item) => item.id === id ? { ...item, ...value } : item) });
-  const selectedDevices = devices.filter((item) => dialog.form.deviceIds.includes(item.id));
-  return <>
-    <div className="modal-grid">
-      <label className="field"><span>物理环境名称</span><input autoFocus value={dialog.form.name} onChange={(event) => update({ name: event.target.value })} /></label>
-      <label className="field full-width"><span>物理环境说明</span><textarea rows={3} value={dialog.form.description} onChange={(event) => update({ description: event.target.value })} /></label>
-    </div>
-    <div className="form-list-heading"><div><Server size={16} /><strong>环境设备</strong></div><small>已选择 {dialog.form.deviceIds.length} 台</small></div>
-    <div className="case-picker resource-picker">
-      {devices.map((device) => <label key={device.id} className="case-option"><input type="checkbox" checked={dialog.form.deviceIds.includes(device.id)} onChange={() => toggleDevice(device.id)} /><span><strong>{device.name}</strong><small>{device.types.join("、")}{device.model ? ` / ${device.model}` : ""}</small></span></label>)}
-      {!devices.length && <div className="list-empty">请先创建设备资源</div>}
-    </div>
-    <div className="form-list-heading"><div><Cable size={16} /><strong>物理连接</strong></div><button type="button" className="button secondary compact" disabled={selectedDevices.length < 2} onClick={() => update({ connections: [...dialog.form.connections, { id: newId(), sourceDeviceId: selectedDevices[0]?.id || "", sourcePort: "", targetDeviceId: selectedDevices[1]?.id || "", targetPort: "", description: "" }] })}><Plus size={15} />添加连接</button></div>
-    <div className="structured-list">
-      {dialog.form.connections.map((item) => <div className="structured-row connection-row" key={item.id}>
-        <label><span>本端设备</span><select value={item.sourceDeviceId} onChange={(event) => updateConnection(item.id, { sourceDeviceId: event.target.value })}>{selectedDevices.map((device) => <option key={device.id} value={device.id}>{device.name}</option>)}</select></label>
-        <label><span>本端端口</span><input value={item.sourcePort} onChange={(event) => updateConnection(item.id, { sourcePort: event.target.value })} /></label>
-        <span className="connection-arrow">↔</span>
-        <label><span>对端设备</span><select value={item.targetDeviceId} onChange={(event) => updateConnection(item.id, { targetDeviceId: event.target.value })}>{selectedDevices.map((device) => <option key={device.id} value={device.id}>{device.name}</option>)}</select></label>
-        <label><span>对端端口</span><input value={item.targetPort} onChange={(event) => updateConnection(item.id, { targetPort: event.target.value })} /></label>
-        <label><span>说明</span><input value={item.description} onChange={(event) => updateConnection(item.id, { description: event.target.value })} /></label>
-        <button type="button" className="icon-action danger row-remove" title="删除连接" onClick={() => update({ connections: dialog.form.connections.filter((connection) => connection.id !== item.id) })}><Trash2 size={16} /></button>
-      </div>)}
-      {!dialog.form.connections.length && <div className="structured-empty">暂未配置物理连接</div>}
-    </div>
-  </>;
-}
-
 function ScenarioForm({
   dialog,
   setDialog,
+  devices,
   testCases,
   scenarios,
 }: {
   dialog: Extract<ResourceDialog, { kind: "scenario" }>;
   setDialog: (value: ResourceDialog) => void;
+  devices: DeviceResource[];
   testCases: TestCase[];
   scenarios: TestScenario[];
 }) {
@@ -430,18 +350,22 @@ function ScenarioForm({
     });
   };
   const scenarioName = (scenarioId: string) => scenarios.find((scenario) => scenario.id === scenarioId)?.name || "场景已删除";
+  const isDefault = scenarios.some((scenario) => scenario.id === dialog.id && scenario.isDefault);
   return <>
     <div className="modal-grid">
-      <label className="field"><span>场景名称</span><input autoFocus value={dialog.form.name} onChange={(event) => update({ name: event.target.value })} /></label>
-      <label className="field"><span>功能分类</span><input value={dialog.form.category} placeholder="例如 VRRP、OSPF" onChange={(event) => update({ category: event.target.value })} /></label>
+      <label className="field"><span>场景名称</span><input autoFocus disabled={isDefault} value={dialog.form.name} onChange={(event) => update({ name: event.target.value })} /></label>
+      <label className="field"><span>功能分类</span><input disabled={isDefault} value={dialog.form.category} placeholder="例如 VRRP、OSPF" onChange={(event) => update({ category: event.target.value })} /></label>
       <label className="field full-width"><span>场景说明</span><textarea rows={2} value={dialog.form.description} onChange={(event) => update({ description: event.target.value })} /></label>
     </div>
-    <div className="form-list-heading"><div><Server size={16} /><strong>设备角色</strong></div><button type="button" className="button secondary compact" onClick={() => update({ roles: [...dialog.form.roles, { id: newId(), key: "", name: "", deviceType: "" }] })}><Plus size={15} />添加角色</button></div>
+    <div className="form-list-heading"><div><Server size={16} /><strong>设备角色</strong></div><button type="button" className="button secondary compact" onClick={() => update({ roles: [...dialog.form.roles, { id: newId(), key: "", deviceId: "" }] })}><Plus size={15} />添加角色</button></div>
     <div className="structured-list">
       {dialog.form.roles.map((item) => <div className="structured-row role-row" key={item.id}>
-        <label><span>角色标识</span><input value={item.key} placeholder="master" onChange={(event) => updateRole(item.id, { key: event.target.value })} /></label>
-        <label><span>显示名称</span><input value={item.name} placeholder="主设备" onChange={(event) => updateRole(item.id, { name: event.target.value })} /></label>
-        <label><span>设备类型</span><input value={item.deviceType} placeholder="TAU" onChange={(event) => updateRole(item.id, { deviceType: event.target.value })} /></label>
+        <label><span>角色标识</span><input required value={item.key} placeholder="DUT" onChange={(event) => updateRole(item.id, { key: event.target.value })} /></label>
+        <label><span>绑定设备</span><select required value={item.deviceId} onChange={(event) => updateRole(item.id, { deviceId: event.target.value })}>
+          <option value="">请选择设备</option>
+          {item.deviceId && !devices.some((device) => device.id === item.deviceId) && <option value={item.deviceId} disabled>设备已删除或不可用</option>}
+          {devices.map((device) => <option key={device.id} value={device.id} disabled={dialog.form.roles.some((role) => role.id !== item.id && role.deviceId === device.id)}>{device.name}</option>)}
+        </select></label>
         <button type="button" className="icon-action danger row-remove" title="删除角色" onClick={() => update({ roles: dialog.form.roles.filter((role) => role.id !== item.id) })}><Trash2 size={16} /></button>
       </div>)}
     </div>
@@ -455,11 +379,11 @@ function ScenarioForm({
       </div>)}
       {!dialog.form.parameters.length && <div className="structured-empty">暂无场景参数</div>}
     </div>
-    <div className="modal-grid instruction-grid">
+    {!isDefault && <div className="modal-grid instruction-grid">
       <label className="field full-width"><span>场景搭建要求</span><textarea rows={4} value={dialog.form.setupInstructions} onChange={(event) => update({ setupInstructions: event.target.value })} /></label>
       <label className="field full-width"><span>场景验证要求</span><textarea rows={3} value={dialog.form.verificationInstructions} onChange={(event) => update({ verificationInstructions: event.target.value })} /></label>
       <label className="field full-width"><span>场景清理要求</span><textarea rows={3} value={dialog.form.cleanupInstructions} onChange={(event) => update({ cleanupInstructions: event.target.value })} /></label>
-    </div>
+    </div>}
     {dialog.id && <>
       <div className="form-list-heading scenario-case-heading">
         <div><Library size={16} /><strong>关联用例</strong></div>

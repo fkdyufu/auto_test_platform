@@ -7,7 +7,6 @@ import {
   Eye,
   FileText,
   LoaderCircle,
-  Network,
   Pencil,
   Play,
   Plus,
@@ -16,7 +15,6 @@ import {
 } from "lucide-react";
 import {
   api,
-  type PhysicalEnvironment,
   type ProductSummary,
   type RunEvent,
   type RunResponse,
@@ -45,7 +43,6 @@ const STATUS_LABELS: Record<RunStatus, string> = {
 const EMPTY_ORDER: TestOrderInput = {
   name: "",
   description: "",
-  physicalEnvironmentId: "",
   caseIds: [],
 };
 
@@ -74,7 +71,6 @@ function StatusBadge({ run }: { run?: TestRun }) {
 
 export function TestOrdersPage({ product }: { product: ProductSummary }) {
   const [orders, setOrders] = useState<TestOrderSummary[]>([]);
-  const [physicalEnvironments, setPhysicalEnvironments] = useState<PhysicalEnvironment[]>([]);
   const [scenarios, setScenarios] = useState<TestScenario[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [detail, setDetail] = useState<TestOrderDetail | null>(null);
@@ -120,12 +116,10 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
     setActiveRun(null);
     void Promise.all([
       api.getTestOrders(product.id),
-      api.getPhysicalEnvironments(product.id),
       api.getTestScenarios(product.id),
     ])
-      .then(([nextOrders, nextPhysicalEnvironments, nextScenarios]) => {
+      .then(([nextOrders, nextScenarios]) => {
         setOrders(nextOrders);
-        setPhysicalEnvironments(nextPhysicalEnvironments);
         setScenarios(nextScenarios);
       })
       .catch((error) => setNotice({ kind: "error", message: error instanceof Error ? error.message : "读取测试单失败" }));
@@ -157,7 +151,6 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
           ? {
               name: order.name,
               description: order.description,
-              physicalEnvironmentId: order.physicalEnvironmentId,
               caseIds: [...order.caseIds],
             }
           : { ...EMPTY_ORDER },
@@ -176,14 +169,6 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
         ...dialog.form,
         caseIds: selected ? dialog.form.caseIds.filter((id) => id !== caseId) : [...dialog.form.caseIds, caseId],
       },
-    });
-  };
-
-  const selectPhysicalEnvironment = (physicalEnvironmentId: string) => {
-    if (!dialog) return;
-    setDialog({
-      ...dialog,
-      form: { ...dialog.form, physicalEnvironmentId },
     });
   };
 
@@ -358,7 +343,6 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
               <thead>
                 <tr>
                   <th>测试单</th>
-                  <th>物理环境</th>
                   <th>用例</th>
                   <th>最近执行</th>
                   <th>更新时间</th>
@@ -371,7 +355,6 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
                     <td className="name-cell">
                       <button className="link-button" onClick={() => setSelectedId(order.id)}>{order.name}</button>
                     </td>
-                    <td>{order.physicalEnvironmentName || "未配置"}</td>
                     <td>{order.caseCount}</td>
                     <td>
                       {order.latestRun ? (
@@ -402,7 +385,7 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
                 ))}
                 {!orders.length && (
                   <tr>
-                    <td colSpan={6} className="table-empty">
+                    <td colSpan={5} className="table-empty">
                       <ClipboardList size={24} />
                       暂无测试单
                     </td>
@@ -442,7 +425,7 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
           </section>
 
           <dl className="order-meta">
-            <div><dt>物理环境</dt><dd>{detail.physicalEnvironmentName || "未配置"}</dd></div>
+            <div><dt>场景数量</dt><dd>{groupedCases.length}</dd></div>
             <div><dt>用例数量</dt><dd>{detail.caseCount}</dd></div>
             <div><dt>最近执行</dt><dd><StatusBadge run={detail.runs[0]} /></dd></div>
             <div><dt>更新时间</dt><dd>{formatDateTime(detail.updatedAt)}</dd></div>
@@ -578,20 +561,6 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
               />
             </label>
           </div>
-          <div className="order-physical-environment-config">
-            <div className="form-list-heading"><div><Network size={16} /><strong>物理环境</strong></div><small>可选</small></div>
-            <div className="modal-grid">
-              <label className="field full-width">
-                <span>物理环境</span>
-                <select value={dialog.form.physicalEnvironmentId} onChange={(event) => selectPhysicalEnvironment(event.target.value)}>
-                  <option value="">不使用物理环境</option>
-                  {physicalEnvironments.map((physicalEnvironment) => (
-                    <option key={physicalEnvironment.id} value={physicalEnvironment.id}>{physicalEnvironment.name}</option>
-                  ))}
-                </select>
-              </label>
-            </div>
-          </div>
           <div className="case-picker-heading">
             <span>选择用例</span>
             <small>{dialog.form.caseIds.length} / {availableCases.length}</small>
@@ -682,7 +651,6 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
         <TestRunReportDialog
           run={reportRun}
           orderName={detail.name}
-          physicalEnvironmentName={detail.physicalEnvironmentName}
           onDiagnose={(target) => {
             setDiagnosticTarget({ testRunId: reportRun.id, ...target });
             setReportRun(null);

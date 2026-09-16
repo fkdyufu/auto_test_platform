@@ -55,7 +55,7 @@ export interface DeviceResource {
   archivedAt?: string;
 }
 
-export interface PhysicalConnection {
+interface LegacyPhysicalConnection {
   id: string;
   sourceDeviceId: string;
   sourcePort: string;
@@ -64,13 +64,13 @@ export interface PhysicalConnection {
   description: string;
 }
 
-export interface PhysicalEnvironment {
+interface LegacyPhysicalEnvironment {
   id: string;
   productId: string;
   name: string;
   description: string;
   deviceIds: string[];
-  connections: PhysicalConnection[];
+  connections: LegacyPhysicalConnection[];
   createdAt: string;
   updatedAt: string;
   archivedAt?: string;
@@ -79,8 +79,7 @@ export interface PhysicalEnvironment {
 export interface ScenarioRole {
   id: string;
   key: string;
-  name: string;
-  deviceType: string;
+  deviceId: string;
 }
 
 export interface ScenarioParameter {
@@ -112,14 +111,13 @@ export interface TestOrder {
   productId: string;
   name: string;
   description: string;
-  physicalEnvironmentId: string;
   caseIds: string[];
   createdAt: string;
   updatedAt: string;
   archivedAt?: string;
 }
 
-type LegacyTestOrder = Omit<TestOrder, "physicalEnvironmentId"> & {
+type LegacyTestOrder = TestOrder & {
   physicalEnvironmentId?: string;
   environmentId?: string;
   targetUrl?: string;
@@ -152,6 +150,7 @@ export interface ScenarioRun {
   status: ExecutionStatus;
   outcome?: TestOutcome;
   roleBindings: Record<string, string>;
+  scenarioSnapshot?: TestScenario;
   parameterValues: Record<string, string>;
   caseRunIds: string[];
   summary?: string;
@@ -175,11 +174,10 @@ export interface TestRun {
 }
 
 interface CatalogData {
-  version: 10;
+  version: 11;
   products: Product[];
   testCases: TestCase[];
   deviceResources: DeviceResource[];
-  physicalEnvironments: PhysicalEnvironment[];
   testScenarios: TestScenario[];
   testOrders: TestOrder[];
   testRuns: TestRun[];
@@ -218,7 +216,6 @@ export interface DeviceResourceSummary extends Omit<DeviceResource, "controlInte
 
 export interface TestOrderSummary extends TestOrder {
   productName: string;
-  physicalEnvironmentName: string;
   caseCount: number;
   latestRun?: TestRun;
 }
@@ -226,11 +223,9 @@ export interface TestOrderSummary extends TestOrder {
 export interface TestOrderDetail extends TestOrderSummary {
   cases: TestCase[];
   runs: TestRun[];
-  physicalEnvironment?: PhysicalEnvironment;
 }
 
 export interface TestOrderExecutionContext {
-  physicalEnvironment?: PhysicalEnvironment;
   devices: DeviceResource[];
   scenarios: TestScenario[];
 }
@@ -326,10 +321,10 @@ function createDefaultScenario(product: Product, timestamp = new Date().toISOStr
     isDefault: true,
     name: "默认场景",
     category: "默认",
-    description: "不切换逻辑拓扑，直接使用所选物理环境执行用例。",
+    description: "不执行额外的场景搭建，直接使用绑定设备的当前配置执行用例。",
     roles: [],
     parameters: [],
-    setupInstructions: "保持物理环境当前逻辑配置，不执行额外的场景搭建。",
+    setupInstructions: "",
     verificationInstructions: "确认用例所需设备及其控制接口可用。",
     cleanupInstructions: "",
     createdAt: timestamp,
@@ -348,11 +343,10 @@ function defaultData(): CatalogData {
     updatedAt: timestamp,
   }));
   return {
-    version: 10,
+    version: 11,
     products,
     testCases: [],
     deviceResources: [],
-    physicalEnvironments: [],
     testScenarios: products.map((product) => createDefaultScenario(product, timestamp)),
     testOrders: [],
     testRuns: [],
@@ -374,7 +368,15 @@ export class CatalogStore {
 
   private async initialize(): Promise<void> {
     try {
-      await readFile(this.filePath, "utf8");
+      const original = await readFile(this.filePath, "utf8");
+      const data = JSON.parse(original) as { version?: number };
+      if (typeof data.version === "number" && data.version >= 1 && data.version < 11) {
+        try {
+          await writeFile(`${this.filePath}.v${data.version}.bak`, original, { flag: "wx", mode: 0o600 });
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        }
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       await this.write(defaultData());
@@ -385,14 +387,15 @@ export class CatalogStore {
     this.initializePromise ??= this.initialize();
     await this.initializePromise;
     const data = JSON.parse(await readFile(this.filePath, "utf8")) as CatalogData & { version: number };
-    if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10].includes(data.version) || !Array.isArray(data.products) || !Array.isArray(data.testCases)) {
+    if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].includes(data.version) || !Array.isArray(data.products) || !Array.isArray(data.testCases)) {
       throw new CatalogError("业务数据文件格式不正确", 500);
     }
     const sourceVersion = data.version;
-    const legacyData = data as typeof data & { labEnvironments?: PhysicalEnvironment[] };
-    data.version = 10;
+    const legacyData = data as typeof data & { labEnvironments?: LegacyPhysicalEnvironment[]; physicalEnvironments?: LegacyPhysicalEnvironment[] };
+    let physicalEnvironments = legacyData.physicalEnvironments ?? legacyData.labEnvironments ?? [];
+    data.version = 11;
     data.deviceResources ??= [];
-    data.physicalEnvironments ??= legacyData.labEnvironments ?? [];
+    delete legacyData.physicalEnvironments;
     delete legacyData.labEnvironments;
     data.testScenarios ??= [];
     data.testOrders ??= [];
@@ -419,7 +422,7 @@ export class CatalogStore {
       }
       if (order.scenarioId && !scenarioOwners.has(order.scenarioId)) scenarioOwners.set(order.scenarioId, order.productId);
     });
-    data.physicalEnvironments = data.physicalEnvironments.map((physicalEnvironment) => ({
+    physicalEnvironments = physicalEnvironments.map((physicalEnvironment) => ({
       ...physicalEnvironment,
       productId: productIds.has(physicalEnvironment.productId)
         ? physicalEnvironment.productId
@@ -434,8 +437,7 @@ export class CatalogStore {
       roles: (scenario.roles || []).map((role) => ({
         id: role.id,
         key: role.key,
-        name: role.name,
-        deviceType: role.deviceType,
+        deviceId: typeof role.deviceId === "string" ? role.deviceId : "",
       })),
     }));
     data.products.forEach((product) => {
@@ -470,7 +472,7 @@ export class CatalogStore {
       };
     });
     const deviceOwners = new Map<string, string>();
-    data.physicalEnvironments.forEach((physicalEnvironment) => {
+    physicalEnvironments.forEach((physicalEnvironment) => {
       physicalEnvironment.deviceIds.forEach((deviceId) => {
         if (!deviceOwners.has(deviceId)) deviceOwners.set(deviceId, physicalEnvironment.productId);
       });
@@ -496,7 +498,7 @@ export class CatalogStore {
     }));
 
     const deviceProductById = new Map(data.deviceResources.map((device) => [device.id, device.productId]));
-    data.physicalEnvironments.forEach((physicalEnvironment) => {
+    physicalEnvironments.forEach((physicalEnvironment) => {
       const allowedIds = new Set(
         physicalEnvironment.deviceIds.filter((deviceId) => deviceProductById.get(deviceId) === physicalEnvironment.productId),
       );
@@ -505,15 +507,38 @@ export class CatalogStore {
         (connection) => allowedIds.has(connection.sourceDeviceId) && allowedIds.has(connection.targetDeviceId),
       );
     });
+    if (sourceVersion < 11) {
+      // Retain legacy wiring as scene context without guessing device assignments.
+      const deviceById = new Map(data.deviceResources.map((device) => [device.id, device]));
+      for (const scenario of data.testScenarios) {
+        const environmentIds = new Set(legacyOrders
+          .filter((order) => order.productId === scenario.productId && order.caseIds.some((caseId) =>
+            data.testCases.some((testCase) => testCase.id === caseId && testCase.scenarioId === scenario.id)))
+          .map((order) => order.physicalEnvironmentId));
+        const descriptions = physicalEnvironments
+          .filter((environment) => environment.productId === scenario.productId && environmentIds.has(environment.id))
+          .map((environment) => {
+            const connections = environment.connections.map((connection) =>
+              `${deviceById.get(connection.sourceDeviceId)?.name || connection.sourceDeviceId}.${connection.sourcePort} <-> ${deviceById.get(connection.targetDeviceId)?.name || connection.targetDeviceId}.${connection.targetPort}${connection.description ? `（${connection.description}）` : ""}`);
+            return `原物理环境：${environment.name}\n${environment.description || ""}\n${connections.join("\n")}`.trim();
+          });
+        if (scenario.isDefault) {
+          if (scenario.description === "不切换逻辑拓扑，直接使用所选物理环境执行用例。") {
+            scenario.description = "不执行额外的场景搭建，直接使用绑定设备的当前配置执行用例。";
+          }
+          if (scenario.setupInstructions === "保持物理环境当前逻辑配置，不执行额外的场景搭建。") {
+            scenario.setupInstructions = "";
+          }
+        }
+        if (descriptions.length) scenario.description = [scenario.description, ...descriptions].filter(Boolean).join("\n\n");
+      }
+    }
     data.testOrders = legacyOrders.map((order) => {
-      const physicalEnvironment = data.physicalEnvironments.find((item) => item.id === order.physicalEnvironmentId);
       return {
         id: order.id,
         productId: order.productId,
         name: order.name,
         description: order.description || "",
-        physicalEnvironmentId:
-          physicalEnvironment && physicalEnvironment.productId !== order.productId ? "" : order.physicalEnvironmentId || "",
         caseIds: order.caseIds,
         createdAt: order.createdAt,
         updatedAt: order.updatedAt,
@@ -645,7 +670,6 @@ export class CatalogStore {
       product.updatedAt = timestamp;
       data.testCases.filter((item) => item.productId === id && !item.archivedAt).forEach((item) => (item.archivedAt = timestamp));
       data.deviceResources.filter((item) => item.productId === id && !item.archivedAt).forEach((item) => (item.archivedAt = timestamp));
-      data.physicalEnvironments.filter((item) => item.productId === id && !item.archivedAt).forEach((item) => (item.archivedAt = timestamp));
       data.testScenarios.filter((item) => item.productId === id && !item.archivedAt).forEach((item) => (item.archivedAt = timestamp));
       data.testOrders.filter((item) => item.productId === id && !item.archivedAt).forEach((item) => (item.archivedAt = timestamp));
     });
@@ -878,117 +902,16 @@ export class CatalogStore {
     await this.mutate((data) => {
       const device = data.deviceResources.find((item) => item.id === id && item.productId === productId && !item.archivedAt);
       if (!device) throw new CatalogError("设备资源不存在", 404);
-      if (data.physicalEnvironments.some((item) => !item.archivedAt && item.deviceIds.includes(id))) {
-        throw new CatalogError("设备正在被物理环境使用，不能删除", 409);
+      if (data.testScenarios.some((item) => !item.archivedAt && item.roles.some((role) => role.deviceId === id))) {
+        throw new CatalogError("设备正在被测试场景使用，不能删除", 409);
       }
       device.archivedAt = new Date().toISOString();
       device.updatedAt = device.archivedAt;
     });
   }
 
-  private normalizePhysicalEnvironmentDevices(data: CatalogData, productId: string, value: unknown): string[] {
-    if (!Array.isArray(value)) throw new CatalogError("请选择物理环境设备");
-    const deviceIds = [...new Set(value.filter((item): item is string => typeof item === "string"))];
-    if (!deviceIds.length) throw new CatalogError("物理环境至少需要一台设备");
-    const activeIds = new Set(
-      data.deviceResources.filter((item) => item.productId === productId && !item.archivedAt).map((item) => item.id),
-    );
-    if (deviceIds.some((id) => !activeIds.has(id))) throw new CatalogError("物理环境包含其他产品或不存在的设备");
-    return deviceIds;
-  }
-
-  private normalizeConnections(value: unknown, deviceIds: string[]): PhysicalConnection[] {
-    if (!Array.isArray(value)) throw new CatalogError("连接关系格式不正确");
-    if (value.length > 500) throw new CatalogError("连接关系不能超过 500 条");
-    const allowedDevices = new Set(deviceIds);
-    return value.map((item) => {
-      const input = recordValue(item);
-      const sourceDeviceId = requiredText(input.sourceDeviceId, "本端设备");
-      const targetDeviceId = requiredText(input.targetDeviceId, "对端设备");
-      if (!allowedDevices.has(sourceDeviceId) || !allowedDevices.has(targetDeviceId)) {
-        throw new CatalogError("连接关系中的设备不属于当前物理环境");
-      }
-      const sourcePort = requiredText(input.sourcePort, "本端端口", 160);
-      const targetPort = requiredText(input.targetPort, "对端端口", 160);
-      if (sourceDeviceId === targetDeviceId && sourcePort === targetPort) {
-        throw new CatalogError("连接关系不能连接到同一个设备端口");
-      }
-      return {
-        id: optionalText(input.id, 100) || randomUUID(),
-        sourceDeviceId,
-        sourcePort,
-        targetDeviceId,
-        targetPort,
-        description: optionalText(input.description, 500),
-      };
-    });
-  }
-
-  async listPhysicalEnvironments(productId: string): Promise<PhysicalEnvironment[]> {
-    await this.getProduct(productId);
-    const data = await this.read();
-    return data.physicalEnvironments
-      .filter((item) => item.productId === productId && !item.archivedAt)
-      .map(clone)
-      .sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
-  }
-
-  async createPhysicalEnvironment(productId: string, input: Record<string, unknown>): Promise<PhysicalEnvironment> {
-    return this.mutate((data) => {
-      if (!data.products.some((item) => item.id === productId && !item.archivedAt)) throw new CatalogError("产品不存在", 404);
-      const name = requiredText(input.name, "物理环境名称", 160);
-      uniqueName(data.physicalEnvironments.filter((item) => item.productId === productId), name, "物理环境名称");
-      const deviceIds = this.normalizePhysicalEnvironmentDevices(data, productId, input.deviceIds);
-      const timestamp = new Date().toISOString();
-      const physicalEnvironment: PhysicalEnvironment = {
-        id: randomUUID(),
-        productId,
-        name,
-        description: optionalText(input.description, 4_000),
-        deviceIds,
-        connections: this.normalizeConnections(input.connections ?? [], deviceIds),
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      };
-      data.physicalEnvironments.push(physicalEnvironment);
-      return clone(physicalEnvironment);
-    });
-  }
-
-  async updatePhysicalEnvironment(productId: string, id: string, input: Record<string, unknown>): Promise<PhysicalEnvironment> {
-    return this.mutate((data) => {
-      const physicalEnvironment = data.physicalEnvironments.find(
-        (item) => item.id === id && item.productId === productId && !item.archivedAt,
-      );
-      if (!physicalEnvironment) throw new CatalogError("物理环境不存在", 404);
-      const name = requiredText(input.name, "物理环境名称", 160);
-      uniqueName(data.physicalEnvironments.filter((item) => item.productId === productId), name, "物理环境名称", id);
-      const deviceIds = this.normalizePhysicalEnvironmentDevices(data, productId, input.deviceIds);
-      physicalEnvironment.name = name;
-      physicalEnvironment.description = optionalText(input.description, 4_000);
-      physicalEnvironment.deviceIds = deviceIds;
-      physicalEnvironment.connections = this.normalizeConnections(input.connections ?? [], deviceIds);
-      physicalEnvironment.updatedAt = new Date().toISOString();
-      return clone(physicalEnvironment);
-    });
-  }
-
-  async archivePhysicalEnvironment(productId: string, id: string): Promise<void> {
-    await this.mutate((data) => {
-      const physicalEnvironment = data.physicalEnvironments.find(
-        (item) => item.id === id && item.productId === productId && !item.archivedAt,
-      );
-      if (!physicalEnvironment) throw new CatalogError("物理环境不存在", 404);
-      if (data.testOrders.some((item) => !item.archivedAt && item.physicalEnvironmentId === id)) {
-        throw new CatalogError("物理环境正在被测试单使用，不能删除", 409);
-      }
-      physicalEnvironment.archivedAt = new Date().toISOString();
-      physicalEnvironment.updatedAt = physicalEnvironment.archivedAt;
-    });
-  }
-
-  private normalizeScenarioRoles(value: unknown): ScenarioRole[] {
-    if (!Array.isArray(value) || !value.length) throw new CatalogError("测试场景至少需要一个设备角色");
+  private normalizeScenarioRoles(data: CatalogData, productId: string, value: unknown, allowEmpty = false): ScenarioRole[] {
+    if (!Array.isArray(value) || (!allowEmpty && !value.length)) throw new CatalogError("测试场景至少需要一个设备角色");
     if (value.length > 30) throw new CatalogError("设备角色不能超过 30 个");
     const roles = value.map((item) => {
       const input = recordValue(item);
@@ -997,11 +920,14 @@ export class CatalogStore {
       return {
         id: optionalText(input.id, 100) || randomUUID(),
         key,
-        name: requiredText(input.name, "角色名称", 120),
-        deviceType: requiredText(input.deviceType, "设备类型", 120),
+        deviceId: requiredText(input.deviceId, "绑定设备", 100),
       };
     });
     if (new Set(roles.map((item) => item.key.toLowerCase())).size !== roles.length) throw new CatalogError("角色标识不能重复");
+    if (new Set(roles.map((item) => item.id)).size !== roles.length) throw new CatalogError("设备角色 ID 不能重复");
+    if (new Set(roles.map((item) => item.deviceId)).size !== roles.length) throw new CatalogError("同一场景不能重复绑定设备");
+    const deviceIds = new Set(data.deviceResources.filter((device) => device.productId === productId && !device.archivedAt).map((device) => device.id));
+    if (roles.some((role) => !deviceIds.has(role.deviceId))) throw new CatalogError("绑定设备不属于当前产品或不存在");
     return roles;
   }
 
@@ -1061,7 +987,7 @@ export class CatalogStore {
         name,
         category: requiredText(input.category, "功能分类", 120),
         description: optionalText(input.description, 4_000),
-        roles: this.normalizeScenarioRoles(input.roles),
+        roles: this.normalizeScenarioRoles(data, productId, input.roles),
         parameters: this.normalizeScenarioParameters(input.parameters ?? []),
         setupInstructions: requiredText(input.setupInstructions, "场景搭建要求", 20_000),
         verificationInstructions: requiredText(input.verificationInstructions, "场景验证要求", 10_000),
@@ -1078,18 +1004,17 @@ export class CatalogStore {
     return this.mutate((data) => {
       const scenario = data.testScenarios.find((item) => item.id === id && item.productId === productId && !item.archivedAt);
       if (!scenario) throw new CatalogError("测试场景不存在", 404);
-      if (scenario.isDefault) throw new CatalogError("默认场景由系统维护，不能编辑", 409);
-      const name = requiredText(input.name, "场景名称", 160);
+      const name = scenario.isDefault ? scenario.name : requiredText(input.name, "场景名称", 160);
       const caseIds = input.caseIds === undefined ? undefined : this.validateScenarioCaseIds(data, productId, input.caseIds);
       uniqueName(data.testScenarios.filter((item) => item.productId === productId), name, "场景名称", id);
       const timestamp = new Date().toISOString();
       scenario.name = name;
-      scenario.category = requiredText(input.category, "功能分类", 120);
+      scenario.category = scenario.isDefault ? scenario.category : requiredText(input.category, "功能分类", 120);
       scenario.description = optionalText(input.description, 4_000);
-      scenario.roles = this.normalizeScenarioRoles(input.roles);
+      scenario.roles = this.normalizeScenarioRoles(data, productId, input.roles, scenario.isDefault);
       scenario.parameters = this.normalizeScenarioParameters(input.parameters ?? []);
-      scenario.setupInstructions = requiredText(input.setupInstructions, "场景搭建要求", 20_000);
-      scenario.verificationInstructions = requiredText(input.verificationInstructions, "场景验证要求", 10_000);
+      scenario.setupInstructions = scenario.isDefault ? "" : requiredText(input.setupInstructions, "场景搭建要求", 20_000);
+      scenario.verificationInstructions = scenario.isDefault ? optionalText(input.verificationInstructions, 10_000) : requiredText(input.verificationInstructions, "场景验证要求", 10_000);
       scenario.cleanupInstructions = optionalText(input.cleanupInstructions, 10_000);
       scenario.updatedAt = timestamp;
       if (caseIds) {
@@ -1136,17 +1061,6 @@ export class CatalogStore {
     return caseIds;
   }
 
-  private validateOrderPhysicalEnvironment(data: CatalogData, productId: string, physicalEnvironmentValue: unknown): string {
-    const physicalEnvironmentId = optionalText(physicalEnvironmentValue, 100);
-    const physicalEnvironment = physicalEnvironmentId
-      ? data.physicalEnvironments.find(
-          (item) => item.id === physicalEnvironmentId && item.productId === productId && !item.archivedAt,
-        )
-      : undefined;
-    if (physicalEnvironmentId && !physicalEnvironment) throw new CatalogError("物理环境不属于当前产品或不存在", 404);
-    return physicalEnvironmentId;
-  }
-
   async createTestOrder(productId: string, input: Record<string, unknown>): Promise<TestOrder> {
     return this.mutate((data) => {
       if (!data.products.some((item) => item.id === productId && !item.archivedAt)) {
@@ -1158,7 +1072,6 @@ export class CatalogStore {
         productId,
         name: requiredText(input.name, "测试单名称", 200),
         description: optionalText(input.description, 4_000),
-        physicalEnvironmentId: this.validateOrderPhysicalEnvironment(data, productId, input.physicalEnvironmentId),
         caseIds: this.validateOrderCases(data, productId, input.caseIds),
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -1174,7 +1087,6 @@ export class CatalogStore {
       if (!order) throw new CatalogError("测试单不存在", 404);
       order.name = requiredText(input.name, "测试单名称", 200);
       order.description = optionalText(input.description, 4_000);
-      order.physicalEnvironmentId = this.validateOrderPhysicalEnvironment(data, productId, input.physicalEnvironmentId);
       order.caseIds = this.validateOrderCases(data, productId, input.caseIds);
       order.updatedAt = new Date().toISOString();
       return clone(order);
@@ -1192,14 +1104,12 @@ export class CatalogStore {
 
   private publicOrder(data: CatalogData, order: TestOrder): TestOrderSummary {
     const product = data.products.find((item) => item.id === order.productId);
-    const physicalEnvironment = data.physicalEnvironments.find((item) => item.id === order.physicalEnvironmentId);
     const latestRun = data.testRuns
       .filter((run) => run.testOrderId === order.id)
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
     return {
       ...clone(order),
       productName: product?.name || "已删除产品",
-      physicalEnvironmentName: physicalEnvironment?.name || "",
       caseCount: order.caseIds.length,
       latestRun: latestRun ? clone(latestRun) : undefined,
     };
@@ -1234,14 +1144,10 @@ export class CatalogStore {
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
       .slice(0, 30)
       .map(clone);
-    const physicalEnvironment = data.physicalEnvironments.find(
-      (item) => item.id === order.physicalEnvironmentId && !item.archivedAt,
-    );
     return {
       ...this.publicOrder(data, order),
       cases,
       runs,
-      physicalEnvironment: physicalEnvironment ? clone(physicalEnvironment) : undefined,
     };
   }
 
@@ -1249,18 +1155,8 @@ export class CatalogStore {
     const data = await this.read();
     const order = data.testOrders.find((item) => item.id === id && !item.archivedAt);
     if (!order) throw new CatalogError("测试单不存在", 404);
-    const physicalEnvironment = data.physicalEnvironments.find(
-      (item) => item.id === order.physicalEnvironmentId && !item.archivedAt,
-    );
-    const devices = physicalEnvironment
-      ? physicalEnvironment.deviceIds
-          .map((deviceId) => data.deviceResources.find((item) => item.id === deviceId && !item.archivedAt))
-          .filter((item): item is DeviceResource => Boolean(item))
-          .map(clone)
-      : [];
     return {
-      physicalEnvironment: physicalEnvironment ? clone(physicalEnvironment) : undefined,
-      devices,
+      devices: data.deviceResources.filter((device) => device.productId === order.productId && !device.archivedAt).map(clone),
       scenarios: data.testScenarios
         .filter((scenario) => scenario.productId === order.productId && !scenario.archivedAt)
         .map(clone),
@@ -1284,15 +1180,9 @@ export class CatalogStore {
     if (!caseRun) throw new CatalogError("用例执行记录不存在", 404);
     const scenarioRun = testRun.scenarioRuns.find((item) => item.id === caseRun.scenarioRunId);
     if (!scenarioRun) throw new CatalogError("场景执行记录不存在", 404);
-    const scenario = data.testScenarios.find((item) => item.id === scenarioRun.testScenarioId);
-    const physicalEnvironment = data.physicalEnvironments.find(
-      (item) => item.id === testOrder.physicalEnvironmentId && !item.archivedAt,
-    );
-    const devices = physicalEnvironment
-      ? physicalEnvironment.deviceIds
-          .map((deviceId) => data.deviceResources.find((item) => item.id === deviceId && !item.archivedAt))
-          .filter((item): item is DeviceResource => Boolean(item))
-      : [];
+    const scenario = scenarioRun.scenarioSnapshot || data.testScenarios.find((item) => item.id === scenarioRun.testScenarioId && item.productId === productId);
+    const boundDeviceIds = new Set(Object.values(scenarioRun.roleBindings));
+    const devices = data.deviceResources.filter((device) => device.productId === productId && !device.archivedAt && boundDeviceIds.has(device.id));
 
     return clone({
       product,
@@ -1301,7 +1191,6 @@ export class CatalogStore {
       caseRun,
       scenarioRun,
       scenario,
-      physicalEnvironment,
       devices,
       scenarios: scenario ? [scenario] : [],
     });
@@ -1326,13 +1215,19 @@ export class CatalogStore {
         if (!scenario) throw new CatalogError(`用例“${testCase.name}”关联的测试场景不存在`);
         let scenarioRun = scenarioRunsById.get(scenario.id);
         if (!scenarioRun) {
+          try {
+            this.normalizeScenarioRoles(data, order.productId, scenario.roles, scenario.isDefault);
+          } catch (error) {
+            throw new CatalogError(`场景“${scenario.name}”设备角色配置无效：${error instanceof Error ? error.message : "请重新绑定设备"}`);
+          }
           scenarioRun = {
             id: randomUUID(),
             testScenarioId: scenario.id,
             scenarioNameSnapshot: scenario.name,
             isDefault: scenario.isDefault,
             status: "queued",
-            roleBindings: {},
+            roleBindings: Object.fromEntries(scenario.roles.map((role) => [role.key, role.deviceId])),
+            scenarioSnapshot: clone(scenario),
             parameterValues: Object.fromEntries(
               scenario.parameters.map((parameter) => [parameter.key, parameter.defaultValue]),
             ),

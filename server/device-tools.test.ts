@@ -86,7 +86,7 @@ test("resolves configured interfaces and marks evidence after device operations"
     "http:api-1:GET:status",
   ]);
   assert.equal(evidence.hasEvidence(), true);
-  assert.throws(() => driver.resolve("unknown", undefined, "ssh"), /不在当前物理环境/);
+  assert.throws(() => driver.resolve("unknown", undefined, "ssh"), /不在当前场景绑定范围/);
 });
 
 test("requires interfaceId when a device has multiple interfaces of one type", () => {
@@ -104,7 +104,7 @@ test("requires interfaceId when a device has multiple interfaces of one type", (
   assert.equal(driver.resolve(device.id, "ssh-2", "ssh").control.address, "192.0.2.11:22");
 });
 
-test("registers only tools available in the current physical environment", () => {
+test("registers only tools available on the bound devices", () => {
   const allTools = createDeviceTools({ devices: [testDevice()], evidence: createToolEvidence() });
   assert.deepEqual(allTools.toolNames, [
     "device_ssh_exec",
@@ -186,6 +186,7 @@ test("allows finish_test after evidence from a non-browser device tool", async (
   });
   const finishTool = toolset.tools.find((tool) => tool.name === "finish_test");
   assert.ok(finishTool);
+  assert.equal("roleBindings" in finishTool.parameters.properties, false);
   const execute = finishTool.execute as unknown as (
     id: string,
     params: { status: "passed" | "failed"; summary: string },

@@ -2383,23 +2383,13 @@ button:disabled {
   grid-template-columns: minmax(0, 1fr) 34px;
 }
 
-.connection-row {
-  grid-template-columns: 140px 105px 20px 140px 105px minmax(130px, 1fr) 34px;
-}
-
 .role-row {
-  grid-template-columns: minmax(150px, 1fr) minmax(150px, 1fr) minmax(150px, 1fr) 34px;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr) 34px;
 }
 
 .parameter-row {
   grid-template-columns: 180px 180px minmax(220px, 1fr) 34px;
-}
-
-.connection-arrow {
-  align-self: center;
-  color: #84909d;
-  padding-top: 15px;
-  text-align: center;
 }
 
 .row-remove {
@@ -2411,17 +2401,6 @@ button:disabled {
   padding: 20px;
   text-align: center;
   font-size: 11px;
-}
-
-.resource-picker {
-  display: grid;
-  max-height: 190px;
-  flex: 0 0 auto;
-  grid-template-columns: 1fr 1fr;
-}
-
-.resource-picker .case-option:nth-child(odd) {
-  border-right: 1px solid #e9ecef;
 }
 
 .instruction-grid {
@@ -2456,15 +2435,6 @@ button:disabled {
 
 .scenario-case-picker .list-empty {
   grid-column: 1 / -1;
-}
-
-.order-physical-environment-config {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
-  padding: 15px 0;
 }
 
 .order-meta > div:nth-child(4n) {
@@ -2727,11 +2697,6 @@ button:disabled {
     flex: 0 0 auto;
   }
 
-  .resource-picker {
-    grid-template-columns: 1fr;
-  }
-
-  .resource-picker .case-option:nth-child(odd),
   .scenario-case-picker .case-option:nth-child(odd) {
     border-right: 0;
   }

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -62,11 +62,13 @@ test("migrates legacy test order fields without losing the collection", async (t
     types: ["TAU"],
     controlInterfaces: [],
   });
-  const physicalEnvironment = await store.createPhysicalEnvironment(product.id, {
+  const physicalEnvironment = {
+    id: "legacy-environment",
+    productId: product.id,
     name: "旧版物理环境",
     deviceIds: [device.id],
     connections: [],
-  });
+  };
   const testCase = await store.createTestCase(product.id, {
     name: "旧版用例",
     steps: "执行检查",
@@ -84,9 +86,9 @@ test("migrates legacy test order fields without losing the collection", async (t
     testOrders: Array<Record<string, unknown>>;
   };
   data.version = 4;
-  data.labEnvironments = data.physicalEnvironments;
+  data.labEnvironments = [physicalEnvironment];
   delete data.physicalEnvironments;
-  data.testOrders[0].environmentId = data.testOrders[0].physicalEnvironmentId;
+  data.testOrders[0].environmentId = physicalEnvironment.id;
   delete data.testOrders[0].physicalEnvironmentId;
   Object.assign(data.testOrders[0], {
     targetUrl: "http://192.168.1.1",
@@ -100,7 +102,9 @@ test("migrates legacy test order fields without losing the collection", async (t
   const detail = await new CatalogStore(filePath).getTestOrderDetail(product.id, order.id);
   assert.equal(detail.name, "旧版测试单");
   assert.deepEqual(detail.caseIds, [testCase.id]);
-  assert.equal(detail.physicalEnvironmentName, "旧版物理环境");
+  assert.equal("physicalEnvironmentId" in detail, false);
+  const [defaultScenario] = await new CatalogStore(filePath).listTestScenarios(product.id);
+  assert.match(defaultScenario.description, /原物理环境：旧版物理环境/);
   assert.equal("targetUrl" in detail, false);
   assert.equal("password" in detail, false);
   assert.equal("scenarioId" in detail, false);
@@ -238,7 +242,7 @@ test("resolves diagnostic context without crossing product boundaries", async (t
   );
 });
 
-test("creates structured resources, a physical environment, and an independent scenario", async (t) => {
+test("creates structured resources and a scenario with fixed device bindings", async (t) => {
   const store = await createStore(t);
   const [product] = await store.listProducts();
   const master = await store.createDeviceResource(product.id, {
@@ -252,24 +256,12 @@ test("creates structured resources, a physical environment, and an independent s
     types: ["TAU"],
     controlInterfaces: [{ name: "Telnet 管理", type: "telnet", address: "192.168.1.11:23", username: "", password: "" }],
   });
-  const physicalEnvironment = await store.createPhysicalEnvironment(product.id, {
-    name: "双机网络实验室",
-    description: "两台 TAU 已连接到同一交换网络",
-    deviceIds: [master.id, backup.id],
-    connections: [{
-      sourceDeviceId: master.id,
-      sourcePort: "eth1",
-      targetDeviceId: backup.id,
-      targetPort: "eth1",
-      description: "业务链路",
-    }],
-  });
   const scenario = await store.createTestScenario(product.id, {
     name: "VRRP 双机主备",
     category: "VRRP",
     roles: [
-      { key: "master", name: "主设备", deviceType: "TAU" },
-      { key: "backup", name: "备设备", deviceType: "TAU" },
+      { key: "master", deviceId: master.id },
+      { key: "backup", deviceId: backup.id },
     ],
     parameters: [{ key: "virtual_ip", name: "虚拟 IP", defaultValue: "192.168.100.254" }],
     setupInstructions: "配置两台设备组成 VRRP 主备",
@@ -284,13 +276,12 @@ test("creates structured resources, a physical environment, and an independent s
   });
   const order = await store.createTestOrder(product.id, {
     name: "VRRP 回归",
-    physicalEnvironmentId: physicalEnvironment.id,
     caseIds: [testCase.id],
   });
 
   const detail = await store.getTestOrderDetail(product.id, order.id);
   const context = await store.getTestOrderExecutionContext(order.id);
-  assert.equal(detail.physicalEnvironmentName, "双机网络实验室");
+  assert.equal("physicalEnvironmentId" in detail, false);
   assert.equal(context.devices.length, 2);
   assert.ok((await store.listTestScenarios(product.id)).some((item) => item.id === scenario.id));
   assert.equal(context.scenarios.find((item) => item.id === scenario.id)?.name, "VRRP 双机主备");
@@ -310,11 +301,7 @@ test("creates structured resources, a physical environment, and an independent s
 
   await assert.rejects(
     store.archiveDeviceResource(product.id, master.id),
-    (error: unknown) => error instanceof CatalogError && error.message.includes("物理环境"),
-  );
-  await assert.rejects(
-    store.archivePhysicalEnvironment(product.id, physicalEnvironment.id),
-    (error: unknown) => error instanceof CatalogError && error.message.includes("测试单"),
+    (error: unknown) => error instanceof CatalogError && error.message.includes("测试场景"),
   );
 });
 
@@ -335,15 +322,10 @@ test("does not attach scenarios or role bindings to test orders", async (t) => {
   const store = await createStore(t);
   const [product] = await store.listProducts();
   const device = await store.createDeviceResource(product.id, { name: "环境内设备", types: ["TAU"], controlInterfaces: [] });
-  const physicalEnvironment = await store.createPhysicalEnvironment(product.id, {
-    name: "隔离环境",
-    deviceIds: [device.id],
-    connections: [],
-  });
   const scenario = await store.createTestScenario(product.id, {
     name: "单设备场景",
     category: "基础",
-    roles: [{ key: "dut", name: "被测设备", deviceType: "TAU" }],
+    roles: [{ key: "dut", deviceId: device.id }],
     setupInstructions: "检查设备状态",
     verificationInstructions: "设备在线",
   });
@@ -351,7 +333,7 @@ test("does not attach scenarios or role bindings to test orders", async (t) => {
 
   const order = await store.createTestOrder(product.id, {
     name: "独立场景测试单",
-    physicalEnvironmentId: physicalEnvironment.id,
+    physicalEnvironmentId: "旧字段应被忽略",
     scenarioId: scenario.id,
     roleBindings: { dut: device.id },
     caseIds: [testCase.id],
@@ -359,10 +341,11 @@ test("does not attach scenarios or role bindings to test orders", async (t) => {
 
   assert.equal("scenarioId" in order, false);
   assert.equal("roleBindings" in order, false);
+  assert.equal("physicalEnvironmentId" in order, false);
   await store.archiveTestScenario(product.id, scenario.id);
 });
 
-test("isolates resources, physical environments, and orders by product", async (t) => {
+test("isolates resources, scenario bindings, and orders by product", async (t) => {
   const store = await createStore(t);
   const [firstProduct, secondProduct] = await store.listProducts();
   const firstDevice = await store.createDeviceResource(firstProduct.id, {
@@ -380,33 +363,21 @@ test("isolates resources, physical environments, and orders by product", async (
   assert.deepEqual((await store.listDeviceResources(secondProduct.id)).map((item) => item.id), [secondDevice.id]);
 
   await assert.rejects(
-    store.createPhysicalEnvironment(firstProduct.id, {
-      name: "跨产品环境",
-      deviceIds: [secondDevice.id],
-      connections: [],
+    store.createTestScenario(firstProduct.id, {
+      name: "跨产品场景",
+      category: "基础",
+      roles: [{ key: "dut", deviceId: secondDevice.id }],
+      setupInstructions: "检查设备",
+      verificationInstructions: "设备在线",
     }),
-    (error: unknown) => error instanceof CatalogError && error.message.includes("其他产品"),
+    (error: unknown) => error instanceof CatalogError && error.message.includes("不属于当前产品"),
   );
 
-  const secondPhysicalEnvironment = await store.createPhysicalEnvironment(secondProduct.id, {
-    name: "第二产品环境",
-    deviceIds: [secondDevice.id],
-    connections: [],
-  });
   const testCase = await store.createTestCase(firstProduct.id, {
     name: "第一产品用例",
     steps: "打开页面",
     expectedResult: "页面可见",
   });
-  await assert.rejects(
-    store.createTestOrder(firstProduct.id, {
-      name: "跨产品测试单",
-      physicalEnvironmentId: secondPhysicalEnvironment.id,
-      caseIds: [testCase.id],
-    }),
-    (error: unknown) => error instanceof CatalogError && error.message.includes("不属于当前产品"),
-  );
-
   const order = await store.createTestOrder(firstProduct.id, {
     name: "第一产品测试单",
     caseIds: [testCase.id],
@@ -420,10 +391,11 @@ test("isolates resources, physical environments, and orders by product", async (
 test("assigns cases to a validated product scenario", async (t) => {
   const store = await createStore(t);
   const [firstProduct, secondProduct] = await store.listProducts();
+  const device = await store.createDeviceResource(firstProduct.id, { name: "TAU", types: ["TAU"], controlInterfaces: [] });
   const scenario = await store.createTestScenario(firstProduct.id, {
     name: "端口转发",
     category: "转发",
-    roles: [{ key: "dut", name: "被测设备", deviceType: "TAU" }],
+    roles: [{ key: "dut", deviceId: device.id }],
     setupInstructions: "配置转发路径",
     verificationInstructions: "确认链路连通",
   });
@@ -458,17 +430,18 @@ test("assigns cases to a validated product scenario", async (t) => {
 test("updates a scenario and its case assignments atomically", async (t) => {
   const store = await createStore(t);
   const [product, otherProduct] = await store.listProducts();
+  const device = await store.createDeviceResource(product.id, { name: "TAU", types: ["TAU"], controlInterfaces: [] });
   const firstScenario = await store.createTestScenario(product.id, {
     name: "端口镜像",
     category: "交换",
-    roles: [{ key: "dut", name: "被测设备", deviceType: "TAU" }],
+    roles: [{ key: "dut", deviceId: device.id }],
     setupInstructions: "配置端口镜像",
     verificationInstructions: "确认镜像报文",
   });
   const secondScenario = await store.createTestScenario(product.id, {
     name: "端口转发",
     category: "转发",
-    roles: [{ key: "dut", name: "被测设备", deviceType: "TAU" }],
+    roles: [{ key: "dut", deviceId: device.id }],
     setupInstructions: "配置端口转发",
     verificationInstructions: "确认报文转发",
   });
@@ -602,10 +575,11 @@ test("keeps local and same-named Zentao cases as separate records", async (t) =>
 test("groups a test run by each case scenario", async (t) => {
   const store = await createStore(t);
   const [product] = await store.listProducts();
+  const device = await store.createDeviceResource(product.id, { name: "TAU", types: ["TAU"], controlInterfaces: [] });
   const firstScenario = await store.createTestScenario(product.id, {
     name: "场景 A",
     category: "路由",
-    roles: [{ key: "dut", name: "被测设备", deviceType: "TAU" }],
+    roles: [{ key: "dut", deviceId: device.id }],
     parameters: [{ key: "area", name: "区域", defaultValue: "0" }],
     setupInstructions: "搭建场景 A",
     verificationInstructions: "验证场景 A",
@@ -613,7 +587,7 @@ test("groups a test run by each case scenario", async (t) => {
   const secondScenario = await store.createTestScenario(product.id, {
     name: "场景 B",
     category: "转发",
-    roles: [{ key: "dut", name: "被测设备", deviceType: "TAU" }],
+    roles: [{ key: "dut", deviceId: device.id }],
     setupInstructions: "搭建场景 B",
     verificationInstructions: "验证场景 B",
   });
@@ -644,6 +618,8 @@ test("groups a test run by each case scenario", async (t) => {
   assert.deepEqual(run.scenarioRuns.map((item) => item.testScenarioId), [firstScenario.id, secondScenario.id]);
   assert.deepEqual(run.scenarioRuns.map((item) => item.caseRunIds.length), [2, 1]);
   assert.equal(run.scenarioRuns[0].parameterValues.area, "0");
+  assert.deepEqual(run.scenarioRuns[0].roleBindings, { dut: device.id });
+  assert.equal(run.scenarioRuns[0].scenarioSnapshot?.roles[0].deviceId, device.id);
   assert.ok(run.caseRuns.every((caseRun) => run.scenarioRuns.some((scenarioRun) => scenarioRun.id === caseRun.scenarioRunId)));
   assert.deepEqual(
     run.scenarioRuns[0].caseRunIds.map((id) => run.caseRuns.find((caseRun) => caseRun.id === id)?.testCaseId),
@@ -727,4 +703,133 @@ test("extracts the precondition embedded by the legacy Zentao importer", async (
 
   assert.equal(migrated.precondition, "设备已启动\n测试网络已连接");
   assert.equal(migrated.steps, "1. 打开页面\n2. 检查状态");
+});
+
+test("validates fixed role bindings on both scene creation and update", async (t) => {
+  const store = await createStore(t);
+  const [product, otherProduct] = await store.listProducts();
+  const device = await store.createDeviceResource(product.id, { name: "DUT", types: ["TAU"], controlInterfaces: [] });
+  const foreignDevice = await store.createDeviceResource(otherProduct.id, { name: "Other DUT", types: ["host"], controlInterfaces: [] });
+  const input = {
+    name: "固定场景",
+    category: "基础",
+    roles: [{ key: "DUT", deviceId: device.id }],
+    setupInstructions: "按指定 SSH 接口初始化设备",
+    verificationInstructions: "查询配置和连通性",
+  };
+  for (const [roles, message] of [
+    [[{ key: "DUT", deviceId: "" }], /绑定设备/],
+    [[{ key: "DUT", deviceId: device.id }, { key: "src", deviceId: device.id }], /重复绑定设备/],
+    [[{ key: "DUT", deviceId: device.id }, { key: "dut", deviceId: foreignDevice.id }], /角色标识不能重复/],
+    [[{ key: "DUT", deviceId: foreignDevice.id }], /不属于当前产品/],
+    [[{ key: "DUT", deviceId: "missing-device" }], /不属于当前产品或不存在/],
+  ] as const) {
+    await assert.rejects(store.createTestScenario(product.id, { ...input, roles }), message);
+  }
+  const scenario = await store.createTestScenario(product.id, input);
+  assert.equal("name" in scenario.roles[0], false);
+  assert.equal("deviceType" in scenario.roles[0], false);
+  await assert.rejects(store.updateTestScenario(product.id, scenario.id, {
+    ...scenario,
+    roles: [{ key: "DUT", deviceId: device.id }, { key: "src", deviceId: device.id }],
+  }), /重复绑定设备/);
+  assert.deepEqual((await store.listTestScenarios(product.id)).find((item) => item.id === scenario.id)?.roles, scenario.roles);
+  await store.archiveTestScenario(product.id, scenario.id);
+  await store.archiveDeviceResource(product.id, device.id);
+  await assert.rejects(store.createTestScenario(product.id, input), /不属于当前产品或不存在/);
+});
+
+test("keeps scene and device bindings in execution snapshots after scene edits", async (t) => {
+  const store = await createStore(t);
+  const [product] = await store.listProducts();
+  const original = await store.createDeviceResource(product.id, { name: "TAU1", types: ["TAU"], controlInterfaces: [] });
+  const replacement = await store.createDeviceResource(product.id, { name: "TAU2", types: ["TAU"], controlInterfaces: [] });
+  await store.createDeviceResource(product.id, { name: "Unused host", types: ["host"], controlInterfaces: [] });
+  const scenario = await store.createTestScenario(product.id, {
+    name: "原场景",
+    category: "基础",
+    roles: [{ key: "DUT", deviceId: original.id }],
+    setupInstructions: "原搭建步骤",
+    verificationInstructions: "原验证步骤",
+  });
+  const testCase = await store.createTestCase(product.id, { scenarioId: scenario.id, name: "检查", steps: "读取状态", expectedResult: "状态正常" });
+  const order = await store.createTestOrder(product.id, { name: "回归", caseIds: [testCase.id] });
+  const run = await store.createTestRun("snapshot-run", order.id);
+  await store.updateTestScenario(product.id, scenario.id, {
+    ...scenario,
+    name: "新场景",
+    roles: [{ key: "DUT", deviceId: replacement.id }],
+    setupInstructions: "新搭建步骤",
+  });
+  const context = await store.getDiagnosticExecutionContext(product.id, run.id, run.caseRuns[0].id);
+  assert.equal(context.scenario?.name, "原场景");
+  assert.equal(context.scenario?.setupInstructions, "原搭建步骤");
+  assert.deepEqual(context.scenarioRun.roleBindings, { DUT: original.id });
+  assert.deepEqual(context.devices.map((device) => device.id), [original.id]);
+  const nextRun = await store.createTestRun("new-snapshot-run", order.id);
+  assert.deepEqual(nextRun.scenarioRuns[0].roleBindings, { DUT: replacement.id });
+});
+
+test("allows device bindings in the default scene without allowing deletion or renaming", async (t) => {
+  const store = await createStore(t);
+  const [product] = await store.listProducts();
+  const device = await store.createDeviceResource(product.id, { name: "TAU", types: ["TAU"], controlInterfaces: [] });
+  const [defaultScene] = await store.listTestScenarios(product.id);
+  const updated = await store.updateTestScenario(product.id, defaultScene.id, {
+    ...defaultScene,
+    name: "不可修改的名称",
+    roles: [{ key: "DUT", deviceId: device.id }],
+  });
+  assert.equal(updated.name, "默认场景");
+  const testCase = await store.createTestCase(product.id, { name: "默认用例", steps: "检查", expectedResult: "通过" });
+  const order = await store.createTestOrder(product.id, { name: "默认测试单", caseIds: [testCase.id] });
+  const run = await store.createTestRun("default-bound-run", order.id);
+  assert.deepEqual(run.scenarioRuns[0].roleBindings, { DUT: device.id });
+  await assert.rejects(store.archiveTestScenario(product.id, defaultScene.id), /默认场景不能删除/);
+});
+
+test("migrates v10 environments and roles without guessing bindings or changing historical evidence", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "ai-test-fixed-roles-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const filePath = path.join(directory, "catalog.json");
+  const store = new CatalogStore(filePath);
+  const [product] = await store.listProducts();
+  const device = await store.createDeviceResource(product.id, { name: "TAU1", types: ["TAU"], controlInterfaces: [] });
+  const scenario = await store.createTestScenario(product.id, {
+    name: "端口镜像", category: "交换", roles: [{ key: "DUT", deviceId: device.id }],
+    setupInstructions: "配置镜像", verificationInstructions: "查询规则",
+  });
+  const testCase = await store.createTestCase(product.id, { scenarioId: scenario.id, name: "检查镜像", steps: "抓包", expectedResult: "有镜像报文" });
+  const order = await store.createTestOrder(product.id, { name: "旧测试单", caseIds: [testCase.id] });
+  const run = await store.createTestRun("legacy-bound-run", order.id);
+  const data = JSON.parse(await readFile(filePath, "utf8"));
+  data.version = 10;
+  data.physicalEnvironments = [{
+    id: "old-env", productId: product.id, name: "正式", description: "固定接线",
+    deviceIds: [device.id],
+    connections: [{ sourceDeviceId: device.id, sourcePort: "ge1", targetDeviceId: device.id, targetPort: "ge2", description: "回环" }],
+  }];
+  data.testOrders[0].physicalEnvironmentId = "old-env";
+  data.testScenarios.find((item: { id: string }) => item.id === scenario.id).roles = [{ id: "old-role", key: "DUT", name: "被测设备", deviceType: "TAU" }];
+  delete data.testRuns[0].scenarioRuns[0].scenarioSnapshot;
+  const originalData = `${JSON.stringify(data, null, 2)}\n`;
+  await writeFile(filePath, originalData);
+  const migratedStore = new CatalogStore(filePath);
+  const migrated = (await migratedStore.listTestScenarios(product.id)).find((item) => item.id === scenario.id)!;
+  assert.deepEqual(migrated.roles, [{ id: "old-role", key: "DUT", deviceId: "" }]);
+  assert.match(migrated.description, /TAU1.ge1 <-> TAU1.ge2（回环）/);
+  assert.equal(await readFile(`${filePath}.v10.bak`, "utf8"), originalData);
+  assert.equal((await stat(`${filePath}.v10.bak`)).mode & 0o777, 0o600);
+  await assert.rejects(migratedStore.createTestRun("invalid-legacy-scene", order.id), /绑定设备/);
+  const diagnostic = await migratedStore.getDiagnosticExecutionContext(product.id, run.id, run.caseRuns[0].id);
+  assert.deepEqual(diagnostic.scenarioRun.roleBindings, { DUT: device.id });
+  assert.equal(diagnostic.scenarioRun.scenarioSnapshot, undefined);
+  assert.deepEqual(diagnostic.devices.map((item) => item.id), [device.id]);
+  await migratedStore.updateTestScenario(product.id, scenario.id, { ...migrated, roles: [{ ...migrated.roles[0], deviceId: device.id }] });
+  const persisted = JSON.parse(await readFile(filePath, "utf8"));
+  assert.equal(persisted.version, 11);
+  assert.equal("physicalEnvironments" in persisted, false);
+  assert.equal("physicalEnvironmentId" in persisted.testOrders[0], false);
+  assert.equal((await migratedStore.listTestScenarios(product.id)).find((item) => item.id === scenario.id)?.description, migrated.description);
+  assert.equal(await readFile(`${filePath}.v10.bak`, "utf8"), originalData);
 });

@@ -53,13 +53,10 @@ export interface PiRunOptions {
   settings: ModelSettings;
   onEvent: (event: RunnerEvent) => void;
   onAbortReady: (abort: () => Promise<void>) => void;
-  scenarioBinding?: {
-    roles: Array<{ key: string; allowedDeviceIds: string[] }>;
-  };
   devices?: DeviceResource[];
 }
 
-export interface PiDiagnosticOptions extends Omit<PiRunOptions, "requirement" | "scenarioBinding"> {
+export interface PiDiagnosticOptions extends Omit<PiRunOptions, "requirement"> {
   prompt: string;
 }
 
@@ -172,7 +169,6 @@ async function executePiAgent(options: PiAgentOptions): Promise<{ result?: Finis
     onFinish: (result) => {
       finishResult = result;
     },
-    scenarioBinding: options.scenarioBinding,
   });
   const deviceToolset = createDeviceTools({ devices: options.devices || [], evidence });
   const tools = [...browserToolset.tools, ...deviceToolset.tools];

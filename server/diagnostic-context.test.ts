@@ -28,15 +28,10 @@ const context = {
     name: "VRRP 双机",
     category: "VRRP",
     description: "双机主备",
-    roles: [{ key: "dut", name: "被测设备", deviceType: "TAU" }],
+    roles: [{ key: "dut", deviceId: "device-1" }],
     parameters: [{ key: "vlan", name: "业务 VLAN" }],
     setupInstructions: "配置二层连通",
     verificationInstructions: "检查邻居状态",
-  },
-  physicalEnvironment: {
-    name: "网络实验室",
-    description: "固定布线",
-    connections: [],
   },
   devices: [{
     id: "device-1",
@@ -92,9 +87,23 @@ test("builds a scoped diagnostic prompt without credentials or unrelated case ev
   assert.match(prompt, /ip link: DOWN/);
   assert.match(prompt, /为什么没有切换/);
   assert.match(prompt, /管理 SSH\[ssh, ID: ssh-1/);
+  assert.match(prompt, /历史记录未保存场景快照/);
   assert.doesNotMatch(prompt, /top-secret/);
   assert.doesNotMatch(prompt, /其他用例内容/);
   assert.doesNotMatch(prompt, /模型流式文本/);
+});
+
+test("preserves historical bindings when the current scene roles were changed or deleted", () => {
+  const changedContext = structuredClone(context);
+  changedContext.scenario!.roles = [{ id: "new-role", key: "newDUT", deviceId: "device-2" }];
+  const prompt = buildDiagnosticPrompt(changedContext, [], []);
+  assert.match(prompt, /dut：TAU1\[device-1\]/);
+  assert.doesNotMatch(prompt, /newDUT：/);
+  changedContext.scenario = undefined;
+  assert.match(buildDiagnosticPrompt(changedContext, [], []), /dut：TAU1\[device-1\]/);
+  changedContext.scenario = context.scenario;
+  changedContext.scenarioRun.scenarioSnapshot = context.scenario;
+  assert.match(buildDiagnosticPrompt(changedContext, [], []), /定义来源：当次执行场景快照/);
 });
 
 test("keeps the newest question when diagnostic context must be truncated", () => {

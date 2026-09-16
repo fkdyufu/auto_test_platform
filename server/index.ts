@@ -17,7 +17,7 @@ import {
 import { sanitizeToolEvent } from "./event-sanitizer.js";
 import { buildDiagnosticPrompt } from "./diagnostic-context.js";
 import { diagnosticStore } from "./diagnostic-store.js";
-import { deviceMatchesRoleType } from "./device-types.js";
+import { resolveScenarioDevices } from "./scenario-devices.js";
 import {
   executePiDiagnostic,
   executePiRun,
@@ -95,6 +95,7 @@ interface RunLogHeader {
 
 const app = express();
 const port = Number(process.env.PORT || 3001);
+const host = process.env.HOST || "0.0.0.0";
 const runs = new Map<string, RunRecord>();
 const runLogsDirectory = path.resolve(process.cwd(), ".data", "runs");
 const INTERRUPTED_RUN_REASON = "平台服务重启，原执行进程已终止";
@@ -235,10 +236,8 @@ async function createRunRecord(
   return run;
 }
 
-function buildPhysicalEnvironmentDescription(context: TestOrderExecutionContext): string {
-  const { physicalEnvironment, devices } = context;
-  if (!physicalEnvironment) return "";
-  const deviceById = new Map(devices.map((device) => [device.id, device]));
+function buildDeviceDescription(context: TestOrderExecutionContext): string {
+  const { devices } = context;
   const deviceLines = devices.map((device) => {
     const controls = device.controlInterfaces.length
       ? device.controlInterfaces
@@ -254,12 +253,7 @@ function buildPhysicalEnvironmentDescription(context: TestOrderExecutionContext)
       : "未配置控制接口";
     return `- ${device.name}（ID: ${device.id}，类型: ${device.types.join("、")}${device.model ? `，型号: ${device.model}` : ""}）\n  控制接口: ${controls}`;
   });
-  const connectionLines = physicalEnvironment.connections.map((connection) => {
-    const source = deviceById.get(connection.sourceDeviceId)?.name || connection.sourceDeviceId;
-    const target = deviceById.get(connection.targetDeviceId)?.name || connection.targetDeviceId;
-    return `- ${source}.${connection.sourcePort} <-> ${target}.${connection.targetPort}${connection.description ? `（${connection.description}）` : ""}`;
-  });
-  return `\n\n物理环境上下文：\n物理环境：${physicalEnvironment.name}\n${physicalEnvironment.description || "无补充说明"}\n\n环境设备：\n${deviceLines.join("\n")}\n\n物理连接：\n${connectionLines.join("\n") || "未配置连接关系"}\n\n请根据用例步骤使用可用的设备控制接口；未提供相应工具时，不得声称已经完成操作。`;
+  return `\n\n场景绑定设备：\n${deviceLines.join("\n") || "未绑定设备，不提供设备控制工具"}\n\n请根据用例步骤使用可用的设备控制接口；未提供相应工具时，不得声称已经完成操作。`;
 }
 
 function buildScenarioDescription(
@@ -271,12 +265,12 @@ function buildScenarioDescription(
   const roleLines = scenario.roles.map((role) => {
     const deviceId = scenarioRun.roleBindings[role.key];
     const device = deviceId ? deviceById.get(deviceId) : undefined;
-    return `- ${role.name}（${role.key}，要求类型: ${role.deviceType}）：${device ? `${device.name}（ID: ${device.id}）` : "尚未绑定"}`;
+    return `- ${role.key}：${device ? `${device.name}（ID: ${device.id}）` : "尚未绑定"}`;
   });
   const parameterLines = scenario.parameters.map(
     (parameter) => `- ${parameter.name}（${parameter.key}）：${scenarioRun.parameterValues[parameter.key] || "未设置"}`,
   );
-  return `测试场景：${scenario.name}${scenario.category ? `（${scenario.category}）` : ""}\n${scenario.description || "无补充说明"}\n\n场景角色：\n${roleLines.join("\n") || "无设备角色"}\n\n场景参数：\n${parameterLines.join("\n") || "无场景参数"}`;
+  return `测试场景：${scenario.name}${scenario.category ? `（${scenario.category}）` : ""}\n${scenario.description || "无补充说明"}\n\n固定角色绑定：\n${roleLines.join("\n") || "无设备角色"}\n角色已经由平台固定绑定，不得替换设备或重新分配角色。\n\n场景参数：\n${parameterLines.join("\n") || "无场景参数"}`;
 }
 
 function buildScenarioSetupRequirement(
@@ -284,13 +278,7 @@ function buildScenarioSetupRequirement(
   scenarioRun: ScenarioRun,
   context: TestOrderExecutionContext,
 ): string {
-  const candidateLines = scenario.roles.map((role) => {
-    const candidates = context.devices.filter(
-      (device) => deviceMatchesRoleType(device, role.deviceType),
-    );
-    return `- ${role.name}（${role.key}，类型: ${role.deviceType}）：${candidates.map((device) => `${device.name}[${device.id}]`).join("、") || "无匹配设备"}`;
-  });
-  return `为后续测试用例搭建并验证测试场景。${buildPhysicalEnvironmentDescription(context)}\n\n${buildScenarioDescription(scenario, scenarioRun, context)}\n\n可选角色设备：\n${candidateLines.join("\n") || "无设备角色"}\n\n场景搭建要求：\n${scenario.setupInstructions}\n\n场景验证要求：\n${scenario.verificationInstructions}\n\n请使用当前真正可用的工具完成配置并验证。当前未提供的控制接口不得假装已调用。完成后调用 finish_test；通过时 roleBindings 必须填写每个角色标识对应的设备 ID。`;
+  return `为后续测试用例搭建并验证测试场景。${buildDeviceDescription(context)}\n\n${buildScenarioDescription(scenario, scenarioRun, context)}\n\n场景搭建要求：\n${scenario.setupInstructions}\n\n场景验证要求：\n${scenario.verificationInstructions}\n\n请严格按指定设备、接口和步骤执行。先读取相关配置，按搭建要求清除冲突并应用目标配置，然后逐项验证。不允许自行替换设备、选择其他拓扑或省略验证。无法达到要求时提交失败。当前未提供的控制接口不得假装已调用。完成后调用 finish_test 提交结论，角色绑定由平台提供，不需要提交。`;
 }
 
 function buildCaseRequirement(
@@ -299,7 +287,7 @@ function buildCaseRequirement(
   scenarioRun: ScenarioRun,
   context: TestOrderExecutionContext,
 ): string {
-  return `执行产品测试用例。${buildPhysicalEnvironmentDescription(context)}\n\n${buildScenarioDescription(scenario, scenarioRun, context)}\n\n场景搭建结论：${scenarioRun.summary || "无"}\n\n用例名称：${caseRun.caseNameSnapshot}\n\n前置条件：\n${caseRun.preconditionSnapshot || "无"}\n\n测试步骤：\n${caseRun.stepsSnapshot}\n\n预期结果：\n${caseRun.expectedResultSnapshot}\n\n请先确认前置条件是否满足，再直接使用当前提供的工具执行，并根据实际观察调用 finish_test 提交结论。`;
+  return `执行产品测试用例。${buildDeviceDescription(context)}\n\n${buildScenarioDescription(scenario, scenarioRun, context)}\n\n场景搭建结论：${scenarioRun.summary || "无"}\n\n用例名称：${caseRun.caseNameSnapshot}\n\n前置条件：\n${caseRun.preconditionSnapshot || "无"}\n\n测试步骤：\n${caseRun.stepsSnapshot}\n\n预期结果：\n${caseRun.expectedResultSnapshot}\n\n请先确认前置条件是否满足，再直接使用当前提供的工具执行，并根据实际观察调用 finish_test 提交结论。`;
 }
 
 function buildScenarioCleanupRequirement(
@@ -308,7 +296,7 @@ function buildScenarioCleanupRequirement(
   context: TestOrderExecutionContext,
   triggerReason: string,
 ): string {
-  return `请清理测试场景。当前执行状态：${triggerReason}。无论此前执行是否成功，都应以恢复环境为目标。${buildPhysicalEnvironmentDescription(context)}\n\n${buildScenarioDescription(scenario, scenarioRun, context)}\n\n场景清理要求：\n${scenario.cleanupInstructions}\n\n请使用当前真正可用的工具执行清理并验证。当前未提供的控制接口不得假装已调用。完成后调用 finish_test 提交结论。`;
+  return `请清理测试场景。当前执行状态：${triggerReason}。无论此前执行是否成功，都应以恢复环境为目标。${buildDeviceDescription(context)}\n\n${buildScenarioDescription(scenario, scenarioRun, context)}\n\n场景清理要求：\n${scenario.cleanupInstructions}\n\n请使用当前真正可用的工具执行清理并验证。当前未提供的控制接口不得假装已调用。完成后调用 finish_test 提交结论。`;
 }
 
 async function updateStoredCaseRun(runId: string, caseRunId: string, update: Partial<CaseRun>): Promise<void> {
@@ -329,17 +317,6 @@ async function updateStoredScenarioRun(
     if (!storedScenarioRun) throw new CatalogError("场景执行记录不存在", 404);
     Object.assign(storedScenarioRun, update);
   });
-}
-
-function scenarioBindingDefinition(scenario: TestScenario, context: TestOrderExecutionContext) {
-  return {
-    roles: scenario.roles.map((role) => ({
-      key: role.key,
-      allowedDeviceIds: context.devices
-        .filter((device) => deviceMatchesRoleType(device, role.deviceType))
-        .map((device) => device.id),
-    })),
-  };
 }
 
 async function executeScenarioCleanup(
@@ -387,7 +364,7 @@ async function executeScenarioCleanup(
 
 async function executeTestOrderRun(run: RunRecord, order: TestOrder, testRun: TestRun): Promise<void> {
   const settings = await readModelSettings();
-  const executionContext = await catalogStore.getTestOrderExecutionContext(order.id);
+  const productContext = await catalogStore.getTestOrderExecutionContext(order.id);
   updateStatus(run, "running", "正在执行测试单");
   const startedAt = new Date().toISOString();
   await catalogStore.updateTestRun(testRun.id, (storedRun) => {
@@ -402,7 +379,8 @@ async function executeTestOrderRun(run: RunRecord, order: TestOrder, testRun: Te
 
   for (const scenarioRun of testRun.scenarioRuns) {
     if (run.cancelRequested) break;
-    const scenario = executionContext.scenarios.find((item) => item.id === scenarioRun.testScenarioId);
+    const scenario = scenarioRun.scenarioSnapshot || productContext.scenarios.find((item) => item.id === scenarioRun.testScenarioId);
+    let executionContext: TestOrderExecutionContext = { devices: [], scenarios: [] };
     const scenarioCaseRuns = scenarioRun.caseRunIds
       .map((caseRunId) => testRun.caseRuns.find((item) => item.id === caseRunId))
       .filter((item): item is CaseRun => Boolean(item));
@@ -420,21 +398,27 @@ async function executeTestOrderRun(run: RunRecord, order: TestOrder, testRun: Te
     let setupAttempted = false;
     let scenarioHasFailure = false;
     let modelRequestFailure: ModelRequestError | undefined;
+    if (scenario) {
+      try {
+        executionContext = { devices: resolveScenarioDevices(scenario, scenarioRun, productContext.devices), scenarios: [scenario] };
+      } catch (error) {
+        setupFailure = error instanceof Error ? error.message : "场景设备绑定无效";
+      }
+    }
     if (!scenario) {
       setupFailure = "测试场景不存在或已删除";
-    } else if (scenarioRun.isDefault) {
+    }
+    if (!setupFailure && scenario && scenarioRun.isDefault) {
       scenarioRun.summary = "默认场景，无需切换逻辑拓扑";
       await updateStoredScenarioRun(testRun.id, scenarioRun.id, { summary: scenarioRun.summary });
       publish(run, {
         type: "scenario_state",
         status: "running",
-        message: `${scenario.name}：沿用物理环境当前配置`,
+        message: `${scenario.name}：沿用绑定设备当前配置`,
         scenarioRunId: scenarioRun.id,
         scenarioName: scenario.name,
       });
-    } else if (!executionContext.physicalEnvironment) {
-      setupFailure = "测试单未选择物理环境，无法搭建非默认场景";
-    } else {
+    } else if (!setupFailure && scenario) {
       setupAttempted = true;
       try {
         const execution = await executePiRun({
@@ -442,7 +426,6 @@ async function executeTestOrderRun(run: RunRecord, order: TestOrder, testRun: Te
           requirement: buildScenarioSetupRequirement(scenario, scenarioRun, executionContext),
           settings,
           devices: executionContext.devices,
-          scenarioBinding: scenarioBindingDefinition(scenario, executionContext),
           onEvent: (event) => publish(run, {
             ...event,
             scenarioRunId: scenarioRun.id,
@@ -457,10 +440,8 @@ async function executeTestOrderRun(run: RunRecord, order: TestOrder, testRun: Te
           const result = resolveRunResult(execution);
           if (result.outcome === "failed") setupFailure = result.message;
           else {
-            scenarioRun.roleBindings = execution.result?.roleBindings || {};
             scenarioRun.summary = result.message;
             await updateStoredScenarioRun(testRun.id, scenarioRun.id, {
-              roleBindings: scenarioRun.roleBindings,
               summary: scenarioRun.summary,
             });
             publish(run, {
@@ -832,7 +813,14 @@ app.post("/api/products/:productId/test-orders/:id/runs", async (request, respon
 
     const label = selectedCaseId ? "单用例执行" : "整单执行";
     const run = await createRunRecord(`${order.name} - ${label}`, { source: "test_order", testOrderId: order.id });
-    const testRun = await catalogStore.createTestRun(run.id, order.id, selectedCaseId ? [selectedCaseId] : undefined);
+    let testRun: TestRun;
+    try {
+      testRun = await catalogStore.createTestRun(run.id, order.id, selectedCaseId ? [selectedCaseId] : undefined);
+    } catch (error) {
+      publish(run, { type: "error", error: true, message: error instanceof Error ? error.message : "场景设备绑定无效" });
+      updateStatus(run, "failed", "无法创建测试执行");
+      throw error;
+    }
     response.status(202).json(publicRun(run));
 
     void executeTestOrderRun(run, order, testRun).catch(async (error) => {
@@ -1172,8 +1160,8 @@ async function startServer(): Promise<void> {
   } catch (error) {
     console.error("恢复遗留执行任务失败", error);
   }
-  app.listen(port, "0.0.0.0", () => {
-    console.log(`API server listening on http://0.0.0.0:${port}`);
+  app.listen(port, host, () => {
+    console.log(`API server listening on http://${host}:${port}`);
   });
 }
 

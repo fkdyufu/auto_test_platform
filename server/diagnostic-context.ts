@@ -23,8 +23,6 @@ function limitText(value: string, maximum: number): string {
 }
 
 function formatDevices(context: DiagnosticExecutionContext): string {
-  if (!context.physicalEnvironment) return "未配置物理环境";
-  const deviceById = new Map(context.devices.map((device) => [device.id, device]));
   const devices = context.devices.map((device) => {
     const controls = device.controlInterfaces.length
       ? device.controlInterfaces.map((control) =>
@@ -33,29 +31,24 @@ function formatDevices(context: DiagnosticExecutionContext): string {
       : "未配置控制接口";
     return `- ${device.name}（设备 ID: ${device.id}，类型: ${device.types.join("、")}${device.model ? `，型号: ${device.model}` : ""}）\n  ${controls}`;
   });
-  const connections = context.physicalEnvironment.connections.map((connection) => {
-    const source = deviceById.get(connection.sourceDeviceId)?.name || connection.sourceDeviceId;
-    const target = deviceById.get(connection.targetDeviceId)?.name || connection.targetDeviceId;
-    return `- ${source}.${connection.sourcePort} <-> ${target}.${connection.targetPort}${connection.description ? `（${connection.description}）` : ""}`;
-  });
-  return `物理环境：${context.physicalEnvironment.name}\n${context.physicalEnvironment.description || "无补充说明"}\n设备：\n${devices.join("\n") || "无"}\n物理连接：\n${connections.join("\n") || "未配置连接关系"}`;
+  return `场景绑定设备的当前资源配置：\n${devices.join("\n") || "无可用绑定设备"}`;
 }
 
 function formatScenario(context: DiagnosticExecutionContext): string {
   const { scenario, scenarioRun } = context;
   const deviceById = new Map(context.devices.map((device) => [device.id, device]));
-  if (!scenario) {
-    return `场景：${scenarioRun.scenarioNameSnapshot}（场景定义已删除）\n场景执行结论：${scenarioRun.summary || "无"}`;
-  }
-  const roles = scenario.roles.map((role) => {
-    const deviceId = scenarioRun.roleBindings[role.key];
-    const device = deviceId ? deviceById.get(deviceId) : undefined;
-    return `- ${role.name}（${role.key}）：${device ? `${device.name}[${device.id}]` : deviceId || "未绑定"}`;
+  const roles = Object.entries(scenarioRun.roleBindings).map(([key, deviceId]) => {
+    const device = deviceById.get(deviceId);
+    return `- ${key}：${device ? `${device.name}[${device.id}]` : `${deviceId}（当前不可用）`}`;
   });
+  if (!scenario) {
+    return `场景：${scenarioRun.scenarioNameSnapshot}（场景定义已删除）\n当次角色绑定：\n${roles.join("\n") || "无"}\n场景执行结论：${scenarioRun.summary || "无"}`;
+  }
   const parameters = scenario.parameters.map((parameter) =>
     `- ${parameter.name}（${parameter.key}）：${scenarioRun.parameterValues[parameter.key] || "未设置"}`,
   );
-  return `场景：${scenario.name}${scenario.category ? `（${scenario.category}）` : ""}\n${scenario.description || "无补充说明"}\n角色绑定：\n${roles.join("\n") || "无"}\n场景参数：\n${parameters.join("\n") || "无"}\n搭建要求：${scenario.setupInstructions || "无"}\n验证要求：${scenario.verificationInstructions || "无"}\n场景执行结论：${scenarioRun.summary || "无"}`;
+  const source = scenarioRun.scenarioSnapshot ? "当次执行场景快照" : "历史记录未保存场景快照，以下场景定义来自当前配置，不代表当次配置";
+  return `场景：${scenario.name}${scenario.category ? `（${scenario.category}）` : ""}\n定义来源：${source}\n${scenario.description || "无补充说明"}\n当次角色绑定：\n${roles.join("\n") || "无"}\n场景参数：\n${parameters.join("\n") || "无"}\n搭建要求：${scenario.setupInstructions || "无"}\n验证要求：${scenario.verificationInstructions || "无"}\n场景执行结论：${scenarioRun.summary || "无"}`;
 }
 
 function relevantEvidence(context: DiagnosticExecutionContext, events: DiagnosticEvidenceEvent[]): DiagnosticEvidenceEvent[] {
