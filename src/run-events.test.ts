@@ -26,6 +26,7 @@ test("merges tool start and successful end into one completed item", () => {
         toolCallId: "call-1",
         error: false,
         message: "页面已打开",
+        toolOutput: "完整页面输出",
       },
     ],
     false,
@@ -34,6 +35,7 @@ test("merges tool start and successful end into one completed item", () => {
   assert.equal(items.length, 1);
   assert.equal(items[0].toolState, "completed");
   assert.equal(items[0].message, "页面已打开");
+  assert.equal(items[0].toolOutput, "完整页面输出");
 });
 
 test("keeps an actual tool error as a failed item", () => {
@@ -64,4 +66,13 @@ test("marks unfinished tools as interrupted when the run ends", () => {
   assert.equal(items.length, 1);
   assert.equal(items[0].toolState, "interrupted");
   assert.equal(items[0].message, "任务结束前未收到工具完成事件");
+});
+
+test("keeps agent metadata out of the timeline without hiding progress updates", () => {
+  const items = buildTimelineItems([
+    { id: 1, timestamp: baseEvents[0].timestamp, type: "agent_info", details: { event: "message_end", stopReason: "length" } },
+    { id: 2, timestamp: baseEvents[0].timestamp, type: "status", message: "正在压缩上下文" },
+  ], true);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].message, "正在压缩上下文");
 });

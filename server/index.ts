@@ -64,6 +64,8 @@ interface StreamEvent {
   tool?: string;
   toolCallId?: string;
   args?: unknown;
+  details?: Record<string, unknown>;
+  toolOutput?: string;
   error?: boolean;
   status?: RunStatus;
   outcome?: "passed" | "failed";
@@ -343,6 +345,7 @@ async function executeScenarioCleanup(
   try {
     const execution = await executePiRun({
       runId: `${scenarioRun.id}-cleanup`,
+      phase: "cleanup",
       requirement: buildScenarioCleanupRequirement(scenario, scenarioRun, context, triggerReason),
       settings,
       devices: context.devices,
@@ -429,6 +432,7 @@ async function executeTestOrderRun(run: RunRecord, order: TestOrder, testRun: Te
       try {
         const execution = await executePiRun({
           runId: `${scenarioRun.id}-setup`,
+          phase: "setup",
           requirement: buildScenarioSetupRequirement(scenario, scenarioRun, executionContext),
           settings,
           devices: executionContext.devices,
@@ -521,6 +525,7 @@ async function executeTestOrderRun(run: RunRecord, order: TestOrder, testRun: Te
         try {
           const execution = await executePiRun({
             runId: caseRun.id,
+            phase: "case",
             requirement: buildCaseRequirement(caseRun, scenario!, scenarioRun, executionContext),
             settings,
             devices: executionContext.devices,

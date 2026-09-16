@@ -8,7 +8,7 @@ export interface TimelineItem extends RunEvent {
 }
 
 function isHiddenEvent(event: RunEvent): boolean {
-  return event.type === "assistant_delta" || event.type === "assistant";
+  return event.type === "assistant_delta" || event.type === "assistant" || event.type === "agent_info";
 }
 
 export function buildTimelineItems(events: RunEvent[], isActive: boolean): TimelineItem[] {
@@ -36,6 +36,7 @@ export function buildTimelineItems(events: RunEvent[], isActive: boolean): Timel
           ...start,
           tool: event.tool || start.tool,
           message: event.message,
+          toolOutput: event.toolOutput,
           error: event.error,
           renderKey,
           toolState,

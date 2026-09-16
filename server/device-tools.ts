@@ -1,11 +1,11 @@
 import { Buffer } from "node:buffer";
 import { Client as SshClient } from "ssh2";
-import { Telnet } from "telnet-client";
 import { SerialPort } from "serialport";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { ControlInterface, ControlInterfaceType, DeviceResource } from "./catalog-store.js";
 import type { ToolEvidence } from "./tool-evidence.js";
+import { TelnetSessionPool } from "./telnet-session.js";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_OUTPUT_LENGTH = 32_000;
@@ -26,7 +26,7 @@ interface SshRequest {
   timeoutMs: number;
 }
 
-interface TelnetRequest extends SshRequest {}
+interface TelnetRequest extends SshRequest { sessionKey: string }
 
 interface SerialRequest {
   control: ControlInterface;
@@ -206,37 +206,6 @@ function sshExec(request: SshRequest, signal?: AbortSignal): Promise<Record<stri
   });
 }
 
-async function telnetExec(request: TelnetRequest, signal?: AbortSignal): Promise<Record<string, unknown>> {
-  const target = parseNetworkAddress(request.control.address, 23, ["telnet:"]);
-  const connection = new Telnet();
-  const onAbort = () => void connection.destroy();
-  if (signal?.aborted) throw abortError();
-  signal?.addEventListener("abort", onAbort, { once: true });
-  try {
-    await connection.connect({
-      host: target.host,
-      port: target.port,
-      username: request.control.username || undefined,
-      password: request.control.password || undefined,
-      disableLogon: !request.control.username,
-      shellPrompt: /(?:^|\r?\n)[^\r\n]*[#$>]\s*$/,
-      loginPrompt: /(?:login|username)[: ]*$/i,
-      passwordPrompt: /password[: ]*$/i,
-      timeout: request.timeoutMs,
-      execTimeout: request.timeoutMs,
-      stripControls: true,
-      maxBufferLength: MAX_OUTPUT_LENGTH * 4,
-    });
-    if (signal?.aborted) throw abortError();
-    const output = limitedText(await connection.exec(request.command, { execTimeout: request.timeoutMs }));
-    if (signal?.aborted) throw abortError();
-    return { success: true, stdout: output.text, stderr: "", exitCode: null, truncated: output.truncated };
-  } finally {
-    signal?.removeEventListener("abort", onAbort);
-    await connection.end().catch(() => connection.destroy()).catch(() => undefined);
-  }
-}
-
 function openSerialPort(port: SerialPort): Promise<void> {
   return new Promise((resolve, reject) => port.open((error) => (error ? reject(error) : resolve())));
 }
@@ -294,7 +263,7 @@ async function serialExec(request: SerialRequest, signal?: AbortSignal): Promise
   try {
     if (signal?.aborted) throw abortError();
     await openSerialPort(port);
-    await writeSerialPort(port, `${request.input}${request.appendNewline ? "\r\n" : ""}`);
+    if (request.input || request.appendNewline) await writeSerialPort(port, `${request.input}${request.appendNewline ? "\r\n" : ""}`);
     await waitFor(request.waitMs, signal);
     if (portError) throw portError;
     const safeOutput = limitedText(output);
@@ -343,21 +312,23 @@ async function httpRequest(request: HttpRequest, signal?: AbortSignal): Promise<
   };
 }
 
-const defaultAdapters: DeviceProtocolAdapters = {
-  ssh: sshExec,
-  telnet: telnetExec,
-  serial: serialExec,
-  http: httpRequest,
-};
-
 export class DeviceToolDriver {
   private readonly activeOperations = new Set<AbortController>();
+  private readonly telnetSessions = new TelnetSessionPool();
+  private readonly adapters: DeviceProtocolAdapters;
+  private readonly serialQueue = new Map<string, Promise<void>>();
+  private closed = false;
 
   constructor(
     private readonly devices: DeviceResource[],
     private readonly evidence: ToolEvidence,
-    private readonly adapters: DeviceProtocolAdapters = defaultAdapters,
-  ) {}
+    adapters?: DeviceProtocolAdapters,
+  ) {
+    this.adapters = adapters || {
+      ssh: sshExec, serial: serialExec, http: httpRequest,
+      telnet: (request, signal) => this.telnetSessions.execute(request.sessionKey, request.control, parseNetworkAddress(request.control.address, 23, ["telnet:"]), request.command, request.timeoutMs, signal),
+    };
+  }
 
   resolve(deviceId: string, interfaceId: string | undefined, type: ControlInterfaceType): ResolvedControlInterface {
     const device = this.devices.find((item) => item.id === deviceId);
@@ -376,10 +347,12 @@ export class DeviceToolDriver {
   }
 
   private async run<T>(signal: AbortSignal | undefined, operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    if (this.closed) throw abortError();
     const controller = new AbortController();
     this.activeOperations.add(controller);
     const combinedSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
     try {
+      combinedSignal.throwIfAborted();
       const result = await operation(combinedSignal);
       this.evidence.mark();
       return result;
@@ -402,6 +375,7 @@ export class DeviceToolDriver {
     const { device, control } = this.resolve(params.deviceId, params.interfaceId, "telnet");
     const result = await this.run(signal, (activeSignal) => this.adapters.telnet({
       control,
+      sessionKey: `${device.id}:${control.id}`,
       command: params.command,
       timeoutMs: params.timeoutMs || DEFAULT_TIMEOUT_MS,
     }, activeSignal));
@@ -413,12 +387,15 @@ export class DeviceToolDriver {
     signal?: AbortSignal,
   ) {
     const { device, control } = this.resolve(params.deviceId, params.interfaceId, "serial");
-    const result = await this.run(signal, (activeSignal) => this.adapters.serial({
+    const key = `${device.id}:${control.id}`;
+    const operation = (this.serialQueue.get(key) || Promise.resolve()).then(() => this.run(signal, (activeSignal) => this.adapters.serial({
       control,
       input: params.input,
       waitMs: params.waitMs || 1_000,
       appendNewline: params.appendNewline !== false,
-    }, activeSignal));
+    }, activeSignal)));
+    this.serialQueue.set(key, operation.then(() => undefined, () => undefined));
+    const result = await operation;
     return textResult({ device: device.name, interface: control.name, ...result });
   }
 
@@ -447,8 +424,10 @@ export class DeviceToolDriver {
   }
 
   async close(): Promise<void> {
+    this.closed = true;
     this.activeOperations.forEach((controller) => controller.abort());
     this.activeOperations.clear();
+    await this.telnetSessions.close();
   }
 }
 
@@ -473,7 +452,7 @@ export function createDeviceTools(options: DeviceToolsOptions) {
   const telnetTool = defineTool({
     name: "device_telnet_exec",
     label: "Telnet 执行命令",
-    description: "通过设备已配置的 Telnet 控制接口登录并执行命令。地址和凭据由平台自动获取。",
+    description: "通过已配置的 Telnet 接口执行 CLI 命令。当前 Agent 内保留连接和配置视图，同一接口命令串行执行；多行命令逐条等待提示符，报错后停止后续命令。输出保留提示符。连接中断不会自动重发命令，下次调用须确认并重新进入所需视图。",
     parameters: Type.Object({
       ...commonParameters,
       command: Type.String({ minLength: 1, maxLength: 20_000 }),
@@ -487,7 +466,7 @@ export function createDeviceTools(options: DeviceToolsOptions) {
     description: "向设备已配置的本地串口发送内容并读取响应。串口地址可用查询参数配置 baudRate、dataBits、stopBits 和 parity。",
     parameters: Type.Object({
       ...commonParameters,
-      input: Type.String({ minLength: 1, maxLength: 20_000 }),
+      input: Type.String({ maxLength: 20_000, description: "发送内容；留空且 appendNewline=true 可发送回车，留空且 false 仅读取" }),
       waitMs: Type.Optional(Type.Number({ minimum: 100, maximum: 10_000 })),
       appendNewline: Type.Optional(Type.Boolean({ description: "是否自动追加 CRLF，默认 true" })),
     }),

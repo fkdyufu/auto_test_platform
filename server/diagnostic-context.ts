@@ -12,6 +12,8 @@ export interface DiagnosticEvidenceEvent {
   message?: string;
   tool?: string;
   args?: unknown;
+  details?: Record<string, unknown>;
+  toolOutput?: string;
   error?: boolean;
   outcome?: string;
   caseRunId?: string;
@@ -52,7 +54,7 @@ function formatScenario(context: DiagnosticExecutionContext): string {
 }
 
 function relevantEvidence(context: DiagnosticExecutionContext, events: DiagnosticEvidenceEvent[]): DiagnosticEvidenceEvent[] {
-  const allowedTypes = new Set(["tool_start", "tool_end", "case_result", "scenario_result", "error"]);
+  const allowedTypes = new Set(["tool_start", "tool_end", "case_result", "scenario_result", "error", "agent_info"]);
   return events.filter((event) => {
     if (!allowedTypes.has(event.type)) return false;
     if (event.caseRunId === context.caseRun.id) return true;
@@ -68,6 +70,8 @@ function formatEvidence(context: DiagnosticExecutionContext, events: DiagnosticE
       tool: event.tool,
       args: event.args,
       message: event.message,
+      details: event.details,
+      toolOutput: event.toolOutput ? limitText(event.toolOutput, 1_200) : undefined,
       error: event.error,
       outcome: event.outcome,
     };

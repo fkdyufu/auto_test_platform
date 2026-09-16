@@ -58,6 +58,7 @@ function TimelineEvent({ event }: { event: TimelineItem }) {
         {isTool && executionContext && <span className="case-context">{executionContext}</span>}
         <strong>{label || "状态更新"}</strong>
         {isTool && event.toolState !== "running" && event.message && <p>{event.message}</p>}
+        {isTool && event.toolOutput && <details className="tool-output-details"><summary>工具输出</summary><pre>{event.toolOutput}</pre></details>}
       </div>
     </div>
   );

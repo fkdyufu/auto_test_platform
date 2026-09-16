@@ -33,6 +33,7 @@ export interface RunEvent {
     | "assistant"
     | "tool_start"
     | "tool_end"
+    | "agent_info"
     | "run_state"
     | "result"
     | "error"
@@ -44,6 +45,8 @@ export interface RunEvent {
   tool?: string;
   toolCallId?: string;
   args?: unknown;
+  details?: Record<string, unknown>;
+  toolOutput?: string;
   error?: boolean;
   status?: RunStatus;
   outcome?: TestOutcome;

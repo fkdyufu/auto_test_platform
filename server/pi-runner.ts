@@ -13,21 +13,13 @@ import type { DeviceResource } from "./catalog-store.js";
 import { createDeviceTools } from "./device-tools.js";
 import { modelRuntimePaths, type ModelSettings } from "./settings-store.js";
 import { createToolEvidence } from "./tool-evidence.js";
+import { buildExecutionPolicy, FINISH_ONLY_REQUIREMENT, type ExecutionPhase } from "./execution-policy.js";
 
 const RUNTIME_PROVIDER_ID = "test-runner";
 const AGENT_INACTIVITY_TIMEOUT_MS = 5 * 60_000;
 const ASSISTANT_DELTA_BATCH_MS = 250;
 
-const TEST_SYSTEM_PROMPT = `你是一个自动化测试执行 Agent。你会收到一段测试需求，并通过当前提供的浏览器或设备控制工具直接完成它。
-
-执行规则：
-1. 根据设备 ID 和控制接口 ID 选择工具，不要自行编造地址或凭据。
-2. 需求包含网页地址时调用 browser_open，并根据页面检查结果选择元素操作。
-3. SSH、Telnet、串口或 API 操作必须调用对应的 device_* 工具，以工具返回内容作为事实依据。
-4. 页面或设备状态发生变化后重新读取，不要猜测结果。
-5. 只有实际观察到符合需求的结果后才能判定通过。
-6. 完成后必须调用 finish_test；无法完成时调用 finish_test 并标记 failed。
-7. 不要只描述操作步骤，直接执行需求。`;
+const TEST_SYSTEM_PROMPT = buildExecutionPolicy("adhoc");
 
 const DIAGNOSTIC_SYSTEM_PROMPT = `你是自动化测试平台中的用例诊断 Agent。你会收到产品、当前资源与环境、测试场景、用例执行快照、历史工具证据和诊断对话。
 
@@ -40,12 +32,14 @@ const DIAGNOSTIC_SYSTEM_PROMPT = `你是自动化测试平台中的用例诊断 
 6. 不要调用 finish_test，也不要改写原测试结果。最终以清晰、简洁的中文给出判断、依据和下一步建议。`;
 
 export interface RunnerEvent {
-  type: "status" | "assistant_delta" | "assistant" | "tool_start" | "tool_end";
+  type: "status" | "assistant_delta" | "assistant" | "tool_start" | "tool_end" | "agent_info";
   message?: string;
   tool?: string;
   toolCallId?: string;
   args?: unknown;
   error?: boolean;
+  details?: Record<string, unknown>;
+  toolOutput?: string;
 }
 
 export interface PiRunOptions {
@@ -55,6 +49,7 @@ export interface PiRunOptions {
   onEvent: (event: RunnerEvent) => void;
   onAbortReady: (abort: () => Promise<void>) => void;
   devices?: DeviceResource[];
+  phase?: ExecutionPhase;
 }
 
 export interface PiDiagnosticOptions extends Omit<PiRunOptions, "requirement"> {
@@ -65,6 +60,13 @@ export class ModelRequestError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "ModelRequestError";
+  }
+}
+
+export class AgentExecutionError extends Error {
+  constructor(message: string) {
+    super(`执行异常：${message}`);
+    this.name = "AgentExecutionError";
   }
 }
 
@@ -162,6 +164,18 @@ async function executePiAgent(options: PiAgentOptions): Promise<{ result?: Finis
   let finishResult: FinishResult | undefined;
   let finalText = "";
   let modelError = "";
+  let lastStopReason = "unknown";
+  let compactionError = "";
+  let beforeCompactionThinking: ModelSettings["reasoningLevel"] | undefined;
+  let cancelled = false;
+  const secrets = [options.settings.apiKey, ...(options.devices || []).flatMap((device) => device.controlInterfaces.map((control) => control.password))].filter((value): value is string => Boolean(value && value.length >= 3));
+  const redact = (value: string) => secrets.reduce((text, secret) => text.split(secret).join("[REDACTED]"), value);
+  const redactArgs = (value: unknown): unknown => {
+    if (typeof value === "string") return redact(value);
+    if (Array.isArray(value)) return value.map(redactArgs);
+    if (!value || typeof value !== "object") return value;
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redactArgs(item)]));
+  };
   const evidence = createToolEvidence();
   const browserToolset = createBrowserTools({
     runId: options.runId,
@@ -169,7 +183,7 @@ async function executePiAgent(options: PiAgentOptions): Promise<{ result?: Finis
     evidence,
     includeFinishTool: options.includeFinishTool,
     onFinish: (result) => {
-      finishResult = result;
+      finishResult = { ...result, summary: redact(result.summary) };
     },
   });
   const deviceToolset = createDeviceTools({ devices: options.devices || [], evidence });
@@ -190,11 +204,12 @@ async function executePiAgent(options: PiAgentOptions): Promise<{ result?: Finis
   });
   const inactivityGuard = createInactivityGuard(AGENT_INACTIVITY_TIMEOUT_MS, () => session.abort());
   const deltaBatcher = createTextDeltaBatcher(
-    (message) => options.onEvent({ type: "assistant_delta", message }),
+    (message) => options.onEvent({ type: "assistant_delta", message: redact(message) }),
     ASSISTANT_DELTA_BATCH_MS,
   );
 
   options.onAbortReady(async () => {
+    cancelled = true;
     await session.abort();
     await Promise.all([browserToolset.driver.close(), deviceToolset.driver.close()]);
   });
@@ -204,18 +219,35 @@ async function executePiAgent(options: PiAgentOptions): Promise<{ result?: Finis
     if (event.type === "agent_start") {
       deltaBatcher.flush();
       options.onEvent({ type: "status", message: "Agent 已开始执行" });
+    } else if (event.type === "compaction_start") {
+      beforeCompactionThinking = session.thinkingLevel;
+      session.setThinkingLevel("off");
+      options.onEvent({ type: "status", message: `正在压缩上下文（${event.reason}），压缩请求推理设置为 off` });
+    } else if (event.type === "compaction_end") {
+      if (beforeCompactionThinking !== undefined) session.setThinkingLevel(beforeCompactionThinking);
+      beforeCompactionThinking = undefined;
+      compactionError = event.errorMessage || (event.aborted ? "上下文压缩被中止" : "");
+      options.onEvent({ type: "status", error: Boolean(compactionError), message: compactionError ? `上下文压缩失败：${redact(compactionError)}` : `上下文压缩完成${event.willRetry ? "，将恢复本轮请求" : ""}` });
+      options.onEvent({ type: "agent_info", details: { event: event.type, reason: event.reason, willRetry: event.willRetry, aborted: event.aborted, errorMessage: compactionError ? redact(compactionError) : undefined } });
+    } else if (event.type === "auto_retry_start" || event.type === "summarization_retry_scheduled") {
+      options.onEvent({ type: "status", message: `${event.type === "auto_retry_start" ? "模型请求" : "压缩请求"}重试 ${event.attempt}/${event.maxAttempts}：${redact(event.errorMessage)}` });
+    } else if (event.type === "auto_retry_end") {
+      if (event.success) modelError = "";
+      options.onEvent({ type: "agent_info", details: { event: event.type, success: event.success, attempt: event.attempt, errorMessage: event.finalError ? redact(event.finalError) : undefined } });
     } else if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
       deltaBatcher.push(event.assistantMessageEvent.delta);
     } else if (event.type === "message_end" && (event.message as { role?: string }).role === "assistant") {
       deltaBatcher.flush();
-      const assistantMessage = event.message as { stopReason?: string; errorMessage?: string };
+      const assistantMessage = event.message as { stopReason?: string; errorMessage?: string; usage?: unknown };
+      lastStopReason = assistantMessage.stopReason || "unknown";
       if (assistantMessage.stopReason === "error" || assistantMessage.stopReason === "aborted") {
         modelError = assistantMessage.errorMessage || "模型请求失败";
-      }
+      } else modelError = "";
+      options.onEvent({ type: "agent_info", details: { event: "message_end", stopReason: lastStopReason, usage: assistantMessage.usage, errorMessage: assistantMessage.errorMessage ? redact(assistantMessage.errorMessage) : undefined, contextUsage: session.getContextUsage() } });
       const messageText = getMessageText(event.message);
       if (messageText) {
-        finalText = messageText;
-        options.onEvent({ type: "assistant", message: messageText });
+        finalText = redact(messageText);
+        options.onEvent({ type: "assistant", message: finalText });
       }
     } else if (event.type === "tool_execution_start") {
       deltaBatcher.flush();
@@ -223,7 +255,7 @@ async function executePiAgent(options: PiAgentOptions): Promise<{ result?: Finis
         type: "tool_start",
         tool: event.toolName,
         toolCallId: event.toolCallId,
-        args: event.args,
+        args: redactArgs(event.args),
       });
     } else if (event.type === "tool_execution_end") {
       deltaBatcher.flush();
@@ -232,17 +264,42 @@ async function executePiAgent(options: PiAgentOptions): Promise<{ result?: Finis
         tool: event.toolName,
         toolCallId: event.toolCallId,
         error: event.isError === true,
-        message: summarizeToolResult(event.result),
+        message: redact(summarizeToolResult(event.result)),
+        toolOutput: redact(getMessageText(event.result)).slice(0, 80_000),
       });
     }
   });
 
+  let terminalError = "";
+  let progressAt = Date.now();
+  const heartbeat = setInterval(() => {
+    const elapsed = Math.round((Date.now() - progressAt) / 1_000);
+    options.onEvent({ type: "status", message: `${session.isCompacting ? "正在压缩上下文" : "Agent 仍在处理模型或工具请求"}（${elapsed} 秒）；阶段 ${options.phase || "对话"}` });
+  }, 30_000);
+  heartbeat.unref();
   try {
+    if (cancelled) return { finalText: "执行已取消" };
     inactivityGuard.touch();
     await Promise.race([session.prompt(options.requirement), inactivityGuard.timeout]);
-    if (modelError) throw new ModelRequestError(modelError);
+    if (!finishResult && compactionError && !cancelled) throw new AgentExecutionError(`上下文压缩失败：${redact(compactionError)}；结束原因 ${lastStopReason}`);
+    if (modelError && !finishResult && !cancelled) throw new ModelRequestError(redact(modelError));
+    if (options.includeFinishTool && !finishResult && !cancelled) {
+      options.onEvent({ type: "status", message: `Agent 未提交结论（结束原因 ${lastStopReason}），正在进行仅结论补交` });
+      session.setActiveToolsByName(["finish_test"]);
+      session.setThinkingLevel("off");
+      progressAt = Date.now();
+      await Promise.race([session.prompt(FINISH_ONLY_REQUIREMENT), inactivityGuard.timeout]);
+      if (modelError && !finishResult && !cancelled) throw new ModelRequestError(redact(modelError));
+      if (!finishResult && !cancelled) throw new AgentExecutionError(`Agent 补交后仍未调用 finish_test；结束原因 ${lastStopReason}${compactionError ? `；上下文压缩失败：${redact(compactionError)}` : ""}。不能将执行未完成视为产品功能不通过`);
+    }
+    if (!options.includeFinishTool && lastStopReason === "length" && !cancelled) throw new AgentExecutionError("模型回复被输出长度限制截断，请缩小问题范围或调整模型输出限制");
     return { result: finishResult, finalText };
+  } catch (error) {
+    terminalError = error instanceof Error ? error.message : String(error);
+    throw error;
   } finally {
+    clearInterval(heartbeat);
+    options.onEvent({ type: "agent_info", details: { event: "session_end", phase: options.phase || "adhoc", stopReason: lastStopReason, conclusionSubmitted: Boolean(finishResult), cancelled, errorMessage: terminalError ? redact(terminalError) : undefined } });
     inactivityGuard.dispose();
     deltaBatcher.flush();
     session.dispose();
@@ -253,7 +310,7 @@ async function executePiAgent(options: PiAgentOptions): Promise<{ result?: Finis
 export function executePiRun(options: PiRunOptions): Promise<{ result?: FinishResult; finalText: string }> {
   return executePiAgent({
     ...options,
-    systemPrompt: TEST_SYSTEM_PROMPT,
+    systemPrompt: buildExecutionPolicy(options.phase || "adhoc"),
     includeFinishTool: true,
   });
 }

@@ -212,3 +212,26 @@ test("omits finish_test for diagnostic browser tools", async () => {
   assert.equal(toolset.toolNames.includes("finish_test"), false);
   await toolset.driver.close();
 });
+
+test("serial commands for one interface are serialized and empty input is supported", async () => {
+  const calls: string[] = [];
+  const adapters = mockAdapters(calls);
+  let active = 0;
+  adapters.serial = async (request) => {
+    assert.equal(active, 0);
+    active += 1;
+    calls.push(request.input);
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    active -= 1;
+    return { success: true, output: request.input };
+  };
+  const driver = new DeviceToolDriver([testDevice()], createToolEvidence(), adapters);
+  await Promise.all([driver.serial({ deviceId: "device-1", input: "first" }), driver.serial({ deviceId: "device-1", input: "" })]);
+  assert.deepEqual(calls, ["first", ""]);
+  await driver.close();
+  await assert.rejects(driver.serial({ deviceId: "device-1", input: "not-sent" }), /取消/);
+  const toolset = createDeviceTools({ devices: [testDevice()], evidence: createToolEvidence(), adapters });
+  const serial = toolset.tools.find((tool) => tool.name === "device_serial_exec")!;
+  assert.equal(serial.parameters.properties.input.minLength, undefined);
+  await toolset.driver.close();
+});
