@@ -31,6 +31,7 @@ import { RunMonitor } from "../components/RunMonitor";
 import { DiagnosticAssistant, type DiagnosticTarget } from "../components/DiagnosticAssistant";
 import { TestRunReportDialog } from "../components/TestRunReport";
 import { InlineNotice, Modal, PageHeader, type Notice } from "../components/ui";
+import { useAssistantPage } from "../components/AssistantContext";
 
 const STATUS_LABELS: Record<RunStatus, string> = {
   queued: "等待执行",
@@ -105,6 +106,18 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
     }
     return nextDetail;
   };
+
+  useAssistantPage({ page: "orders", title: caseDialog ? caseDialog.form.name : dialog ? dialog.form.name || "新增测试单" : detail?.name || "测试单", assetKind: caseDialog ? "case" : "order", assetId: caseDialog?.testCase.id || dialog?.id || selectedId || undefined, ...(!submitting && caseDialog ? { draft: { ...caseDialog.form } } : !submitting && dialog ? { draft: { ...dialog.form } } : {}) }, (draft) => {
+    if (caseDialog) setCaseDialog((current) => current ? { ...current, form: draft as unknown as TestCaseInput } : current);
+    else setDialog((current) => current ? { ...current, form: draft as unknown as TestOrderInput } : current);
+  }, async () => {
+    await loadOrders();
+    setScenarios(await api.getTestScenarios(product.id));
+    if (selectedId) {
+      try { await loadDetail(selectedId); }
+      catch { setSelectedId(""); setDetail(null); }
+    }
+  });
 
   useEffect(() => {
     setSelectedId("");

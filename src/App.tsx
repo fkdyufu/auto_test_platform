@@ -32,6 +32,7 @@ import {
   type ZentaoSettings,
 } from "./api";
 import { RunMonitor } from "./components/RunMonitor";
+import { AssistantProvider } from "./components/AssistantContext";
 import { InlineNotice, PageHeader, type Notice } from "./components/ui";
 import { ProductsPage } from "./pages/ProductsPage";
 import { ResourcesPage } from "./pages/ResourcesPage";
@@ -171,6 +172,7 @@ function App() {
   };
 
   return (
+    <AssistantProvider product={activeProduct} page={page} onAssetsChanged={() => refreshProducts(activeProduct?.id)}>
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand">
@@ -252,6 +254,7 @@ function App() {
         )}
       </main>
     </div>
+    </AssistantProvider>
   );
 }
 

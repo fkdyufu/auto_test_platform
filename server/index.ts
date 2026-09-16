@@ -17,9 +17,14 @@ import {
 import { sanitizeToolEvent } from "./event-sanitizer.js";
 import { buildDiagnosticPrompt } from "./diagnostic-context.js";
 import { diagnosticStore } from "./diagnostic-store.js";
+import { assistantStore } from "./assistant-store.js";
+import { createAssistantRouter } from "./assistant-routes.js";
+import { createAssistantTools } from "./assistant-tools.js";
+import { buildAssistantPrompt } from "./assistant-context.js";
 import { resolveScenarioDevices } from "./scenario-devices.js";
 import {
   executePiDiagnostic,
+  executePiAssistant,
   executePiRun,
   isModelRequestError,
   testModelConnection,
@@ -80,7 +85,7 @@ interface RunRecord {
   cancelRequested: boolean;
   logPath: string;
   logWrite: Promise<void>;
-  source: "adhoc" | "test_order" | "diagnostic";
+  source: "adhoc" | "test_order" | "diagnostic" | "assistant";
   testOrderId?: string;
 }
 
@@ -168,6 +173,7 @@ async function hydrateRun(runId: string): Promise<RunRecord | undefined> {
 async function recoverInterruptedRuns(): Promise<void> {
   const catalogRunIds = new Set(await catalogStore.failInterruptedTestRuns(INTERRUPTED_RUN_REASON));
   const diagnosticCount = await diagnosticStore.failInterruptedConversations(INTERRUPTED_RUN_REASON);
+  await assistantStore.failInterruptedConversations(INTERRUPTED_RUN_REASON);
   await mkdir(runLogsDirectory, { recursive: true });
   const fileNames = await readdir(runLogsDirectory);
   let recoveredCount = 0;
@@ -1020,6 +1026,45 @@ app.post("/api/products/:productId/diagnostics/:id/messages", async (request, re
     next(error);
   }
 });
+
+app.use("/api", createAssistantRouter({
+  catalog: catalogStore,
+  store: assistantStore,
+  startTurn: async (productId, id, content, context) => {
+    const settings = await readModelSettings();
+    if (!toPublicSettings(settings).configured) throw new CatalogError("请先完成模型配置", 409);
+    const runId = randomUUID();
+    const conversation = await assistantStore.startTurn(productId, id, content, runId, context);
+    let run: RunRecord;
+    try {
+      run = await createRunRecord(content, { id: runId, source: "assistant" });
+    } catch (error) {
+      await assistantStore.finishTurn(productId, id, runId, error instanceof Error ? error.message : "创建任务失败", true);
+      throw error;
+    }
+    void (async () => {
+      try {
+        if (run.cancelRequested) throw new Error("助手已取消");
+        updateStatus(run, "running", "助手正在处理");
+        const prompt = buildAssistantPrompt(conversation, context);
+        const execution = await executePiAssistant({
+          runId, prompt, settings,
+          customTools: createAssistantTools({ catalog: catalogStore, store: assistantStore, productId, conversationId: id, runId, context, isCancelled: () => run.cancelRequested }),
+          onEvent: (event) => publish(run, event),
+          onAbortReady: (abort) => { run.abort = abort; if (run.cancelRequested) void abort(); },
+        });
+        await assistantStore.finishTurn(productId, id, runId, run.cancelRequested ? "助手已取消，未确认的变更不会自动保存" : execution.finalText, run.cancelRequested);
+        updateStatus(run, run.cancelRequested ? "cancelled" : "completed", run.cancelRequested ? "助手已取消" : "助手回复完成");
+      } catch (error) {
+        const message = run.cancelRequested ? "助手已取消，未确认的变更不会自动保存" : error instanceof Error ? error.message : "助手处理失败";
+        await assistantStore.finishTurn(productId, id, runId, message, true).catch(() => undefined);
+        if (!run.cancelRequested) publish(run, { type: "error", message, error: true });
+        updateStatus(run, run.cancelRequested ? "cancelled" : "failed", message);
+      }
+    })();
+    return { conversation, run: publicRun(run) };
+  },
+}));
 
 app.use("/api", zentaoRouter);
 app.use("/api", catalogRouter);

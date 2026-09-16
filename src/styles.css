@@ -219,6 +219,107 @@ button:disabled {
   margin-left: var(--sidebar-width);
 }
 
+.assistant-launcher {
+  position: fixed;
+  right: 22px;
+  bottom: 22px;
+  z-index: 130;
+  display: grid;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  border: 1px solid #14635d;
+  border-radius: 50%;
+  background: #17796f;
+  color: #fff;
+  box-shadow: 0 3px 12px rgb(20 30 43 / 18%);
+}
+
+.assistant-launcher:hover { background: #12665e; }
+.assistant-launcher:focus-visible { outline: 3px solid #9bcac4; outline-offset: 3px; }
+
+.platform-assistant {
+  position: fixed;
+  inset: 16px 16px 16px auto;
+  z-index: 140;
+  display: flex;
+  width: min(420px, calc(100% - 32px));
+  min-height: 0;
+  flex-direction: column;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 6px 24px rgb(20 30 43 / 16%);
+  overflow: hidden;
+  font-size: 13px;
+}
+
+.assistant-header,
+.assistant-header > div,
+.assistant-message-meta,
+.assistant-composer > div,
+.assistant-proposal-actions,
+.assistant-tools > div,
+.assistant-error { display: flex; align-items: center; gap: 8px; }
+.assistant-header { flex-shrink: 0; min-height: 52px; justify-content: space-between; border-bottom: 1px solid var(--border); padding: 8px 14px; }
+.assistant-header h2 { margin: 0; font-size: 15px; }
+.assistant-header > div:first-child > svg { color: #17796f; }
+.assistant-context { display: flex; min-height: 43px; flex-shrink: 0; align-items: center; gap: 10px; border-bottom: 1px solid var(--border); padding: 9px 14px; background: #f6f9f8; }
+.assistant-context strong { max-width: 45%; font-size: 12px; overflow-wrap: anywhere; }
+.assistant-context span { min-width: 0; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
+.assistant-history { width: calc(100% - 28px); min-height: 32px; flex-shrink: 0; margin: 10px 14px 0; border: 1px solid var(--border); border-radius: 4px; background: #fff; padding: 0 7px; color: #475363; font-size: 12px; }
+.assistant-content { min-height: 0; flex: 1; padding: 14px; overflow-y: auto; overscroll-behavior: contain; }
+.assistant-empty { display: flex; min-height: 150px; align-items: center; justify-content: center; flex-direction: column; gap: 12px; color: var(--muted); }
+.assistant-message { padding: 10px 0 16px; overflow-wrap: anywhere; }
+.assistant-message + .assistant-message { border-top: 1px solid #edf0f3; }
+.assistant-message.user { margin: 0 0 8px; border: 0; border-radius: 4px; background: #f2f5f8; padding: 10px 12px; }
+.assistant-message.error { color: var(--danger); }
+.assistant-message-meta { justify-content: space-between; color: var(--muted); font-size: 10px; }
+.assistant-message-meta > span { font-weight: 600; }
+.assistant-message.assistant .assistant-message-meta > span { color: #17796f; }
+.assistant-message-context { display: block; margin-top: 5px; color: var(--muted); font-size: 10px; }
+.assistant-message p { margin: 8px 0 0; white-space: pre-wrap; line-height: 1.7; }
+.assistant-proposal { margin-top: 14px; border-top: 2px solid #bfdbd5; padding-top: 12px; }
+.assistant-proposal > strong { display: block; line-height: 1.6; font-size: 12px; }
+.assistant-proposal-status { display: block; margin: 6px 0 9px; color: #925d13; font-size: 11px; }
+.assistant-proposal-status.applied { color: #198754; }
+.assistant-proposal-status.rejected { color: var(--muted); }
+.assistant-differences details { border-top: 1px solid var(--border); }
+.assistant-differences summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; cursor: pointer; padding: 10px 0; font-size: 12px; }
+.assistant-differences summary > span { min-width: 0; overflow-wrap: anywhere; }
+.assistant-differences summary > span::before { content: "+ "; color: var(--muted); }
+.assistant-differences details[open] summary > span::before { content: "- "; }
+.assistant-differences summary > small { flex-shrink: 0; color: var(--muted); font-size: 10px; }
+.assistant-field-diff { margin-bottom: 12px; }
+.assistant-field-diff > strong { display: block; margin-bottom: 5px; font-size: 11px; }
+.assistant-field-diff > div { border-left: 2px solid; padding: 7px 9px; }
+.assistant-field-diff .before { border-color: #d8a9a9; background: #fbf3f3; }
+.assistant-field-diff .after { border-color: #90bba9; background: #f0f8f4; }
+.assistant-field-diff small { color: var(--muted); font-size: 10px; }
+.assistant-field-diff pre { max-height: 220px; margin: 4px 0 0; overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-family: inherit; font-size: 12px; line-height: 1.6; }
+.assistant-proposal-actions { justify-content: flex-end; margin-top: 10px; }
+.assistant-tools { flex-shrink: 0; border-top: 1px solid var(--border); padding: 7px 14px; background: #f8f9fb; color: var(--muted); font-size: 10px; }
+.assistant-tools > div { min-height: 19px; }
+.assistant-error { flex-shrink: 0; border-top: 1px solid #eed0d0; background: #fff4f4; padding: 8px 12px; color: var(--danger); font-size: 12px; }
+.assistant-error > svg { flex-shrink: 0; }
+.assistant-error > span { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+.assistant-composer { flex-shrink: 0; border-top: 1px solid var(--border); padding: 12px 14px; }
+.assistant-composer textarea { display: block; width: 100%; min-height: 76px; max-height: 150px; resize: vertical; border: 1px solid var(--border-strong); border-radius: 4px; outline: 0; padding: 9px; background: #fff; color: inherit; font-size: 13px; line-height: 1.6; }
+.assistant-composer textarea:focus { border-color: #17796f; box-shadow: 0 0 0 2px rgb(23 121 111 / 10%); }
+.assistant-composer > div { justify-content: space-between; margin-top: 8px; }
+.assistant-composer small { color: var(--muted); font-size: 10px; }
+
+@media (min-width: 1200px) {
+  body:has(.platform-assistant) .main-content { margin-right: 436px; }
+  body:has(.platform-assistant) .modal-backdrop { right: 436px; }
+}
+
+@media (max-width: 600px) {
+  .platform-assistant { inset: 0; width: 100%; height: 100dvh; border: 0; border-radius: 0; }
+  .assistant-composer { padding-bottom: max(12px, env(safe-area-inset-bottom)); }
+  .assistant-launcher { right: 15px; bottom: 15px; }
+}
+
 .product-page {
   max-width: 1100px;
 }

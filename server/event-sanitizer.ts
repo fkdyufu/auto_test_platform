@@ -5,6 +5,14 @@ interface ToolEvent {
 
 export function sanitizeToolEvent<T extends ToolEvent>(event: T): T {
   if (!event.args || typeof event.args !== "object") return event;
+  if (event.tool?.startsWith("platform_")) {
+    const redact = (value: unknown): unknown => {
+      if (Array.isArray(value)) return value.map(redact);
+      if (!value || typeof value !== "object") return value;
+      return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, /^(password|apiKey|token)$/i.test(key) ? "[REDACTED]" : redact(item)]));
+    };
+    return { ...event, args: redact(event.args) };
+  }
   if (event.tool === "browser_fill") {
     return {
       ...event,

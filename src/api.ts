@@ -1,3 +1,5 @@
+import type { AssistantConversation, AssistantPageContext } from "../shared/assistant";
+export type { AssistantConversation, AssistantPageContext, AssistantProposal, AssetKind } from "../shared/assistant";
 export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 export type TestOutcome = "passed" | "failed";
 
@@ -58,7 +60,7 @@ export interface RunResponse {
   status: RunStatus;
   createdAt: string;
   events: RunEvent[];
-  source: "adhoc" | "test_order" | "diagnostic";
+  source: "adhoc" | "test_order" | "diagnostic" | "assistant";
   testOrderId?: string;
 }
 
@@ -305,6 +307,11 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  getAssistantConversations: (productId: string) => request<Pick<AssistantConversation, "id" | "title" | "status" | "createdAt" | "updatedAt">[]>(`/api/products/${productId}/assistant/conversations`),
+  createAssistantConversation: (productId: string) => request<AssistantConversation>(`/api/products/${productId}/assistant/conversations`, { method: "POST" }),
+  getAssistantConversation: (productId: string, id: string) => request<AssistantConversation>(`/api/products/${productId}/assistant/conversations/${id}`),
+  sendAssistantMessage: (productId: string, id: string, content: string, context: AssistantPageContext) => request<{ conversation: AssistantConversation; run: RunResponse }>(`/api/products/${productId}/assistant/conversations/${id}/messages`, { method: "POST", body: JSON.stringify({ content, context }) }),
+  resolveAssistantProposal: (productId: string, id: string, proposalId: string, decision: "apply" | "reject", draftToken?: string) => request<AssistantConversation>(`/api/products/${productId}/assistant/conversations/${id}/proposals/${proposalId}`, { method: "POST", body: JSON.stringify({ decision, draftToken }) }),
   getSettings: () => request<ModelSettings>("/api/settings"),
   saveSettings: (settings: Partial<ModelSettings>) =>
     request<ModelSettings>("/api/settings", {

@@ -24,6 +24,7 @@ import {
   type TestScenarioInput,
 } from "../api";
 import { InlineNotice, Modal, PageHeader, type Notice } from "../components/ui";
+import { useAssistantPage } from "../components/AssistantContext";
 
 type ResourceTab = "devices" | "scenarios";
 
@@ -128,6 +129,15 @@ export function ResourcesPage({ product }: { product: ProductSummary }) {
     setScenarios(nextScenarios);
     setTestCases(nextTestCases);
   };
+
+  useAssistantPage({ page: "resources", title: dialog ? dialog.form.name || (dialog.kind === "device" ? "新增设备" : "新增场景") : TAB_META[tab].label, assetKind: dialog?.kind || (tab === "devices" ? "device" : "scenario"), assetId: dialog?.id, ...(dialog && !submitting ? { draft: { ...dialog.form, ...(dialog.kind === "scenario" && dialog.id ? { caseIds: dialog.caseIds } : {}) } } : {}) }, (draft) => {
+    setDialog((current) => {
+      if (!current) return current;
+      if (current.kind === "device") return { ...current, form: draft as unknown as DeviceResourceInput };
+      const { caseIds, ...form } = draft;
+      return { ...current, form: form as unknown as TestScenarioInput, caseIds: Array.isArray(caseIds) ? caseIds as string[] : current.caseIds };
+    });
+  }, reload);
 
   useEffect(() => {
     setDialog(null);

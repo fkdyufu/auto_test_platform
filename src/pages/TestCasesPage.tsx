@@ -19,6 +19,7 @@ import {
   type ZentaoTestTaskSummary,
 } from "../api";
 import { InlineNotice, Modal, PageHeader, type Notice } from "../components/ui";
+import { useAssistantPage } from "../components/AssistantContext";
 
 type CaseDialog = { id?: string; form: TestCaseInput } | null;
 type ImportSource = "product" | "testTask";
@@ -63,6 +64,10 @@ export function TestCasesPage({
     setCases(nextCases);
     setScenarios(nextScenarios);
   };
+
+  useAssistantPage({ page: "cases", title: caseDialog ? caseDialog.form.name || "新增测试用例" : "用例库", assetKind: "case", assetId: caseDialog?.id, ...(caseDialog && !submitting ? { draft: { ...caseDialog.form } } : {}) }, (draft) => {
+    setCaseDialog((current) => current ? { ...current, form: draft as unknown as TestCaseInput } : current);
+  }, reload);
 
   useEffect(() => {
     setCaseDialog(null);

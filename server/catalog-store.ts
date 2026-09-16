@@ -1,6 +1,7 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { AssetChange, AssetDifference, AssetKind, AssetPreview } from "../shared/assistant.js";
 
 export type ExecutionStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 export type TestOutcome = "passed" | "failed";
@@ -356,10 +357,15 @@ function defaultData(): CatalogData {
 export class CatalogStore {
   private initializePromise?: Promise<void>;
   private mutationQueue: Promise<void> = Promise.resolve();
+  private memoryData?: CatalogData;
 
   constructor(private readonly filePath: string) {}
 
   private async write(data: CatalogData): Promise<void> {
+    if (this.memoryData) {
+      this.memoryData = clone(data);
+      return;
+    }
     await mkdir(path.dirname(this.filePath), { recursive: true });
     const temporaryPath = `${this.filePath}.${randomUUID()}.tmp`;
     await writeFile(temporaryPath, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
@@ -384,6 +390,7 @@ export class CatalogStore {
   }
 
   private async read(): Promise<CatalogData> {
+    if (this.memoryData) return clone(this.memoryData);
     this.initializePromise ??= this.initialize();
     await this.initializePromise;
     const data = JSON.parse(await readFile(this.filePath, "utf8")) as CatalogData & { version: number };
@@ -603,6 +610,96 @@ export class CatalogStore {
       () => undefined,
     );
     return result;
+  }
+
+  private assetRevision(data: CatalogData, productId: string): string {
+    return createHash("sha256").update(JSON.stringify({
+      product: data.products.find((item) => item.id === productId),
+      cases: data.testCases.filter((item) => item.productId === productId),
+      devices: data.deviceResources.filter((item) => item.productId === productId),
+      scenarios: data.testScenarios.filter((item) => item.productId === productId),
+      orders: data.testOrders.filter((item) => item.productId === productId),
+    })).digest("hex");
+  }
+
+  private async evaluateAssetChanges(data: CatalogData, productId: string, changes: AssetChange[]) {
+    if (!Array.isArray(changes) || !changes.length || changes.length > 200) throw new CatalogError("单次变更须包含 1 至 200 项操作");
+    // Reuse the normal CRUD validators against an isolated snapshot, then commit once.
+    const working = new CatalogStore(this.filePath);
+    working.memoryData = clone(data);
+    await working.getProduct(productId);
+    const fields: Record<AssetKind, string[]> = {
+      case: ["name", "scenarioId", "precondition", "steps", "expectedResult"],
+      device: ["name", "types", "model", "description", "controlInterfaces"],
+      scenario: ["name", "category", "description", "roles", "parameters", "setupInstructions", "verificationInstructions", "cleanupInstructions", "caseIds"],
+      order: ["name", "description", "caseIds"],
+    };
+    for (const change of changes) {
+      if (!change || !Object.hasOwn(fields, change.kind) || !["create", "update", "delete"].includes(change.operation)) throw new CatalogError("资产操作不正确");
+      if (change.operation !== "create" && !change.id) throw new CatalogError("修改或删除必须提供资产 ID");
+      const values = recordValue(change.values);
+      if (Object.keys(values).some((key) => !fields[change.kind].includes(key))) throw new CatalogError("包含不可修改的资产字段");
+      const id = change.id || "";
+      let existing: Record<string, unknown> = {};
+      if (change.operation !== "create") {
+        const state = working.memoryData!;
+        const collection = change.kind === "case" ? state.testCases : change.kind === "device" ? state.deviceResources : change.kind === "scenario" ? state.testScenarios : state.testOrders;
+        const asset = collection.find((item) => item.id === id && item.productId === productId && !item.archivedAt);
+        if (!asset) throw new CatalogError("资产不存在或不属于当前产品", 404);
+        existing = { ...asset };
+      }
+      const input = { ...existing, ...values };
+      switch (change.kind) {
+        case "case":
+          if (change.operation === "create") await working.createTestCase(productId, input);
+          else if (change.operation === "update") await working.updateTestCase(productId, id, input);
+          else await working.archiveTestCase(productId, id);
+          break;
+        case "device":
+          if (change.operation === "create") await working.createDeviceResource(productId, input);
+          else if (change.operation === "update") await working.updateDeviceResource(productId, id, input);
+          else await working.archiveDeviceResource(productId, id);
+          break;
+        case "scenario":
+          if (change.operation === "create") await working.createTestScenario(productId, input);
+          else if (change.operation === "update") await working.updateTestScenario(productId, id, input);
+          else await working.archiveTestScenario(productId, id);
+          break;
+        case "order":
+          if (change.operation === "create") await working.createTestOrder(productId, input);
+          else if (change.operation === "update") await working.updateTestOrder(productId, id, input);
+          else await working.archiveTestOrder(productId, id);
+      }
+    }
+    const next = working.memoryData!;
+    const differences: AssetDifference[] = [];
+    const collections = { case: "testCases", device: "deviceResources", scenario: "testScenarios", order: "testOrders" } as const;
+    for (const kind of Object.keys(collections) as AssetKind[]) {
+      const before = data[collections[kind]].filter((item) => item.productId === productId && !item.archivedAt);
+      const after = next[collections[kind]].filter((item) => item.productId === productId && !item.archivedAt);
+      for (const id of new Set([...before, ...after].map((item) => item.id))) {
+        const previous = before.find((item) => item.id === id);
+        const current = after.find((item) => item.id === id);
+        const publicValue = (asset: typeof previous) => asset ? recordValue(kind === "device" ? this.publicDevice(asset as DeviceResource) : clone(asset)) : null;
+        if (JSON.stringify(previous) !== JSON.stringify(current)) differences.push({ kind, id, name: current?.name || previous!.name, before: publicValue(previous), after: publicValue(current) });
+      }
+    }
+    return { next, differences };
+  }
+
+  async previewAssetChanges(productId: string, changes: AssetChange[]): Promise<AssetPreview> {
+    const data = await this.read();
+    const { differences } = await this.evaluateAssetChanges(data, productId, changes);
+    return { revision: this.assetRevision(data, productId), changes: clone(changes), differences };
+  }
+
+  async applyAssetChanges(productId: string, preview: AssetPreview): Promise<AssetDifference[]> {
+    return this.mutate(async (data) => {
+      if (this.assetRevision(data, productId) !== preview.revision) throw new CatalogError("产品资产已变化，请让助手重新读取并生成预览", 409);
+      const { next, differences } = await this.evaluateAssetChanges(data, productId, preview.changes);
+      Object.assign(data, next);
+      return differences;
+    });
   }
 
   async listProducts(): Promise<ProductSummary[]> {
