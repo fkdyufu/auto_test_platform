@@ -957,6 +957,16 @@ export class CatalogStore {
       .sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
   }
 
+  /** Internal execution snapshot. Never return this value from an HTTP route. */
+  async getProductDeviceControlResources(productId: string): Promise<DeviceResource[]> {
+    await this.getProduct(productId);
+    const data = await this.read();
+    return data.deviceResources
+      .filter((item) => item.productId === productId && !item.archivedAt)
+      .map(clone)
+      .sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
+  }
+
   async createDeviceResource(productId: string, input: Record<string, unknown>): Promise<DeviceResourceSummary> {
     return this.mutate((data) => {
       if (!data.products.some((item) => item.id === productId && !item.archivedAt)) throw new CatalogError("产品不存在", 404);

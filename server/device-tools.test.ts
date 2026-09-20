@@ -86,7 +86,7 @@ test("resolves configured interfaces and marks evidence after device operations"
     "http:api-1:GET:status",
   ]);
   assert.equal(evidence.hasEvidence(), true);
-  assert.throws(() => driver.resolve("unknown", undefined, "ssh"), /不在当前场景绑定范围/);
+  assert.throws(() => driver.resolve("unknown", undefined, "ssh"), /不在当前 Agent 可用范围/);
 });
 
 test("requires interfaceId when a device has multiple interfaces of one type", () => {

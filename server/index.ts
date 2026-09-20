@@ -1052,8 +1052,9 @@ app.use("/api", createAssistantRouter({
         if (run.cancelRequested) throw new Error("助手已取消");
         updateStatus(run, "running", "助手正在处理");
         const prompt = buildAssistantPrompt(conversation, context);
+        const devices = await catalogStore.getProductDeviceControlResources(productId);
         const execution = await executePiAssistant({
-          runId, prompt, settings,
+          runId, prompt, settings, devices,
           customTools: createAssistantTools({ catalog: catalogStore, store: assistantStore, productId, conversationId: id, runId, context, isCancelled: () => run.cancelRequested }),
           onEvent: (event) => publish(run, event),
           onAbortReady: (abort) => { run.abort = abort; if (run.cancelRequested) void abort(); },

@@ -38,6 +38,10 @@ test("assistant queries relationships and pagination without crossing products o
   assert.equal((await reader.query("scenario", { deviceId: f.device.id })).items[0].id, f.scenario.id);
   assert.deepEqual((await reader.get("scenario", f.scenario.id) as { caseIds: string[] }).caseIds, [f.first.id, f.second.id]);
   assert.equal(JSON.stringify(await reader.get("device", f.device.id)).includes("secret-value"), false);
+  const controlResources = await f.catalog.getProductDeviceControlResources(f.product.id);
+  assert.deepEqual(controlResources.map((item) => item.id), [f.device.id]);
+  assert.equal(controlResources[0].controlInterfaces[0].password, "secret-value");
+  assert.equal((await f.catalog.getProductDeviceControlResources(f.other.id)).length, 0);
   await assert.rejects(reader.get("case", foreign.id), CatalogError);
   await assert.rejects(reader.query("case", { scenarioId: "foreign-scenario" }), CatalogError);
 });

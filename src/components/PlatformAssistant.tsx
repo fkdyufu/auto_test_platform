@@ -5,7 +5,7 @@ import { buildTimelineItems } from "../run-events";
 
 const KIND_LABELS = { case: "用例", scenario: "场景", device: "设备", order: "测试单" };
 const FIELD_LABELS: Record<string, string> = { name: "名称", scenarioId: "场景", precondition: "前置条件", steps: "步骤", expectedResult: "预期结果", description: "描述", category: "功能分类", roles: "设备角色", parameters: "场景参数", setupInstructions: "搭建要求", verificationInstructions: "验证要求", cleanupInstructions: "清理要求", caseIds: "关联用例", types: "设备类型", model: "型号", controlInterfaces: "控制接口" };
-const TOOL_LABELS: Record<string, string> = { platform_context: "读取页面上下文", platform_query: "查询资产", platform_get: "读取资产详情", platform_propose_changes: "生成资产变更预览", platform_propose_draft: "生成表单修改预览" };
+const TOOL_LABELS: Record<string, string> = { platform_context: "读取页面上下文", platform_query: "查询资产", platform_get: "读取资产详情", platform_propose_changes: "生成资产变更预览", platform_propose_draft: "生成表单修改预览", device_ssh_exec: "SSH 执行命令", device_telnet_exec: "Telnet 执行命令", device_serial_exec: "串口交互", device_http_request: "设备 API 请求" };
 const display = (value: unknown) => value === undefined || value === null || value === "" ? "（空）" : typeof value === "string" ? value : JSON.stringify(value, null, 2);
 
 function ProposalPreview({ proposal }: { proposal: AssistantProposal }) {
@@ -178,7 +178,7 @@ export function PlatformAssistant({ product, context, prepareDraft, onAssetsChan
       {conversations.length > 0 && <select className="assistant-history" aria-label="助手对话历史" value={conversation?.id || ""} disabled={loading || sending || !!busyProposal} onChange={(event) => void load(event.target.value)}>{conversations.map((item) => <option key={item.id} value={item.id}>{item.title}{item.status === "running" ? " · 处理中" : ""}</option>)}</select>}
       <div className="assistant-content" aria-live="polite">
         {loading && <div className="assistant-empty"><LoaderCircle size={22} className="spin" />加载对话...</div>}
-        {!loading && !conversation?.messages.length && <div className="assistant-empty"><Bot size={30} />{product ? "有什么需要讨论？" : "请先选择产品"}</div>}
+        {!loading && !conversation?.messages.length && <div className="assistant-empty"><Bot size={30} />{product ? "可讨论平台内容，也可操作当前产品设备" : "请先选择产品"}</div>}
         {conversation?.messages.map((message) => <div key={message.id} className={`assistant-message ${message.role} ${message.error ? "error" : ""}`}>
           <div className="assistant-message-meta"><span>{message.role === "user" ? "你" : "AI 助手"}</span><time>{new Date(message.createdAt).toLocaleTimeString("zh-CN", { hour12: false })}</time></div>
           {message.context && <small className="assistant-message-context">{message.context.title}</small>}
@@ -196,7 +196,10 @@ export function PlatformAssistant({ product, context, prepareDraft, onAssetsChan
         {running && <div className="assistant-message assistant"><div className="assistant-message-meta"><span>AI 助手</span><LoaderCircle className="spin" size={13} /></div><p>{streaming || "正在处理..."}</p></div>}
         <div ref={endRef} />
       </div>
-      {tools.length > 0 && <div className="assistant-tools">{tools.map((item) => <div key={item.renderKey} title={item.message || ""}>{item.toolState === "running" ? <LoaderCircle className="spin" size={12} /> : item.toolState === "failed" ? <AlertCircle size={12} /> : <Wrench size={12} />}<span>{TOOL_LABELS[item.tool || ""] || item.tool}</span></div>)}</div>}
+      {tools.length > 0 && <div className="assistant-tools">{tools.map((item) => <div className="assistant-tool" key={item.renderKey}>
+        <div className="assistant-tool-heading" title={item.message || ""}>{item.toolState === "running" ? <LoaderCircle className="spin" size={12} /> : item.toolState === "failed" ? <AlertCircle size={12} /> : <Wrench size={12} />}<span>{TOOL_LABELS[item.tool || ""] || item.tool}</span></div>
+        {item.toolState !== "running" && (item.toolOutput || item.message) && <details><summary>查看结果</summary><pre>{item.toolOutput || item.message}</pre></details>}
+      </div>)}</div>}
       {error && <div className="assistant-error" role="alert"><AlertCircle size={14} /><span>{error}</span><button type="button" className="icon-action" title="关闭提示" onClick={() => setError("")}><X size={14} /></button></div>}
       <form className="assistant-composer" onSubmit={send}>
         <textarea aria-label="助手消息" placeholder="输入消息..." rows={3} maxLength={8000} value={question} onChange={(event) => setQuestion(event.target.value)} disabled={!conversation || sending || loading} />

@@ -303,7 +303,13 @@ button:disabled {
 .assistant-field-diff pre { max-height: 220px; margin: 4px 0 0; overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-family: inherit; font-size: 12px; line-height: 1.6; }
 .assistant-proposal-actions { justify-content: flex-end; margin-top: 10px; }
 .assistant-tools { flex-shrink: 0; border-top: 1px solid var(--border); padding: 7px 14px; background: #f8f9fb; color: var(--muted); font-size: 10px; }
-.assistant-tools > div { min-height: 19px; }
+.assistant-tools > .assistant-tool { display: block; min-height: 19px; }
+.assistant-tool + .assistant-tool { margin-top: 3px; }
+.assistant-tool-heading { display: flex; min-height: 19px; align-items: center; gap: 8px; }
+.assistant-tool-heading > svg { flex-shrink: 0; }
+.assistant-tool details { margin: 2px 0 6px 20px; }
+.assistant-tool summary { width: fit-content; cursor: pointer; color: #526171; }
+.assistant-tool pre { max-height: 150px; margin: 5px 0 0; border-left: 2px solid #c9d0d8; padding: 6px 8px; overflow: auto; background: #fff; color: #344154; white-space: pre-wrap; overflow-wrap: anywhere; font-family: monospace; font-size: 10px; line-height: 1.5; }
 .assistant-error { flex-shrink: 0; border-top: 1px solid #eed0d0; background: #fff4f4; padding: 8px 12px; color: var(--danger); font-size: 12px; }
 .assistant-error > svg { flex-shrink: 0; }
 .assistant-error > span { min-width: 0; flex: 1; overflow-wrap: anywhere; }

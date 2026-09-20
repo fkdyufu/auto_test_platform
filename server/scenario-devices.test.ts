@@ -25,7 +25,7 @@ test("exposes only the fixed scene devices to device tools", () => {
   assert.deepEqual(boundDevices.map((device) => device.id), ["dut", "src"]);
   const driver = new DeviceToolDriver(boundDevices, createToolEvidence());
   assert.equal(driver.resolve("dut", "dut-ssh", "ssh").device.id, "dut");
-  assert.throws(() => driver.resolve("unused", "unused-ssh", "ssh"), /不在当前场景绑定范围/);
+  assert.throws(() => driver.resolve("unused", "unused-ssh", "ssh"), /不在当前 Agent 可用范围/);
 });
 
 test("rejects missing, rebound, duplicate, and foreign scene devices before execution", () => {
