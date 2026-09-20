@@ -613,10 +613,12 @@ test("groups a test run by each case scenario", async (t) => {
     name: "多场景回归",
     caseIds: [firstCase.id, secondCase.id, thirdCase.id],
   });
+  assert.deepEqual(order.caseIds, [firstCase.id, thirdCase.id, secondCase.id]);
   const run = await store.createTestRun("multi-scenario-run", order.id);
 
   assert.deepEqual(run.scenarioRuns.map((item) => item.testScenarioId), [firstScenario.id, secondScenario.id]);
   assert.deepEqual(run.scenarioRuns.map((item) => item.caseRunIds.length), [2, 1]);
+  assert.deepEqual(run.caseRuns.map((item) => item.testCaseId), [firstCase.id, thirdCase.id, secondCase.id]);
   assert.equal(run.scenarioRuns[0].parameterValues.area, "0");
   assert.deepEqual(run.scenarioRuns[0].roleBindings, { dut: device.id });
   assert.equal(run.scenarioRuns[0].scenarioSnapshot?.roles[0].deviceId, device.id);
@@ -625,6 +627,15 @@ test("groups a test run by each case scenario", async (t) => {
     run.scenarioRuns[0].caseRunIds.map((id) => run.caseRuns.find((caseRun) => caseRun.id === id)?.testCaseId),
     [firstCase.id, thirdCase.id],
   );
+
+  await store.updateTestOrder(product.id, order.id, {
+    name: order.name,
+    description: order.description,
+    caseIds: [secondCase.id, thirdCase.id, firstCase.id],
+  });
+  const reordered = await store.createTestRun("reordered-multi-scenario-run", order.id);
+  assert.deepEqual(reordered.scenarioRuns.map((item) => item.testScenarioId), [secondScenario.id, firstScenario.id]);
+  assert.deepEqual(reordered.caseRuns.map((item) => item.testCaseId), [secondCase.id, thirdCase.id, firstCase.id]);
 });
 
 test("migrates legacy cases and runs into the default scenario", async (t) => {

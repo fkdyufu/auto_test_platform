@@ -1,6 +1,8 @@
 import { Fragment, useEffect, useRef, useState, type FormEvent } from "react";
 import {
+  ArrowDown,
   ArrowLeft,
+  ArrowUp,
   ChevronRight,
   CircleStop,
   ClipboardList,
@@ -32,6 +34,7 @@ import { DiagnosticAssistant, type DiagnosticTarget } from "../components/Diagno
 import { TestRunReportDialog } from "../components/TestRunReport";
 import { InlineNotice, Modal, PageHeader, type Notice } from "../components/ui";
 import { useAssistantPage } from "../components/AssistantContext";
+import { flattenExecutionGroups, groupCasesByExecutionOrder, moveCaseWithinScenario, moveScenarioGroup, toggleOrderedCase } from "../test-order-sequence";
 
 const STATUS_LABELS: Record<RunStatus, string> = {
   queued: "等待执行",
@@ -175,14 +178,23 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
 
   const toggleCase = (caseId: string) => {
     if (!dialog) return;
-    const selected = dialog.form.caseIds.includes(caseId);
     setDialog({
       ...dialog,
       form: {
         ...dialog.form,
-        caseIds: selected ? dialog.form.caseIds.filter((id) => id !== caseId) : [...dialog.form.caseIds, caseId],
+        caseIds: toggleOrderedCase(dialog.form.caseIds, availableCases, caseId),
       },
     });
+  };
+
+  const reorderScenario = (scenarioId: string, direction: -1 | 1) => {
+    if (!dialog) return;
+    setDialog({ ...dialog, form: { ...dialog.form, caseIds: moveScenarioGroup(dialog.form.caseIds, availableCases, scenarioId, direction) } });
+  };
+
+  const reorderCase = (caseId: string, direction: -1 | 1) => {
+    if (!dialog) return;
+    setDialog({ ...dialog, form: { ...dialog.form, caseIds: moveCaseWithinScenario(dialog.form.caseIds, availableCases, caseId, direction) } });
   };
 
   const saveOrder = async (event: FormEvent) => {
@@ -325,6 +337,8 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
       )
     : [];
   const executionPlanCases = groupedCases.flatMap(([, testCases]) => testCases);
+  const dialogCaseGroups = dialog ? groupCasesByExecutionOrder(dialog.form.caseIds, availableCases) : [];
+  const dialogExecutionCaseIds = flattenExecutionGroups(dialogCaseGroups);
   const activeTestRun = activeRun ? detail?.runs.find((run) => run.id === activeRun.id) : undefined;
 
   return (
@@ -447,7 +461,7 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
           <section className="detail-section">
             <div className="content-toolbar">
               <div><ClipboardList size={17} /><strong>测试用例</strong></div>
-              <span className="muted-count">先搭建场景，再按组执行</span>
+              <span className="muted-count">按场景组和组内用例顺序执行</span>
             </div>
             <div className="table-wrap">
               <table className="data-table">
@@ -551,6 +565,7 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
       {dialog && (
         <Modal
           title={dialog.id ? "编辑测试单" : "新建测试单"}
+          className="test-order-modal"
           onClose={() => setDialog(null)}
           onSubmit={saveOrder}
           submitting={submitting}
@@ -573,6 +588,35 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
                 rows={3}
               />
             </label>
+          </div>
+          <div className="case-picker-heading">
+            <span>执行顺序</span>
+            <small>先调整场景组，再调整组内用例</small>
+          </div>
+          <div className="order-case-plan">
+            {dialogCaseGroups.map((group, groupIndex) => (
+              <section className="order-case-group" key={group.scenarioId}>
+                <header>
+                  <div><Workflow size={14} /><strong>{scenarioName(group.scenarioId)}</strong><small>{group.cases.length} 个用例</small></div>
+                  <div className="sequence-actions">
+                    <button type="button" className="icon-action" title="上移场景组" disabled={groupIndex === 0} onClick={() => reorderScenario(group.scenarioId, -1)}><ArrowUp size={14} /></button>
+                    <button type="button" className="icon-action" title="下移场景组" disabled={groupIndex === dialogCaseGroups.length - 1} onClick={() => reorderScenario(group.scenarioId, 1)}><ArrowDown size={14} /></button>
+                  </div>
+                </header>
+                {group.cases.map((testCase, caseIndex) => (
+                  <div className="order-case-sequence-row" key={testCase.id}>
+                    <span className="order-index">{String(dialogExecutionCaseIds.indexOf(testCase.id) + 1).padStart(2, "0")}</span>
+                    <div><strong>{testCase.name}</strong><small>{testCase.expectedResult}</small></div>
+                    <div className="sequence-actions">
+                      <button type="button" className="icon-action" title="上移用例" disabled={caseIndex === 0} onClick={() => reorderCase(testCase.id, -1)}><ArrowUp size={14} /></button>
+                      <button type="button" className="icon-action" title="下移用例" disabled={caseIndex === group.cases.length - 1} onClick={() => reorderCase(testCase.id, 1)}><ArrowDown size={14} /></button>
+                      <button type="button" className="icon-action danger" title="移出测试单" onClick={() => toggleCase(testCase.id)}><Trash2 size={14} /></button>
+                    </div>
+                  </div>
+                ))}
+              </section>
+            ))}
+            {!dialogCaseGroups.length && <div className="order-case-plan-empty">请从下方选择需要执行的用例</div>}
           </div>
           <div className="case-picker-heading">
             <span>选择用例</span>

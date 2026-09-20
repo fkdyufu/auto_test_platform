@@ -1161,11 +1161,18 @@ export class CatalogStore {
     if (!Array.isArray(value)) throw new CatalogError("请选择测试用例");
     const caseIds = [...new Set(value.filter((item): item is string => typeof item === "string"))];
     if (!caseIds.length) throw new CatalogError("测试单至少需要一个测试用例");
-    const validIds = new Set(
-      data.testCases.filter((item) => item.productId === productId && !item.archivedAt).map((item) => item.id),
-    );
+    const productCases = data.testCases.filter((item) => item.productId === productId && !item.archivedAt);
+    const caseById = new Map(productCases.map((item) => [item.id, item]));
+    const validIds = new Set(caseById.keys());
     if (caseIds.some((id) => !validIds.has(id))) throw new CatalogError("测试单包含不属于该产品的用例");
-    return caseIds;
+    const groups = new Map<string, string[]>();
+    for (const caseId of caseIds) {
+      const scenarioId = caseById.get(caseId)!.scenarioId;
+      const group = groups.get(scenarioId) || [];
+      group.push(caseId);
+      groups.set(scenarioId, group);
+    }
+    return [...groups.values()].flat();
   }
 
   async createTestOrder(productId: string, input: Record<string, unknown>): Promise<TestOrder> {
@@ -1355,13 +1362,18 @@ export class CatalogStore {
         scenarioRun.caseRunIds.push(caseRun.id);
         caseRuns.push(caseRun);
       }
+      const scenarioRuns = [...scenarioRunsById.values()];
+      const caseRunById = new Map(caseRuns.map((caseRun) => [caseRun.id, caseRun]));
+      const executionCaseRuns = scenarioRuns.flatMap((scenarioRun) =>
+        scenarioRun.caseRunIds.map((caseRunId) => caseRunById.get(caseRunId)!),
+      );
       const run: TestRun = {
         id: runId,
         testOrderId,
         triggerType: selectedCaseIds?.length ? "single" : "all",
         status: "queued",
-        scenarioRuns: [...scenarioRunsById.values()],
-        caseRuns,
+        scenarioRuns,
+        caseRuns: executionCaseRuns,
         createdAt: new Date().toISOString(),
       };
       data.testRuns.push(run);
