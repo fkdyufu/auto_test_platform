@@ -45,6 +45,7 @@ import {
 } from "./settings-store.js";
 import { getZentaoClient } from "./zentao-client.js";
 import { zentaoRouter } from "./zentao-routes.js";
+import { ensureBrowserRuntime, getBrowserRuntimeStatus } from "./browser-runtime.js";
 
 type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 
@@ -744,7 +745,7 @@ async function executeTestOrderRun(run: RunRecord, order: TestOrder, testRun: Te
 }
 
 app.get("/api/health", (_request, response) => {
-  response.json({ ok: true, pi: "0.84.4" });
+  response.json({ ok: true, pi: "0.84.4", browser: getBrowserRuntimeStatus() });
 });
 
 app.get("/api/settings", async (_request, response, next) => {
@@ -1211,6 +1212,9 @@ async function startServer(): Promise<void> {
   } catch (error) {
     console.error("恢复遗留执行任务失败", error);
   }
+  void ensureBrowserRuntime()
+    .then(({ executablePath }) => console.log(`浏览器运行时已就绪：${executablePath ?? getBrowserRuntimeStatus().managedDirectory}`))
+    .catch((error) => console.error("浏览器运行时初始化失败；非网页功能仍可使用", error));
   app.listen(port, host, () => {
     console.log(`API server listening on http://${host}:${port}`);
   });

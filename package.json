@@ -10,7 +10,9 @@
     "dev": "concurrently -k -n api,web -c yellow,cyan \"tsx watch server/index.ts\" \"vite --host 0.0.0.0 --port 5173\"",
     "build": "tsc --noEmit -p tsconfig.server.json && tsc --noEmit && vite build",
     "start": "tsx server/index.ts",
-    "test": "node --import tsx --test server/**/*.test.ts src/**/*.test.ts"
+    "test": "node --import tsx --test server/**/*.test.ts src/**/*.test.ts",
+    "browser:install": "node scripts/install-browser.mjs",
+    "postinstall": "node scripts/install-browser.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.84.4",

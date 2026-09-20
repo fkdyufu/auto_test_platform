@@ -1,8 +1,9 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright-core";
+import type { Browser, BrowserContext, Locator, Page } from "playwright-core";
 import { Type } from "typebox";
 import { defineTool } from "@earendil-works/pi-coding-agent";
+import { ensureBrowserRuntime } from "./browser-runtime.js";
 import type { ToolEvidence } from "./tool-evidence.js";
 
 interface FinishResult {
@@ -37,9 +38,10 @@ export class BrowserDriver {
   private async ensurePage(): Promise<Page> {
     if (this.page) return this.page;
 
-    this.browser = await chromium.launch({
+    const runtime = await ensureBrowserRuntime();
+    this.browser = await runtime.chromium.launch({
       headless: true,
-      executablePath: process.env.CHROME_PATH || "/usr/bin/google-chrome",
+      ...(runtime.executablePath ? { executablePath: runtime.executablePath } : {}),
       args: ["--no-sandbox", "--disable-dev-shm-usage"],
     });
     this.context = await this.browser.newContext({

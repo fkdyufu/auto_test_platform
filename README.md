@@ -63,3 +63,9 @@ Telnet 在一次 Agent 会话内复用连接、保留 CLI 配置视图，同一�
 npm install
 npm run dev
 ```
+
+`npm install` 会检查并将与 `playwright-core` 版本匹配的 Chromium 下载到项目的 `.runtime/ms-playwright` 目录；该目录不提交到 Git。服务启动时还会主动检查浏览器能否实际启动，缺失时自动补装。浏览器检查或下载失败不会阻止 API 和非网页设备工具启动，具体状态与错误可从 `GET /api/health` 的 `browser` 字段查看；第一次网页操作也会再次尝试恢复。
+
+如需使用系统中已有的 Chrome/Chromium，可通过 `CHROME_PATH=/完整/可执行文件路径` 指定。路径不存在时平台会回退到项目 Chromium。可用 `PLAYWRIGHT_BROWSERS_PATH` 修改项目浏览器保存位置，也可运行 `npm run browser:install` 手动检查/安装。只有在明确不希望安装浏览器时才设置 `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`；此时若没有可用浏览器，网页测试会明确失败。
+
+Chromium 本体由项目管理，但 Linux 的字体、图形和 NSS 等动态库仍属于操作系统。若健康检查提示缺少系统库，请由部署管理员执行 `npx playwright-core install-deps chromium`（可能需要 root 权限）；平台不会自行修改系统软件包。
