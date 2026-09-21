@@ -26,6 +26,7 @@ const TOOL_LABELS: Record<string, string> = {
   browser_click: "点击元素",
   browser_fill: "填写内容",
   browser_select: "选择选项",
+  browser_drag: "拖拽元素",
   browser_press: "发送按键",
   browser_wait: "等待页面",
   browser_screenshot: "保存截图",

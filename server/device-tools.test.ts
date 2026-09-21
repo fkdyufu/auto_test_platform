@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
 import type { AddressInfo } from "node:net";
-import { createBrowserTools, type FinishResult } from "./browser-tools.js";
+import { BrowserDriver, createBrowserTools, type FinishResult } from "./browser-tools.js";
 import type { DeviceResource } from "./catalog-store.js";
 import {
   createDeviceTools,
@@ -209,8 +209,56 @@ test("omits finish_test for diagnostic browser tools", async () => {
   });
 
   assert.equal(toolset.toolNames.includes("browser_open"), true);
+  assert.equal(toolset.toolNames.includes("browser_drag"), true);
   assert.equal(toolset.toolNames.includes("finish_test"), false);
   await toolset.driver.close();
+});
+
+test("drags an HTML5 draggable element to another inspected element", async (t) => {
+  const server = createServer((_request, response) => {
+    response.setHeader("Content-Type", "text/html; charset=utf-8");
+    response.end(`<!doctype html>
+      <title>before</title>
+      <style>.item { width: 180px; height: 60px; margin: 12px; background: #ddd; }</style>
+      <div id="list">
+        <div id="first" class="item" draggable="true"><span class="drag-handle" aria-label="拖动第一项">☰</span>第一项</div>
+        <div id="second" class="item" draggable="true"><span class="drag-handle" aria-label="拖动第二项">☰</span>第二项</div>
+      </div>
+      <script>
+        let dragged;
+        const list = document.querySelector('#list');
+        list.addEventListener('dragstart', (event) => {
+          dragged = event.target;
+          event.dataTransfer.setData('text/plain', dragged.id);
+        });
+        list.addEventListener('dragover', (event) => event.preventDefault());
+        list.addEventListener('drop', (event) => {
+          event.preventDefault();
+          const target = event.target.closest('[draggable="true"]');
+          if (dragged && target && dragged !== target) {
+            target.after(dragged);
+            document.title = 'dropped';
+          }
+        });
+      </script>`);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve()))));
+  const driver = new BrowserDriver("/tmp/auto-test-platform-drag-test");
+  t.after(() => driver.close());
+  const { port } = server.address() as AddressInfo;
+
+  const before = JSON.parse(await driver.open(`http://127.0.0.1:${port}`)) as {
+    elements: Array<{ ref: string; text: string; ariaLabel?: string; draggable?: boolean }>;
+  };
+  const first = before.elements.find((element) => element.ariaLabel === "拖动第一项");
+  const second = before.elements.find((element) => element.ariaLabel === "拖动第二项");
+  assert.equal(first?.ref, "@e2");
+  assert.equal(second?.ref, "@e4");
+
+  const after = JSON.parse(await driver.drag(first!.ref, second!.ref)) as { title: string; text: string };
+  assert.equal(after.title, "dropped");
+  assert.equal(after.text, "☰第二项 ☰第一项");
 });
 
 test("serial commands for one interface are serialized and empty input is supported", async () => {

@@ -76,6 +76,9 @@ export class BrowserDriver {
         "input",
         "textarea",
         "select",
+        "[draggable='true']",
+        ".drag-handle",
+        "[aria-grabbed]",
         "[role='button']",
         "[role='link']",
         "[role='textbox']",
@@ -97,10 +100,13 @@ export class BrowserDriver {
             ref: `@${ref}`,
             tag: element.tagName.toLowerCase(),
             role: element.getAttribute("role") || undefined,
-            text: (element.innerText || element.getAttribute("aria-label") || input.value || "").trim().slice(0, 180),
+            text: (element.innerText || element.getAttribute("aria-label") || element.title || input.value || "").trim().slice(0, 180),
+            ariaLabel: element.getAttribute("aria-label") || undefined,
+            title: element.title || undefined,
             placeholder: input.placeholder || undefined,
             type: input.type || undefined,
             name: input.name || undefined,
+            draggable: element.draggable || undefined,
           };
         });
 
@@ -146,6 +152,15 @@ export class BrowserDriver {
     const page = await this.ensurePage();
     await (await this.locator(target)).selectOption(value, { timeout: 12_000 });
     await page.waitForTimeout(200);
+    return this.inspect();
+  }
+
+  async drag(sourceTarget: string, destinationTarget: string): Promise<string> {
+    const page = await this.ensurePage();
+    const source = await this.locator(sourceTarget);
+    const destination = await this.locator(destinationTarget);
+    await source.dragTo(destination, { timeout: 12_000 });
+    await page.waitForTimeout(500);
     return this.inspect();
   }
 
@@ -227,6 +242,16 @@ export function createBrowserTools(options: BrowserToolsOptions) {
         value: Type.String(),
       }),
       execute: async (_id, params) => textResult(await driver.select(params.target, params.value)),
+    }),
+    defineTool({
+      name: "browser_drag",
+      label: "拖拽元素",
+      description: "将一个页面元素真实拖拽到另一个元素上。source 和 target 使用 browser_inspect 返回的 @eN 引用或 CSS 选择器；操作后应根据返回的页面状态验证结果。",
+      parameters: Type.Object({
+        source: Type.String({ minLength: 1, description: "被拖动元素或拖拽手柄，如 @e3" }),
+        target: Type.String({ minLength: 1, description: "拖拽目的元素，如 @e5" }),
+      }),
+      execute: async (_id, params) => textResult(await driver.drag(params.source, params.target)),
     }),
     defineTool({
       name: "browser_press",

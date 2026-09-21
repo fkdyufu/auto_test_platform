@@ -69,3 +69,5 @@ npm run dev
 如需使用系统中已有的 Chrome/Chromium，可通过 `CHROME_PATH=/完整/可执行文件路径` 指定。路径不存在时平台会回退到项目 Chromium。可用 `PLAYWRIGHT_BROWSERS_PATH` 修改项目浏览器保存位置，也可运行 `npm run browser:install` 手动检查/安装。只有在明确不希望安装浏览器时才设置 `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`；此时若没有可用浏览器，网页测试会明确失败。
 
 Chromium 本体由项目管理，但 Linux 的字体、图形和 NSS 等动态库仍属于操作系统。若健康检查提示缺少系统库，请由部署管理员执行 `npx playwright-core install-deps chromium`（可能需要 root 权限）；平台不会自行修改系统软件包。
+
+浏览器工具包含打开、读取、点击、填写、下拉选择、拖拽、按键、等待和截图。`browser_drag` 接收来源元素和目标元素，二者都可以使用页面读取结果中的 `@eN` 引用或 CSS 选择器；拖拽完成后会返回新的页面状态供模型核验。
