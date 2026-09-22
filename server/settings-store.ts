@@ -58,6 +58,7 @@ const DEFAULT_ZENTAO_SETTINGS: ZentaoSettings = {
 };
 
 export const ZENTAO_API_BASE_PATH = "/api.php/v1";
+export const ZENTAO_API_V2_BASE_PATH = "/api.php/v2";
 
 const dataDirectory = path.resolve(process.cwd(), ".data");
 const settingsPath = path.join(dataDirectory, "model-settings.json");

@@ -1,18 +1,17 @@
 import type { ZentaoSettings } from "./settings-store.js";
-import { ZENTAO_API_BASE_PATH } from "./settings-store.js";
+import { ZENTAO_API_BASE_PATH, ZENTAO_API_V2_BASE_PATH } from "./settings-store.js";
 
 const REQUEST_TIMEOUT_MS = 20_000;
 const PAGE_LIMIT = 200;
 const MAX_PAGES = 100;
 
 type FetchImplementation = typeof fetch;
+type ApiVersion = "v1" | "v2";
+type PathResolver = string | ((version: ApiVersion) => string);
 
-interface ZentaoPage<T> {
-  page?: number;
-  total?: number;
-  limit?: number;
-  testcases?: T[];
-  testtasks?: T[];
+interface ApiSession {
+  token: string;
+  version: ApiVersion;
 }
 
 export interface ZentaoCaseSummary {
@@ -38,6 +37,17 @@ export interface ZentaoCaseImportData {
   expectedResult: string;
 }
 
+class ZentaoResponseError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly kind: "http" | "empty" | "non-json",
+  ) {
+    super(message);
+    this.name = "ZentaoResponseError";
+  }
+}
+
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
@@ -45,6 +55,21 @@ function record(value: unknown): Record<string, unknown> {
 function positiveInteger(value: unknown): number | undefined {
   const number = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : NaN;
   return Number.isInteger(number) && number > 0 ? number : undefined;
+}
+
+function nonNegativeNumber(value: unknown): number | undefined {
+  const number = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : NaN;
+  return Number.isFinite(number) && number >= 0 ? number : undefined;
+}
+
+function entityId(value: unknown): number | undefined {
+  return positiveInteger(value) ?? positiveInteger(record(value).id);
+}
+
+function arrayItems(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === "object") return Object.values(value);
+  return [];
 }
 
 function decodeHtmlEntities(value: string): string {
@@ -87,8 +112,13 @@ export function normalizeZentaoText(value: unknown): string {
 
 function apiErrorMessage(payload: unknown, status: number): string {
   const value = record(payload);
-  const message = value.message || value.error;
-  return typeof message === "string" && message.trim() ? message.trim() : `禅道接口请求失败 (${status})`;
+  const message = value.message ?? value.error ?? value.reason;
+  if (typeof message === "string" && message.trim()) return message.trim();
+  if (message && typeof message === "object") {
+    const nestedMessage = record(message).message;
+    if (typeof nestedMessage === "string" && nestedMessage.trim()) return nestedMessage.trim();
+  }
+  return `禅道接口请求失败 (${status})`;
 }
 
 function isScene(value: Record<string, unknown>): boolean {
@@ -105,7 +135,7 @@ function caseSummary(value: unknown): ZentaoCaseSummary | undefined {
     id,
     title,
     status: normalizeZentaoText(item.caseStatus ?? item.status),
-    moduleId: positiveInteger(item.module),
+    moduleId: entityId(item.module),
   };
 }
 
@@ -123,73 +153,150 @@ function testTaskSummary(value: unknown): ZentaoTestTaskSummary | undefined {
   };
 }
 
+function hasNextPage(payload: Record<string, unknown>, page: number, itemCount: number, version: ApiVersion): boolean {
+  if (version === "v2") {
+    const pager = record(payload.pager);
+    const currentPage = positiveInteger(pager.pageID) ?? page;
+    const pageTotal = nonNegativeNumber(pager.pageTotal);
+    if (pageTotal !== undefined) return currentPage < pageTotal;
+
+    const total = nonNegativeNumber(pager.recTotal);
+    const perPage = positiveInteger(pager.recPerPage);
+    if (total !== undefined && perPage !== undefined) return currentPage * perPage < total;
+
+    // v2 默认分页大小由服务端决定，缺少 pager 时无法用请求的 limit 可靠推断下一页。
+    return false;
+  }
+
+  const total = nonNegativeNumber(payload.total);
+  const limit = positiveInteger(payload.limit) ?? PAGE_LIMIT;
+  if (total !== undefined) return page * limit < total;
+  return itemCount >= limit;
+}
+
+function isVersionCompatibilityError(error: unknown): boolean {
+  return error instanceof ZentaoResponseError
+    && (error.kind === "empty" || error.kind === "non-json" || error.status === 404 || error.status === 405);
+}
+
+function productIdFromTaskCases(payload: Record<string, unknown>, version: ApiVersion): number | undefined {
+  if (version === "v1") return entityId(payload.product);
+  return entityId(record(payload.task).product)
+    ?? entityId(record(payload.testtask).product)
+    ?? entityId(payload.product);
+}
+
 export class ZentaoClient {
   private token = "";
-  private tokenPromise?: Promise<string>;
-  private readonly rootUrl: URL;
+  private apiVersion?: ApiVersion;
+  private sessionPromise?: Promise<ApiSession>;
+  private readonly rootUrls: Record<ApiVersion, URL>;
 
   constructor(
     private readonly settings: ZentaoSettings,
     private readonly fetchImplementation: FetchImplementation = fetch,
   ) {
-    this.rootUrl = new URL(`${settings.baseUrl.replace(/\/+$/, "")}${ZENTAO_API_BASE_PATH}/`);
+    const baseUrl = settings.baseUrl.replace(/\/+$/, "");
+    this.rootUrls = {
+      v1: new URL(`${baseUrl}${ZENTAO_API_BASE_PATH}/`),
+      v2: new URL(`${baseUrl}${ZENTAO_API_V2_BASE_PATH}/`),
+    };
   }
 
   private async parseResponse(response: Response): Promise<unknown> {
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(apiErrorMessage(payload, response.status));
+    const body = await response.text();
+    if (!body.trim()) {
+      throw new ZentaoResponseError(
+        response.ok ? `禅道接口返回了空响应 (${response.status})` : `禅道接口请求失败 (${response.status})`,
+        response.status,
+        "empty",
+      );
+    }
+
+    let payload: unknown;
+    try {
+      payload = JSON.parse(body);
+    } catch {
+      throw new ZentaoResponseError(`禅道接口返回了非 JSON 响应 (${response.status})`, response.status, "non-json");
+    }
+    if (!response.ok) throw new ZentaoResponseError(apiErrorMessage(payload, response.status), response.status, "http");
     return payload;
   }
 
-  private async requestToken(): Promise<string> {
-    const response = await this.fetchImplementation(new URL("tokens", this.rootUrl), {
+  private async requestToken(version: ApiVersion): Promise<string> {
+    const path = version === "v2" ? "users/login" : "tokens";
+    const response = await this.fetchImplementation(new URL(path, this.rootUrls[version]), {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({ account: this.settings.account, password: this.settings.password }),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     const payload = record(await this.parseResponse(response));
-    if (typeof payload.token !== "string" || !payload.token) throw new Error("禅道登录响应中没有 Token");
-    return payload.token;
+    if (typeof payload.token === "string" && payload.token) return payload.token;
+
+    const loginError = apiErrorMessage(payload, response.status);
+    if (payload.status === "error" || payload.status === "fail" || payload.status === "failed") {
+      throw new ZentaoResponseError(loginError, response.status, "http");
+    }
+    throw new ZentaoResponseError(`禅道 ${version} 登录响应中没有 Token`, response.status, "non-json");
   }
 
-  private async getToken(): Promise<string> {
-    if (this.token) return this.token;
-    this.tokenPromise ??= this.requestToken().then((token) => {
-      this.token = token;
-      return token;
+  private async createSession(): Promise<ApiSession> {
+    try {
+      return { token: await this.requestToken("v2"), version: "v2" };
+    } catch (error) {
+      if (!isVersionCompatibilityError(error)) throw error;
+      return { token: await this.requestToken("v1"), version: "v1" };
+    }
+  }
+
+  private async getSession(): Promise<ApiSession> {
+    if (this.token && this.apiVersion) return { token: this.token, version: this.apiVersion };
+    this.sessionPromise ??= this.createSession().then((session) => {
+      this.token = session.token;
+      this.apiVersion = session.version;
+      return session;
     }).finally(() => {
-      this.tokenPromise = undefined;
+      this.sessionPromise = undefined;
     });
-    return this.tokenPromise;
+    return this.sessionPromise;
   }
 
-  private async request<T>(path: string, retryAuthentication = true): Promise<T> {
-    const token = await this.getToken();
-    const response = await this.fetchImplementation(new URL(path, this.rootUrl), {
+  private clearSession(): void {
+    this.token = "";
+    this.apiVersion = undefined;
+  }
+
+  private async request<T>(path: PathResolver, retryAuthentication = true): Promise<{ payload: T; version: ApiVersion }> {
+    const { token, version } = await this.getSession();
+    const resolvedPath = typeof path === "function" ? path(version) : path;
+    const response = await this.fetchImplementation(new URL(resolvedPath, this.rootUrls[version]), {
       headers: { Token: token, Accept: "application/json" },
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     if ((response.status === 401 || response.status === 403) && retryAuthentication) {
-      this.token = "";
+      this.clearSession();
       return this.request<T>(path, false);
     }
-    return await this.parseResponse(response) as T;
+    return { payload: await this.parseResponse(response) as T, version };
   }
 
   async testConnection(): Promise<void> {
-    await this.request("products?limit=1");
+    await this.request((version) => version === "v2" ? "products?pageID=1&limit=1" : "products?page=1&limit=1");
   }
 
   async listProductCases(productId: number): Promise<ZentaoCaseSummary[]> {
     const results: ZentaoCaseSummary[] = [];
     for (let page = 1; page <= MAX_PAGES; page += 1) {
-      const payload = await this.request<ZentaoPage<unknown>>(
-        `products/${productId}/testcases?page=${page}&limit=${PAGE_LIMIT}`,
+      const { payload: rawPayload, version } = await this.request<Record<string, unknown>>((apiVersion) =>
+        apiVersion === "v2"
+          ? `products/${productId}/testcases?pageID=${page}&limit=${PAGE_LIMIT}`
+          : `products/${productId}/testcases?page=${page}&limit=${PAGE_LIMIT}`,
       );
-      const items = Array.isArray(payload.testcases) ? payload.testcases : [];
+      const payload = record(rawPayload);
+      const items = arrayItems(payload.testcases);
       results.push(...items.map(caseSummary).filter((item): item is ZentaoCaseSummary => Boolean(item)));
-      if (!items.length || items.length < PAGE_LIMIT || page * PAGE_LIMIT >= (payload.total || 0)) break;
+      if (!hasNextPage(payload, page, items.length, version)) break;
     }
     return [...new Map(results.map((item) => [item.id, item])).values()];
   }
@@ -197,40 +304,50 @@ export class ZentaoClient {
   async listTestTasks(productId: number): Promise<ZentaoTestTaskSummary[]> {
     const results: ZentaoTestTaskSummary[] = [];
     for (let page = 1; page <= MAX_PAGES; page += 1) {
-      const payload = await this.request<ZentaoPage<unknown>>(
-        `testtasks?product=${productId}&page=${page}&limit=${PAGE_LIMIT}`,
+      const { payload: rawPayload, version } = await this.request<Record<string, unknown>>((apiVersion) =>
+        apiVersion === "v2"
+          ? `products/${productId}/testtasks?pageID=${page}&limit=${PAGE_LIMIT}`
+          : `testtasks?product=${productId}&page=${page}&limit=${PAGE_LIMIT}`,
       );
-      const items = Array.isArray(payload.testtasks) ? payload.testtasks : [];
+      const payload = record(rawPayload);
+      const items = arrayItems(payload.testtasks);
       results.push(...items.map(testTaskSummary).filter((item): item is ZentaoTestTaskSummary => Boolean(item)));
-      if (!items.length || items.length < PAGE_LIMIT || page * PAGE_LIMIT >= (payload.total || 0)) break;
+      if (!hasNextPage(payload, page, items.length, version)) break;
     }
-    return results;
+    return [...new Map(results.map((item) => [item.id, item])).values()];
   }
 
   async listTestTaskCases(testTaskId: number, expectedProductId?: number): Promise<ZentaoCaseSummary[]> {
     const results: ZentaoCaseSummary[] = [];
     for (let page = 1; page <= MAX_PAGES; page += 1) {
-      const payload = await this.request<Record<string, unknown>>(
-        `testtasks/${testTaskId}?page=${page}&limit=${PAGE_LIMIT}`,
+      const { payload: rawPayload, version } = await this.request<Record<string, unknown>>((apiVersion) =>
+        apiVersion === "v2"
+          ? `testtasks/${testTaskId}/cases?testtaskID=${testTaskId}&pageID=${page}&limit=${PAGE_LIMIT}`
+          : `testtasks/${testTaskId}?page=${page}&limit=${PAGE_LIMIT}`,
       );
-      if (expectedProductId && positiveInteger(payload.product) !== expectedProductId) {
+      const payload = record(rawPayload);
+      if (expectedProductId && productIdFromTaskCases(payload, version) !== expectedProductId) {
         throw new Error("所选禅道测试单不属于当前产品");
       }
-      const items = Array.isArray(payload.testcases) ? payload.testcases : [];
+      const items = arrayItems(version === "v2" ? payload.runs : payload.testcases);
       results.push(...items.map(caseSummary).filter((item): item is ZentaoCaseSummary => Boolean(item)));
-      if (!items.length || items.length < PAGE_LIMIT) break;
+      if (!hasNextPage(payload, page, items.length, version)) break;
     }
     return [...new Map(results.map((item) => [item.id, item])).values()];
   }
 
   async getCaseImportData(caseId: number, expectedProductId?: number): Promise<ZentaoCaseImportData> {
-    const item = await this.request<Record<string, unknown>>(`testcases/${caseId}`);
-    if (expectedProductId && positiveInteger(item.product) !== expectedProductId) {
+    const { payload, version } = await this.request<Record<string, unknown>>(`testcases/${caseId}`);
+    const item = version === "v2" ? record(record(payload).testcase) : record(payload);
+    if (expectedProductId && entityId(item.product) !== expectedProductId) {
       throw new Error(`禅道用例 #${caseId} 不属于当前产品`);
     }
-    const steps = Array.isArray(item.steps) ? item.steps.map(record) : [];
+    const steps = arrayItems(item.steps).map(record);
     const stepPairs = steps
-      .map((step) => ({ description: normalizeZentaoText(step.desc), expectation: normalizeZentaoText(step.expect) }))
+      .map((step) => ({
+        description: normalizeZentaoText(step.desc ?? step.step),
+        expectation: normalizeZentaoText(step.expect),
+      }))
       .filter((step) => step.description);
     const precondition = normalizeZentaoText(item.precondition);
     const numberedSteps = stepPairs.map((step, index) => `${index + 1}. ${step.description}`);
