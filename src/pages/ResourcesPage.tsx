@@ -23,7 +23,7 @@ import {
   type TestScenario,
   type TestScenarioInput,
 } from "../api";
-import { InlineNotice, Modal, PageHeader, type Notice } from "../components/ui";
+import { AutoResizeTextarea, InlineNotice, Modal, PageHeader, type Notice } from "../components/ui";
 import { useAssistantPage } from "../components/AssistantContext";
 
 type ResourceTab = "devices" | "scenarios";
@@ -295,7 +295,7 @@ function DeviceForm({ dialog, setDialog }: { dialog: Extract<ResourceDialog, { k
     <div className="modal-grid">
       <label className="field"><span>设备名称</span><input autoFocus value={dialog.form.name} onChange={(event) => update({ name: event.target.value })} /></label>
       <label className="field"><span>设备型号</span><input value={dialog.form.model} onChange={(event) => update({ model: event.target.value })} /></label>
-      <label className="field full-width"><span>设备说明</span><textarea rows={2} value={dialog.form.description} onChange={(event) => update({ description: event.target.value })} /></label>
+      <label className="field full-width"><span>设备说明</span><AutoResizeTextarea rows={2} value={dialog.form.description} onChange={(event) => update({ description: event.target.value })} /></label>
     </div>
     <div className="form-list-heading"><div><Server size={16} /><strong>设备类型</strong></div><button type="button" className="button secondary compact" onClick={() => update({ types: [...dialog.form.types, ""] })}><Plus size={15} />添加类型</button></div>
     <div className="structured-list">
@@ -365,7 +365,7 @@ function ScenarioForm({
     <div className="modal-grid">
       <label className="field"><span>场景名称</span><input autoFocus disabled={isDefault} value={dialog.form.name} onChange={(event) => update({ name: event.target.value })} /></label>
       <label className="field"><span>功能分类</span><input disabled={isDefault} value={dialog.form.category} placeholder="例如 VRRP、OSPF" onChange={(event) => update({ category: event.target.value })} /></label>
-      <label className="field full-width"><span>场景说明</span><textarea rows={2} value={dialog.form.description} onChange={(event) => update({ description: event.target.value })} /></label>
+      <label className="field full-width"><span>场景说明</span><AutoResizeTextarea rows={2} value={dialog.form.description} onChange={(event) => update({ description: event.target.value })} /></label>
     </div>
     <div className="form-list-heading"><div><Server size={16} /><strong>设备角色</strong></div><button type="button" className="button secondary compact" onClick={() => update({ roles: [...dialog.form.roles, { id: newId(), key: "", deviceId: "" }] })}><Plus size={15} />添加角色</button></div>
     <div className="structured-list">
@@ -390,9 +390,9 @@ function ScenarioForm({
       {!dialog.form.parameters.length && <div className="structured-empty">暂无场景参数</div>}
     </div>
     {!isDefault && <div className="modal-grid instruction-grid">
-      <label className="field full-width"><span>场景搭建要求</span><textarea rows={4} value={dialog.form.setupInstructions} onChange={(event) => update({ setupInstructions: event.target.value })} /></label>
-      <label className="field full-width"><span>场景验证要求</span><textarea rows={3} value={dialog.form.verificationInstructions} onChange={(event) => update({ verificationInstructions: event.target.value })} /></label>
-      <label className="field full-width"><span>场景清理要求</span><textarea rows={3} value={dialog.form.cleanupInstructions} onChange={(event) => update({ cleanupInstructions: event.target.value })} /></label>
+      <label className="field full-width"><span>场景搭建要求</span><AutoResizeTextarea rows={4} value={dialog.form.setupInstructions} onChange={(event) => update({ setupInstructions: event.target.value })} /></label>
+      <label className="field full-width"><span>场景验证要求</span><AutoResizeTextarea rows={3} value={dialog.form.verificationInstructions} onChange={(event) => update({ verificationInstructions: event.target.value })} /></label>
+      <label className="field full-width"><span>场景清理要求</span><AutoResizeTextarea rows={3} value={dialog.form.cleanupInstructions} onChange={(event) => update({ cleanupInstructions: event.target.value })} /></label>
     </div>}
     {dialog.id && <>
       <div className="form-list-heading scenario-case-heading">

@@ -32,7 +32,7 @@ import {
 import { RunMonitor } from "../components/RunMonitor";
 import { DiagnosticAssistant, type DiagnosticTarget } from "../components/DiagnosticAssistant";
 import { TestRunReportDialog } from "../components/TestRunReport";
-import { InlineNotice, Modal, PageHeader, type Notice } from "../components/ui";
+import { AutoResizeTextarea, InlineNotice, Modal, PageHeader, type Notice } from "../components/ui";
 import { useAssistantPage } from "../components/AssistantContext";
 import { flattenExecutionGroups, groupCasesByExecutionOrder, moveCaseWithinScenario, moveScenarioGroup, toggleOrderedCase } from "../test-order-sequence";
 
@@ -582,7 +582,7 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
             </label>
             <label className="field full-width">
               <span>测试单描述</span>
-              <textarea
+              <AutoResizeTextarea
                 value={dialog.form.description}
                 onChange={(event) => setDialog({ ...dialog, form: { ...dialog.form, description: event.target.value } })}
                 rows={3}
@@ -677,7 +677,7 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
             </label>
             <label className="field full-width">
               <span>前置条件</span>
-              <textarea
+              <AutoResizeTextarea
                 value={caseDialog.form.precondition}
                 onChange={(event) => setCaseDialog({ ...caseDialog, form: { ...caseDialog.form, precondition: event.target.value } })}
                 rows={5}
@@ -686,7 +686,7 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
             </label>
             <label className="field full-width">
               <span>测试步骤</span>
-              <textarea
+              <AutoResizeTextarea
                 value={caseDialog.form.steps}
                 onChange={(event) => setCaseDialog({ ...caseDialog, form: { ...caseDialog.form, steps: event.target.value } })}
                 rows={9}
@@ -694,7 +694,7 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
             </label>
             <label className="field full-width">
               <span>预期结果</span>
-              <textarea
+              <AutoResizeTextarea
                 value={caseDialog.form.expectedResult}
                 onChange={(event) => setCaseDialog({ ...caseDialog, form: { ...caseDialog.form, expectedResult: event.target.value } })}
                 rows={6}

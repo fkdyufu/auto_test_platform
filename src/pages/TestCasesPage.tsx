@@ -18,7 +18,7 @@ import {
   type ZentaoCaseSummary,
   type ZentaoTestTaskSummary,
 } from "../api";
-import { InlineNotice, Modal, PageHeader, type Notice } from "../components/ui";
+import { AutoResizeTextarea, InlineNotice, Modal, PageHeader, type Notice } from "../components/ui";
 import { useAssistantPage } from "../components/AssistantContext";
 
 type CaseDialog = { id?: string; form: TestCaseInput } | null;
@@ -290,9 +290,9 @@ export function TestCasesPage({
           {dialogError && <div className="form-error">{dialogError}</div>}
           <label className="field"><span>用例名称</span><input value={caseDialog.form.name} onChange={(event) => setCaseDialog({ ...caseDialog, form: { ...caseDialog.form, name: event.target.value } })} autoFocus /></label>
           <label className="field"><span>测试场景</span><select value={caseDialog.form.scenarioId} onChange={(event) => setCaseDialog({ ...caseDialog, form: { ...caseDialog.form, scenarioId: event.target.value } })}>{scenarios.map((scenario) => <option key={scenario.id} value={scenario.id}>{scenario.name}{scenario.isDefault ? "（系统默认）" : ""}</option>)}</select></label>
-          <label className="field"><span>前置条件</span><textarea value={caseDialog.form.precondition} onChange={(event) => setCaseDialog({ ...caseDialog, form: { ...caseDialog.form, precondition: event.target.value } })} rows={4} placeholder="可选" /></label>
-          <label className="field"><span>测试步骤</span><textarea value={caseDialog.form.steps} onChange={(event) => setCaseDialog({ ...caseDialog, form: { ...caseDialog.form, steps: event.target.value } })} rows={7} /></label>
-          <label className="field"><span>预期结果</span><textarea value={caseDialog.form.expectedResult} onChange={(event) => setCaseDialog({ ...caseDialog, form: { ...caseDialog.form, expectedResult: event.target.value } })} rows={5} /></label>
+          <label className="field"><span>前置条件</span><AutoResizeTextarea value={caseDialog.form.precondition} onChange={(event) => setCaseDialog({ ...caseDialog, form: { ...caseDialog.form, precondition: event.target.value } })} rows={4} placeholder="可选" /></label>
+          <label className="field"><span>测试步骤</span><AutoResizeTextarea value={caseDialog.form.steps} onChange={(event) => setCaseDialog({ ...caseDialog, form: { ...caseDialog.form, steps: event.target.value } })} rows={7} /></label>
+          <label className="field"><span>预期结果</span><AutoResizeTextarea value={caseDialog.form.expectedResult} onChange={(event) => setCaseDialog({ ...caseDialog, form: { ...caseDialog.form, expectedResult: event.target.value } })} rows={5} /></label>
         </Modal>
       )}
 

@@ -5,7 +5,7 @@ import {
   type ProductInput,
   type ProductSummary,
 } from "../api";
-import { InlineNotice, Modal, PageHeader, type Notice } from "../components/ui";
+import { AutoResizeTextarea, InlineNotice, Modal, PageHeader, type Notice } from "../components/ui";
 
 type ProductDialog = { id?: string; form: ProductInput } | null;
 
@@ -113,7 +113,7 @@ export function ProductsPage({
         <Modal title={productDialog.id ? "编辑产品" : "新增产品"} onClose={() => setProductDialog(null)} onSubmit={saveProduct} submitting={submitting}>
           {dialogError && <div className="form-error">{dialogError}</div>}
           <label className="field"><span>产品名称</span><input value={productDialog.form.name} onChange={(event) => setProductDialog({ ...productDialog, form: { ...productDialog.form, name: event.target.value } })} autoFocus /></label>
-          <label className="field"><span>产品描述</span><textarea value={productDialog.form.description} onChange={(event) => setProductDialog({ ...productDialog, form: { ...productDialog.form, description: event.target.value } })} rows={4} /></label>
+          <label className="field"><span>产品描述</span><AutoResizeTextarea value={productDialog.form.description} onChange={(event) => setProductDialog({ ...productDialog, form: { ...productDialog.form, description: event.target.value } })} rows={4} /></label>
           <label className="field"><span>禅道产品 ID</span><input inputMode="numeric" value={productDialog.form.zentaoId} onChange={(event) => setProductDialog({ ...productDialog, form: { ...productDialog.form, zentaoId: event.target.value } })} /></label>
         </Modal>
       )}

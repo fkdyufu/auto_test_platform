@@ -1,7 +1,34 @@
-import { useEffect, type FormEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, type ComponentProps, type FormEvent, type ReactNode } from "react";
 import { AlertCircle, Check, X } from "lucide-react";
 
 export type Notice = { kind: "success" | "error"; message: string } | null;
+
+export function AutoResizeTextarea({ value, ...props }: Omit<ComponentProps<"textarea">, "value"> & { value: string }) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+
+  useLayoutEffect(() => {
+    const textarea = ref.current;
+    if (!textarea) return;
+    textarea.style.height = "auto";
+    textarea.style.height = `${textarea.scrollHeight}px`;
+  }, [value]);
+
+  useLayoutEffect(() => {
+    const textarea = ref.current;
+    if (!textarea) return;
+    let width = textarea.clientWidth;
+    const observer = new ResizeObserver(() => {
+      if (textarea.clientWidth === width) return;
+      width = textarea.clientWidth;
+      textarea.style.height = "auto";
+      textarea.style.height = `${textarea.scrollHeight}px`;
+    });
+    observer.observe(textarea);
+    return () => observer.disconnect();
+  }, []);
+
+  return <textarea {...props} value={value} ref={ref} />;
+}
 
 export function PageHeader({
   icon,
