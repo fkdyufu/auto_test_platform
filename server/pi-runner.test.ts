@@ -108,8 +108,12 @@ test("saved tool output and returned conclusions redact configured secrets", asy
   assert.doesNotMatch(JSON.stringify(f.events), /mock-private-key/);
 });
 
-test("the case policy forbids repairing the tested feature or replacing Web writes with CLI writes", () => {
+test("the case policy prepares and verifies preconditions without repairing a failed assertion", () => {
   const policy = buildExecutionPolicy("case");
+  assert.match(policy, /前置条件不满足.*最小必要调整/);
+  assert.match(policy, /回读验证后再执行测试步骤/);
+  assert.match(policy, /前置准备失败：/);
+  assert.match(policy, /测试步骤或预期结果已出现异常后，不得以“前置准备”为由修复/);
   assert.match(policy, /不能用底层命令替代 Web/);
   assert.match(policy, /不得清空\/手工添加 tc/);
   assert.match(policy, /根因/);

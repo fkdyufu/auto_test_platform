@@ -262,7 +262,7 @@ function buildDeviceDescription(context: TestOrderExecutionContext): string {
       : "未配置控制接口";
     return `- ${device.name}（ID: ${device.id}，类型: ${device.types.join("、")}${device.model ? `，型号: ${device.model}` : ""}）\n  控制接口: ${controls}`;
   });
-  return `\n\n场景绑定设备：\n${deviceLines.join("\n") || "未绑定设备，不提供设备控制工具"}\n\n请根据用例步骤使用可用的设备控制接口；未提供相应工具时，不得声称已经完成操作。`;
+  return `\n\n场景绑定设备：\n${deviceLines.join("\n") || "未绑定设备，不提供设备控制工具"}\n\n请根据当前阶段要求使用可用的设备控制接口；未提供相应工具时，不得声称已经完成操作。`;
 }
 
 function buildScenarioDescription(
@@ -296,7 +296,7 @@ function buildCaseRequirement(
   scenarioRun: ScenarioRun,
   context: TestOrderExecutionContext,
 ): string {
-  return `执行产品测试用例。${buildDeviceDescription(context)}\n\n${buildScenarioDescription(scenario, scenarioRun, context)}\n\n场景搭建结论：${scenarioRun.summary || "无"}\n\n用例名称：${caseRun.caseNameSnapshot}\n\n前置条件：\n${caseRun.preconditionSnapshot || "无"}\n\n测试步骤：\n${caseRun.stepsSnapshot}\n\n预期结果：\n${caseRun.expectedResultSnapshot}\n\n请先确认前置条件是否满足，再直接使用当前提供的工具执行，并根据实际观察调用 finish_test 提交结论。`;
+  return `执行产品测试用例。${buildDeviceDescription(context)}\n\n${buildScenarioDescription(scenario, scenarioRun, context)}\n\n场景搭建结论：${scenarioRun.summary || "无"}\n\n用例名称：${caseRun.caseNameSnapshot}\n\n前置条件：\n${caseRun.preconditionSnapshot || "无"}\n\n测试步骤：\n${caseRun.stepsSnapshot}\n\n预期结果：\n${caseRun.expectedResultSnapshot}\n\n请先检查前置条件；未满足时按前置条件及执行规则做必要准备，并回读验证。准备成功后再执行测试步骤和判断预期结果；无法准备时提交 failed，摘要说明“前置准备失败”及原因。最后根据实际观察调用 finish_test 提交结论。`;
 }
 
 function buildScenarioCleanupRequirement(
