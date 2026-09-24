@@ -110,6 +110,8 @@ test("saved tool output and returned conclusions redact configured secrets", asy
 
 test("the case policy prepares and verifies preconditions without repairing a failed assertion", () => {
   const policy = buildExecutionPolicy("case");
+  assert.match(policy, /引用失效时调用 browser_inspect.*不要原样重试/);
+  assert.match(policy, /browser_wait 每次最多等待 10000 毫秒/);
   assert.match(policy, /前置条件不满足.*最小必要调整/);
   assert.match(policy, /回读验证后再执行测试步骤/);
   assert.match(policy, /前置准备失败：/);

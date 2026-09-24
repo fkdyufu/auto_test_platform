@@ -30,10 +30,19 @@ export class BrowserDriver {
   private browser?: Browser;
   private context?: BrowserContext;
   private page?: Page;
+  private operationQueue: Promise<void> = Promise.resolve();
+  private nextRef = 1;
+  private activeRefs = new Set<string>();
   constructor(
     private readonly artifactsDirectory: string,
     private readonly onEvidence: () => void = () => undefined,
   ) {}
+
+  private serialize<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.operationQueue.then(operation);
+    this.operationQueue = result.then(() => undefined, () => undefined);
+    return result;
+  }
 
   private async ensurePage(): Promise<Page> {
     if (this.page) return this.page;
@@ -53,19 +62,33 @@ export class BrowserDriver {
   }
 
   async open(urlValue: string): Promise<string> {
-    const url = new URL(urlValue);
+    let url: URL;
+    try {
+      url = new URL(urlValue);
+    } catch {
+      throw new Error("请输入完整的 http 或 https 页面地址");
+    }
     if (url.protocol !== "http:" && url.protocol !== "https:") {
-      throw new Error("仅支持 http 或 https 页面");
+      throw new Error("browser_open 仅支持 http 或 https 页面，不支持 javascript: 等协议");
     }
 
-    const page = await this.ensurePage();
-    await page.goto(url.toString(), { waitUntil: "domcontentloaded", timeout: 30_000 });
-    return this.inspect();
+    return this.serialize(async () => {
+      const page = await this.ensurePage();
+      this.activeRefs.clear();
+      await page.goto(url.toString(), { waitUntil: "domcontentloaded", timeout: 30_000 });
+      return this.inspectPage(page);
+    });
   }
 
-  async inspect(): Promise<string> {
-    const page = await this.ensurePage();
-    const snapshot = await page.evaluate(() => {
+  inspect(): Promise<string> {
+    return this.serialize(async () => this.inspectPage(await this.ensurePage()));
+  }
+
+  private async inspectPage(page: Page): Promise<string> {
+    this.activeRefs.clear();
+    const firstRef = this.nextRef;
+    this.nextRef += 120;
+    const snapshot = await page.evaluate((firstRef) => {
       document.querySelectorAll("[data-pi-agent-ref]").forEach((element) => {
         element.removeAttribute("data-pi-agent-ref");
       });
@@ -93,7 +116,7 @@ export class BrowserDriver {
         })
         .slice(0, 120)
         .map((element, index) => {
-          const ref = `e${index + 1}`;
+          const ref = `e${firstRef + index}`;
           element.setAttribute("data-pi-agent-ref", ref);
           const input = element as HTMLInputElement;
           return {
@@ -116,7 +139,8 @@ export class BrowserDriver {
         text: (document.body?.innerText || "").replace(/\s+/g, " ").trim().slice(0, 6000),
         elements,
       };
-    });
+    }, firstRef);
+    this.activeRefs = new Set(snapshot.elements.map((element) => element.ref));
 
     const observedUrl = new URL(snapshot.url);
     if (observedUrl.protocol === "http:" || observedUrl.protocol === "https:") {
@@ -126,72 +150,113 @@ export class BrowserDriver {
     return JSON.stringify(snapshot, null, 2);
   }
 
-  private async locator(target: string): Promise<Locator> {
-    const page = await this.ensurePage();
+  private async locator(page: Page, target: string): Promise<Locator> {
     const refMatch = target.match(/^@e(\d+)$/);
-    return refMatch
-      ? page.locator(`[data-pi-agent-ref="e${refMatch[1]}"]`).first()
-      : page.locator(target).first();
+    if (!refMatch) return page.locator(target).first();
+    if (!this.activeRefs.has(target)) throw this.staleRef(target);
+    const locator = page.locator(`[data-pi-agent-ref="e${refMatch[1]}"]`).first();
+    if (await locator.count() === 0) throw this.staleRef(target);
+    return locator;
   }
 
-  async click(target: string): Promise<string> {
-    const page = await this.ensurePage();
-    await (await this.locator(target)).click({ timeout: 12_000 });
-    await page.waitForTimeout(400);
-    return this.inspect();
+  private staleRef(target: string): Error {
+    return new Error(`元素引用 ${target} 已失效。请调用 browser_inspect 读取最新页面，再使用新引用；不要原样重试。`);
   }
 
-  async fill(target: string, value: string): Promise<string> {
-    const page = await this.ensurePage();
-    await (await this.locator(target)).fill(value, { timeout: 12_000 });
-    await page.waitForTimeout(200);
-    return this.inspect();
+  private async operateOnRefs(page: Page, targets: string[], operation: () => Promise<unknown>): Promise<void> {
+    try {
+      await operation();
+    } catch (error) {
+      for (const target of targets) {
+        const refMatch = target.match(/^@e(\d+)$/);
+        if (refMatch && (!this.activeRefs.has(target) || await page.locator(`[data-pi-agent-ref="e${refMatch[1]}"]`).count().catch(() => 0) === 0)) {
+          throw this.staleRef(target);
+        }
+      }
+      throw error;
+    }
   }
 
-  async select(target: string, value: string): Promise<string> {
-    const page = await this.ensurePage();
-    await (await this.locator(target)).selectOption(value, { timeout: 12_000 });
-    await page.waitForTimeout(200);
-    return this.inspect();
+  click(target: string): Promise<string> {
+    return this.serialize(async () => {
+      const page = await this.ensurePage();
+      await this.operateOnRefs(page, [target], async () => (await this.locator(page, target)).click({ timeout: target.startsWith("@e") ? 2_000 : 12_000 }));
+      await page.waitForTimeout(400);
+      return this.inspectPage(page);
+    });
   }
 
-  async drag(sourceTarget: string, destinationTarget: string): Promise<string> {
-    const page = await this.ensurePage();
-    const source = await this.locator(sourceTarget);
-    const destination = await this.locator(destinationTarget);
-    await source.dragTo(destination, { timeout: 12_000 });
-    await page.waitForTimeout(500);
-    return this.inspect();
+  fill(target: string, value: string): Promise<string> {
+    return this.serialize(async () => {
+      const page = await this.ensurePage();
+      await this.operateOnRefs(page, [target], async () => (await this.locator(page, target)).fill(value, { timeout: target.startsWith("@e") ? 2_000 : 12_000 }));
+      await page.waitForTimeout(200);
+      return this.inspectPage(page);
+    });
   }
 
-  async press(key: string): Promise<string> {
-    const page = await this.ensurePage();
-    await page.keyboard.press(key);
-    await page.waitForTimeout(300);
-    return this.inspect();
+  select(target: string, value: string): Promise<string> {
+    return this.serialize(async () => {
+      const page = await this.ensurePage();
+      await this.operateOnRefs(page, [target], async () => (await this.locator(page, target)).selectOption(value, { timeout: target.startsWith("@e") ? 2_000 : 12_000 }));
+      await page.waitForTimeout(200);
+      return this.inspectPage(page);
+    });
+  }
+
+  drag(sourceTarget: string, destinationTarget: string): Promise<string> {
+    return this.serialize(async () => {
+      const page = await this.ensurePage();
+      await this.operateOnRefs(page, [sourceTarget, destinationTarget], async () => {
+        const source = await this.locator(page, sourceTarget);
+        const destination = await this.locator(page, destinationTarget);
+        await source.dragTo(destination, { timeout: sourceTarget.startsWith("@e") || destinationTarget.startsWith("@e") ? 2_000 : 12_000 });
+      });
+      await page.waitForTimeout(500);
+      return this.inspectPage(page);
+    });
+  }
+
+  press(key: string): Promise<string> {
+    return this.serialize(async () => {
+      const page = await this.ensurePage();
+      await page.keyboard.press(key);
+      await page.waitForTimeout(300);
+      return this.inspectPage(page);
+    });
   }
 
   async wait(milliseconds: number): Promise<string> {
-    const page = await this.ensurePage();
-    await page.waitForTimeout(milliseconds);
-    return this.inspect();
+    if (!Number.isInteger(milliseconds) || milliseconds < 100 || milliseconds > 10_000) {
+      throw new Error("browser_wait 每次只能等待 100 到 10000 毫秒；更长时间请分多次等待并检查页面");
+    }
+    return this.serialize(async () => {
+      const page = await this.ensurePage();
+      await page.waitForTimeout(milliseconds);
+      return this.inspectPage(page);
+    });
   }
 
-  async screenshot(): Promise<string> {
-    const page = await this.ensurePage();
-    await mkdir(this.artifactsDirectory, { recursive: true });
-    const filename = `screenshot-${Date.now()}.png`;
-    const screenshotPath = path.join(this.artifactsDirectory, filename);
-    await page.screenshot({ path: screenshotPath, fullPage: true });
-    return screenshotPath;
+  screenshot(): Promise<string> {
+    return this.serialize(async () => {
+      const page = await this.ensurePage();
+      await mkdir(this.artifactsDirectory, { recursive: true });
+      const filename = `screenshot-${Date.now()}.png`;
+      const screenshotPath = path.join(this.artifactsDirectory, filename);
+      await page.screenshot({ path: screenshotPath, fullPage: true });
+      return screenshotPath;
+    });
   }
 
-  async close(): Promise<void> {
-    await this.context?.close().catch(() => undefined);
-    await this.browser?.close().catch(() => undefined);
-    this.page = undefined;
-    this.context = undefined;
-    this.browser = undefined;
+  close(): Promise<void> {
+    return this.serialize(async () => {
+      await this.context?.close().catch(() => undefined);
+      await this.browser?.close().catch(() => undefined);
+      this.activeRefs.clear();
+      this.page = undefined;
+      this.context = undefined;
+      this.browser = undefined;
+    });
   }
 }
 
@@ -201,7 +266,7 @@ export function createBrowserTools(options: BrowserToolsOptions) {
     defineTool({
       name: "browser_open",
       label: "打开页面",
-      description: "打开一个 HTTP/HTTPS 页面，并返回页面文本和可交互元素。",
+      description: "打开一个完整的 HTTP/HTTPS 页面，并返回页面文本和可交互元素；不支持 javascript: 等协议。",
       parameters: Type.Object({
         url: Type.String({ description: "完整页面地址" }),
       }),
@@ -263,7 +328,7 @@ export function createBrowserTools(options: BrowserToolsOptions) {
     defineTool({
       name: "browser_wait",
       label: "等待页面",
-      description: "等待页面异步加载，然后返回最新页面状态。",
+      description: "每次等待 100 到 10000 毫秒，然后返回最新页面状态；更久需分次等待。",
       parameters: Type.Object({
         milliseconds: Type.Number({ minimum: 100, maximum: 10_000 }),
       }),

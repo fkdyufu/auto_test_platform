@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
 import type { AddressInfo } from "node:net";
+import type { Page } from "playwright-core";
 import { BrowserDriver, createBrowserTools, type FinishResult } from "./browser-tools.js";
 import type { DeviceResource } from "./catalog-store.js";
 import {
@@ -259,6 +260,57 @@ test("drags an HTML5 draggable element to another inspected element", async (t) 
   const after = JSON.parse(await driver.drag(first!.ref, second!.ref)) as { title: string; text: string };
   assert.equal(after.title, "dropped");
   assert.equal(after.text, "☰第二项 ☰第一项");
+});
+
+test("browser snapshots use fresh references and serialize overlapping operations", async (t) => {
+  const server = createServer((_request, response) => {
+    response.setHeader("Content-Type", "text/html; charset=utf-8");
+    response.end(`<button id="first" onclick="document.querySelector('#status').textContent = 'clicked'">Click</button><button id="second">Other</button><p id="status">ready</p>`);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
+  const driver = new BrowserDriver("/tmp/auto-test-platform-browser-refs");
+  t.after(() => driver.close());
+  const { port } = server.address() as AddressInfo;
+
+  const initial = JSON.parse(await driver.open(`http://127.0.0.1:${port}`)) as { elements: Array<{ ref: string }> };
+  const refreshed = JSON.parse(await driver.inspect()) as { elements: Array<{ ref: string }> };
+  assert.notEqual(initial.elements[0].ref, refreshed.elements[0].ref);
+  await assert.rejects(driver.click(initial.elements[0].ref), /已失效.*browser_inspect.*不要原样重试/);
+
+  const click = driver.click(refreshed.elements[0].ref);
+  const inspect = driver.inspect();
+  const [clicked, inspected] = await Promise.all([click, inspect]);
+  assert.match(JSON.parse(clicked).text, /clicked/);
+  assert.match(JSON.parse(inspected).text, /clicked/);
+  assert.notEqual(JSON.parse(clicked).elements[0].ref, JSON.parse(inspected).elements[0].ref);
+  await assert.rejects(driver.drag(refreshed.elements[0].ref, refreshed.elements[1].ref), /已失效.*browser_inspect/);
+});
+
+test("browser reports a removed element reference without waiting for locator timeout", async (t) => {
+  const server = createServer((_request, response) => {
+    response.setHeader("Content-Type", "text/html; charset=utf-8");
+    response.end(`<button id="temporary">Temporary</button>`);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
+  const driver = new BrowserDriver("/tmp/auto-test-platform-browser-removed-ref");
+  t.after(() => driver.close());
+  const { port } = server.address() as AddressInfo;
+  const snapshot = JSON.parse(await driver.open(`http://127.0.0.1:${port}`)) as { elements: Array<{ ref: string }> };
+  await (driver as unknown as { page: Page }).page.evaluate(() => document.querySelector("#temporary")?.remove());
+
+  const started = Date.now();
+  await assert.rejects(driver.click(snapshot.elements[0].ref), /已失效.*browser_inspect/);
+  assert.ok(Date.now() - started < 2_000);
+});
+
+test("browser gives actionable errors for unsupported URLs and excessive waits", async () => {
+  const driver = new BrowserDriver("/tmp/auto-test-platform-browser-args");
+  await assert.rejects(driver.open("javascript:alert(1)"), /仅支持 http 或 https.*javascript:/);
+  await assert.rejects(driver.open("not-a-url"), /完整的 http 或 https/);
+  await assert.rejects(driver.wait(15_000), /100 到 10000 毫秒.*分多次/);
+  await driver.close();
 });
 
 test("serial commands for one interface are serialized and empty input is supported", async () => {
