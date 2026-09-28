@@ -45,10 +45,13 @@ test("unfinished runs get exactly one finish-only recovery without repeating dev
   const f = await fixture(t, (index) => ({ delta: index === 1 ? { role: "assistant", content: "准备继续分析" } : index === 2 ? finishCall : { role: "assistant", content: "已提交失败结论" }, finish: index === 2 ? "tool_calls" : "stop" }));
   const result = await f.execute();
   assert.equal(result.result?.status, "failed");
+  assert.equal(f.requests[0].max_completion_tokens ?? f.requests[0].max_tokens, 32_000);
   const tools = f.requests[1].tools as { function: { name: string } }[];
   assert.deepEqual(tools.map((tool) => tool.function.name), ["finish_test"]);
   assert.ok(f.events.some((event) => event.message?.includes("仅结论补交")));
   assert.ok(f.events.some((event) => event.type === "agent_info" && event.details?.event === "message_end" && event.details.stopReason === "stop"));
+  assert.ok(f.events.some((event) => event.type === "agent_info" && event.details?.event === "message_end"
+    && (event.details.contextUsage as { contextWindow?: number } | undefined)?.contextWindow === 1_000_000));
   assert.ok(f.events.some((event) => event.type === "agent_info" && event.details?.event === "session_end" && event.details.conclusionSubmitted));
 });
 

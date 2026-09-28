@@ -115,6 +115,8 @@ async function createRuntime(settings: ModelSettings): Promise<{ modelRuntime: M
             id: settings.model,
             name: settings.model,
             reasoning: settings.reasoningLevel !== "off",
+            contextWindow: 1_000_000,
+            maxTokens: 32_000,
             thinkingLevelMap: { xhigh: "xhigh", max: "max" },
           },
         ],
