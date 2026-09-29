@@ -186,7 +186,13 @@ async function executePiAgent(options: PiAgentOptions): Promise<{ result?: Finis
     evidence,
     includeFinishTool: options.includeFinishTool,
     onFinish: (result) => {
-      finishResult = { ...result, summary: redact(result.summary) };
+      finishResult = {
+        ...result,
+        summary: redact(result.summary),
+        ...(result.expected ? { expected: redact(result.expected) } : {}),
+        ...(result.actual ? { actual: redact(result.actual) } : {}),
+        ...(result.evidence ? { evidence: redact(result.evidence) } : {}),
+      };
     },
   });
   const deviceToolset = createDeviceTools({ devices: options.devices || [], evidence });

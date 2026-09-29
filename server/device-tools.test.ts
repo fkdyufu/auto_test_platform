@@ -190,13 +190,15 @@ test("allows finish_test after evidence from a non-browser device tool", async (
   assert.equal("roleBindings" in finishTool.parameters.properties, false);
   const execute = finishTool.execute as unknown as (
     id: string,
-    params: { status: "passed" | "failed"; summary: string },
+    params: { status: "passed" | "failed"; summary: string; expected?: string; actual?: string; evidence?: string },
   ) => Promise<unknown>;
 
   await assert.rejects(execute("finish-1", { status: "passed", summary: "未执行工具" }), /真实设备或页面结果/);
   evidence.mark();
   await execute("finish-2", { status: "passed", summary: "SSH 检查通过" });
   assert.deepEqual(finishResult, { status: "passed", summary: "SSH 检查通过" });
+  await execute("finish-3", { status: "failed", summary: "接管失败", expected: "备机接管", actual: "备机未接管", evidence: "VRRP 状态仍为 BACKUP" });
+  assert.deepEqual(finishResult, { status: "failed", summary: "接管失败", expected: "备机接管", actual: "备机未接管", evidence: "VRRP 状态仍为 BACKUP" });
   await toolset.driver.close();
 });
 

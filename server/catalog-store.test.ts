@@ -686,6 +686,29 @@ test("migrates legacy cases and runs into the default scenario", async (t) => {
   assert.equal(detail.runs[0].caseRuns[0].scenarioRunId, detail.runs[0].scenarioRuns[0].id);
   assert.equal(detail.runs[0].caseRuns[0].preconditionSnapshot, "");
   assert.equal(detail.runs[0].caseRuns[0].summary, "历史结论");
+  assert.equal(detail.runs[0].caseRuns[0].resultDetails, undefined);
+});
+
+test("persists structured execution details alongside the concise case conclusion", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "ai-test-catalog-run-details-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const filePath = path.join(directory, "catalog.json");
+  const store = new CatalogStore(filePath);
+  const [product] = await store.listProducts();
+  const testCase = await store.createTestCase(product.id, { name: "端口镜像", steps: "检查端口", expectedResult: "计数增加" });
+  const order = await store.createTestOrder(product.id, { name: "回归", caseIds: [testCase.id] });
+  const run = await store.createTestRun("run-details", order.id);
+  await store.updateTestRun(run.id, (storedRun) => {
+    storedRun.caseRuns[0].status = "completed";
+    storedRun.caseRuns[0].outcome = "failed";
+    storedRun.caseRuns[0].summary = "计数未增加";
+    storedRun.caseRuns[0].resultDetails = { expected: "增加", actual: "仍为 0", evidence: "计数器\n0 packets" };
+  });
+
+  const reloaded = new CatalogStore(filePath);
+  const detail = await reloaded.getTestOrderDetail(product.id, order.id);
+  assert.equal(detail.runs[0].caseRuns[0].summary, "计数未增加");
+  assert.deepEqual(detail.runs[0].caseRuns[0].resultDetails, { expected: "增加", actual: "仍为 0", evidence: "计数器\n0 packets" });
 });
 
 test("extracts the precondition embedded by the legacy Zentao importer", async (t) => {

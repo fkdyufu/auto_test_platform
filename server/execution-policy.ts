@@ -28,4 +28,4 @@ Telnet 在本次 Agent 内保留连接和视图；多行 CLI 命令逐条执行�
 export const FINISH_ONLY_REQUIREMENT = `本次执行会话已经结束，但尚未收到 finish_test 结论。现在只提供 finish_test 工具，不能再执行设备或浏览器操作，也不能重新运行测试。
 请仅根据本次已记录的真实工具证据提交结论。必须实际验证所有步骤及预期结果才可 passed。
 任何预期不符、未验证、前置条件经准备后仍不满足或执行未完成都提交 failed，说明事实、未完成项和可能原因；前置准备失败应明确标记，不要把推测当成已确认根因。
-现在调用 finish_test，不要只返回计划或文字结论。`;
+现在调用 finish_test：summary 简述结论；有可靠事实时分别填写 expected、actual、evidence，不要编造缺失的证据。不要只返回计划或文字结论。`;

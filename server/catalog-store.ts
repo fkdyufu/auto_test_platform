@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AssetChange, AssetDifference, AssetKind, AssetPreview } from "../shared/assistant.js";
+import type { TestResultDetails } from "../shared/test-result.js";
 
 export type ExecutionStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 export type TestOutcome = "passed" | "failed";
@@ -139,6 +140,7 @@ export interface CaseRun {
   status: ExecutionStatus;
   outcome?: TestOutcome;
   summary?: string;
+  resultDetails?: TestResultDetails;
   startedAt?: string;
   finishedAt?: string;
 }

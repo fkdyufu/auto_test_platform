@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { TestRun } from "./api";
-import { buildTestRunReport, formatRunDuration } from "./test-run-report";
+import { buildTestRunReport, formatRunDuration, previewReportText } from "./test-run-report";
 
 const run: TestRun = {
   id: "run-1",
@@ -99,4 +99,16 @@ test("surfaces possible residual configuration in scenario cleanup issues", () =
   const report = buildTestRunReport(residualRiskRun);
 
   assert.match(report.scenarioIssues[0].reason, /环境可能残留配置/);
+});
+
+test("keeps historical conclusions and includes structured fields on new failures", () => {
+  const detailedRun = structuredClone(run);
+  detailedRun.caseRuns[1].summary = "未观察到接管\n查看接口状态";
+  detailedRun.caseRuns[1].resultDetails = { expected: "备机接管", actual: "仍为 BACKUP", evidence: "状态输出\nBACKUP" };
+  const report = buildTestRunReport(detailedRun);
+  assert.equal(report.failedCases[0].summary, "未观察到接管\n查看接口状态");
+  assert.deepEqual(report.failedCases[0].resultDetails, { expected: "备机接管", actual: "仍为 BACKUP", evidence: "状态输出\nBACKUP" });
+  assert.equal(previewReportText(report.failedCases[0].summary), "未观察到接管 查看接口状态");
+  assert.equal(previewReportText("问题".repeat(100), 5), "问题问题问…");
+  assert.equal(report.cases[0].resultDetails, undefined);
 });

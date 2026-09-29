@@ -1928,6 +1928,10 @@ button:disabled {
   width: min(1120px, 100%);
 }
 
+.report-backdrop {
+  z-index: 150;
+}
+
 .report-modal-title {
   gap: 8px;
   color: #526170;
@@ -2073,12 +2077,57 @@ button:disabled {
   font-size: 12px;
 }
 
-.report-issue-row p,
-.report-failure-row p {
+.report-issue-row .report-preview,
+.report-failure-row .report-preview {
   margin: 4px 0 0;
   color: #65717e;
-  font-size: 11px;
-  line-height: 1.6;
+  font-size: 12px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+.report-issue-row > div,
+.report-failure-row > div,
+.report-explanation {
+  min-width: 0;
+}
+
+.report-summary-cell .report-preview {
+  margin: 0;
+  font-size: 12px;
+}
+
+.report-details {
+  margin-top: 5px;
+  font-size: 12px;
+}
+
+.report-details > summary {
+  width: fit-content;
+  color: #1967d2;
+  cursor: pointer;
+}
+
+.report-details-content {
+  display: grid;
+  gap: 10px;
+  max-width: 76ch;
+  margin-top: 10px;
+  border-left: 2px solid #dfe6ee;
+  padding-left: 12px;
+}
+
+.report-detail-field strong {
+  color: #35414e;
+  font-size: 12px;
+}
+
+.report-detail-field p {
+  margin: 4px 0 0;
+  color: #526170;
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 

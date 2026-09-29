@@ -296,7 +296,7 @@ function buildCaseRequirement(
   scenarioRun: ScenarioRun,
   context: TestOrderExecutionContext,
 ): string {
-  return `执行产品测试用例。${buildDeviceDescription(context)}\n\n${buildScenarioDescription(scenario, scenarioRun, context)}\n\n场景搭建结论：${scenarioRun.summary || "无"}\n\n用例名称：${caseRun.caseNameSnapshot}\n\n前置条件：\n${caseRun.preconditionSnapshot || "无"}\n\n测试步骤：\n${caseRun.stepsSnapshot}\n\n预期结果：\n${caseRun.expectedResultSnapshot}\n\n请先检查前置条件；未满足时按前置条件及执行规则做必要准备，并回读验证。准备成功后再执行测试步骤和判断预期结果；无法准备时提交 failed，摘要说明“前置准备失败”及原因。最后根据实际观察调用 finish_test 提交结论。`;
+  return `执行产品测试用例。${buildDeviceDescription(context)}\n\n${buildScenarioDescription(scenario, scenarioRun, context)}\n\n场景搭建结论：${scenarioRun.summary || "无"}\n\n用例名称：${caseRun.caseNameSnapshot}\n\n前置条件：\n${caseRun.preconditionSnapshot || "无"}\n\n测试步骤：\n${caseRun.stepsSnapshot}\n\n预期结果：\n${caseRun.expectedResultSnapshot}\n\n请先检查前置条件；未满足时按前置条件及执行规则做必要准备，并回读验证。准备成功后再执行测试步骤和判断预期结果；无法准备时提交 failed，摘要说明“前置准备失败”及原因。最后根据实际观察调用 finish_test：summary 用一句话概括结论；failed 时尽量分别填写 expected（未满足的预期或前置条件）、actual（实际观察）和 evidence（已获取的关键证据）。没有实际证据的字段留空，不要编造，也不要因整理结论继续操作设备。`;
 }
 
 function buildScenarioCleanupRequirement(
@@ -564,6 +564,7 @@ async function executeTestOrderRun(run: RunRecord, order: TestOrder, testRun: Te
             status: "completed",
             outcome: result.outcome,
             summary: result.message,
+            resultDetails: result.details,
             finishedAt: new Date().toISOString(),
           });
           publish(run, {

@@ -106,6 +106,16 @@ test("preserves historical bindings when the current scene roles were changed or
   assert.match(buildDiagnosticPrompt(changedContext, [], []), /定义来源：当次执行场景快照/);
 });
 
+test("includes structured historical observations when diagnosing a failed case", () => {
+  const detailedContext = structuredClone(context);
+  detailedContext.caseRun.resultDetails = { expected: "备机成为 MASTER", actual: "备机仍为 BACKUP", evidence: "状态输出：BACKUP" };
+  const prompt = buildDiagnosticPrompt(detailedContext, [], []);
+  assert.match(prompt, /当次提交的结果明细/);
+  assert.match(prompt, /预期：备机成为 MASTER/);
+  assert.match(prompt, /实际观察：备机仍为 BACKUP/);
+  assert.match(prompt, /关键证据：状态输出：BACKUP/);
+});
+
 test("keeps the newest question when diagnostic context must be truncated", () => {
   const largeContext = structuredClone(context);
   largeContext.caseRun.stepsSnapshot = "步骤".repeat(30_000);

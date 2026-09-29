@@ -18,3 +18,14 @@ test("fails a run when the agent did not call finish_test", () => {
     message: "Agent 未调用 finish_test 提交结论：模型提前结束",
   });
 });
+
+test("passes structured observations through without changing legacy results", () => {
+  assert.deepEqual(resolveRunResult({
+    result: { status: "failed", summary: "接管失败", expected: "备机接管", actual: "未接管", evidence: "状态 BACKUP" },
+    finalText: "",
+  }), {
+    outcome: "failed",
+    message: "接管失败",
+    details: { expected: "备机接管", actual: "未接管", evidence: "状态 BACKUP" },
+  });
+});

@@ -5,8 +5,9 @@ import { Type } from "typebox";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { ensureBrowserRuntime } from "./browser-runtime.js";
 import type { ToolEvidence } from "./tool-evidence.js";
+import type { TestResultDetails } from "../shared/test-result.js";
 
-interface FinishResult {
+interface FinishResult extends TestResultDetails {
   status: "passed" | "failed";
   summary: string;
 }
@@ -351,7 +352,10 @@ export function createBrowserTools(options: BrowserToolsOptions) {
       description: "完成需求后必须调用一次，提交通过或失败结论。",
       parameters: Type.Object({
         status: Type.Union([Type.Literal("passed"), Type.Literal("failed")]),
-        summary: Type.String({ description: "基于实际观察的简短结论" }),
+        summary: Type.String({ description: "基于实际观察的一句话结论，失败时说明失败点；详细信息填在后续字段" }),
+        expected: Type.Optional(Type.String({ description: "预期行为；执行用例失败时填写，前置准备失败时填写所需条件" })),
+        actual: Type.Optional(Type.String({ description: "实际观察；执行用例失败时填写，明确区分事实和推测" })),
+        evidence: Type.Optional(Type.String({ description: "关键证据：设备输出、状态值、计数或截图路径；只写实际获取的证据" })),
       }),
       execute: async (_id, params) => {
         if (params.status === "passed" && !options.evidence.hasEvidence()) {
@@ -360,6 +364,9 @@ export function createBrowserTools(options: BrowserToolsOptions) {
         const result: FinishResult = {
           status: params.status,
           summary: params.summary,
+          ...(params.expected?.trim() ? { expected: params.expected.trim() } : {}),
+          ...(params.actual?.trim() ? { actual: params.actual.trim() } : {}),
+          ...(params.evidence?.trim() ? { evidence: params.evidence.trim() } : {}),
         };
         options.onFinish(result);
         return textResult("测试结果已提交", { ...result });

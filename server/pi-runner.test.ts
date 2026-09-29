@@ -99,12 +99,14 @@ test("a successful retry clears the initial model error", async (t) => {
   assert.equal(f.events.find((event) => event.details?.event === "session_end")?.details?.errorMessage, undefined);
 });
 
-test("saved tool output and returned conclusions redact configured secrets", async (t) => {
-  const privateFinishCall = { role: "assistant", tool_calls: [{ index: 0, id: "private-finish", type: "function", function: { name: "finish_test", arguments: JSON.stringify({ status: "failed", summary: "未完成 mock-private-key" }) } }] };
+test("saved tool output and structured conclusions redact configured secrets", async (t) => {
+  const privateFinishCall = { role: "assistant", tool_calls: [{ index: 0, id: "private-finish", type: "function", function: { name: "finish_test", arguments: JSON.stringify({ status: "failed", summary: "未完成 mock-private-key", expected: "预期 mock-private-key", actual: "实际 mock-private-key", evidence: "证据 mock-private-key" }) } }] };
   const f = await fixture(t, (index) => ({ delta: index === 1 ? privateFinishCall : { role: "assistant", content: "已提交 mock-private-key" }, finish: index === 1 ? "tool_calls" : "stop" }));
   const result = await f.execute();
   assert.doesNotMatch(result.finalText, /mock-private-key/);
   assert.doesNotMatch(result.result!.summary, /mock-private-key/);
+  assert.doesNotMatch(JSON.stringify(result.result), /mock-private-key/);
+  assert.match(result.result!.evidence || "", /\[REDACTED\]/);
   const output = f.events.find((event) => event.type === "tool_end")!;
   assert.ok(output.toolOutput);
   assert.doesNotMatch(output.toolOutput, /mock-private-key/);

@@ -10,7 +10,8 @@ import {
   XCircle,
 } from "lucide-react";
 import type { RunStatus, TestRun } from "../api";
-import { buildTestRunReport, formatRunDuration, type ReportCaseState } from "../test-run-report";
+import type { TestResultDetails } from "../../shared/test-result";
+import { buildTestRunReport, formatRunDuration, previewReportText, type ReportCaseState } from "../test-run-report";
 
 const RUN_STATUS_LABELS: Record<RunStatus, string> = {
   queued: "等待执行",
@@ -49,6 +50,34 @@ function runLabel(run: TestRun): string {
   return RUN_STATUS_LABELS[run.status];
 }
 
+function ReportExplanation({ text, details, previewLength = 140 }: { text: string; details?: TestResultDetails; previewLength?: number }) {
+  const preview = previewReportText(text, previewLength);
+  const fields = [
+    { label: "预期", value: details?.expected },
+    { label: "实际观察", value: details?.actual },
+    { label: "关键证据", value: details?.evidence },
+  ].filter((field) => Boolean(field.value));
+
+  return (
+    <div className="report-explanation">
+      <p className="report-preview">{preview}</p>
+      {(preview !== text || fields.length > 0) && (
+        <details className="report-details">
+          <summary>展开完整结果</summary>
+          <div className="report-details-content">
+            <div className="report-detail-field"><strong>结论</strong><p>{text}</p></div>
+            {fields.map((field) => (
+              <div className="report-detail-field" key={field.label}>
+                <strong>{field.label}</strong><p>{field.value}</p>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+    </div>
+  );
+}
+
 export function TestRunReportDialog({
   run,
   orderName,
@@ -74,7 +103,7 @@ export function TestRunReportDialog({
   }, [onClose]);
 
   return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+    <div className="modal-backdrop report-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <div className="modal test-run-report-modal" role="dialog" aria-modal="true" aria-label="执行报告">
         <header className="modal-header">
           <div className="report-modal-title"><FileText size={17} /><h2>执行报告</h2></div>
@@ -111,7 +140,7 @@ export function TestRunReportDialog({
                 {report.scenarioIssues.map((issue) => (
                   <div className="report-issue-row" key={issue.id}>
                     <span className="status-badge failed">{issue.phase}</span>
-                    <div><strong>{issue.scenarioName}</strong><p>{issue.reason}</p></div>
+                    <div><strong>{issue.scenarioName}</strong><ReportExplanation text={issue.reason} /></div>
                   </div>
                 ))}
               </div>
@@ -130,7 +159,7 @@ export function TestRunReportDialog({
                     <XCircle size={16} />
                     <div>
                       <div className="report-result-title"><strong>{item.name}</strong><span>{item.scenarioName}</span></div>
-                      <p>{item.summary}</p>
+                      <ReportExplanation text={item.summary} details={item.resultDetails} />
                     </div>
                     <small>{formatRunDuration(item.durationMs)}</small>
                     <button
@@ -163,7 +192,7 @@ export function TestRunReportDialog({
                       <td><span className={`status-badge ${item.state}`}>{CASE_STATE_LABELS[item.state]}</span></td>
                       <td>{item.scenarioName}</td>
                       <td className="name-cell">{item.name}</td>
-                      <td className="report-summary-cell">{item.summary}</td>
+                      <td className="report-summary-cell"><ReportExplanation text={item.summary} details={item.resultDetails} previewLength={90} /></td>
                       <td className="report-duration-cell">
                         {item.state === "passed" ? <CheckCircle2 size={13} /> : item.state === "failed" ? <XCircle size={13} /> : item.state === "cancelled" ? <MinusCircle size={13} /> : <Clock3 size={13} />}
                         {formatRunDuration(item.durationMs)}

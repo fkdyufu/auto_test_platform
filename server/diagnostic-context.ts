@@ -102,7 +102,13 @@ export function buildDiagnosticPrompt(
   messages: DiagnosticMessage[],
 ): string {
   const history = formatHistory(messages);
+  const details = context.caseRun.resultDetails;
+  const resultDetails = [
+    details?.expected && `预期：${limitText(details.expected, 2_000)}`,
+    details?.actual && `实际观察：${limitText(details.actual, 2_000)}`,
+    details?.evidence && `关键证据：${limitText(details.evidence, 3_000)}`,
+  ].filter(Boolean).join("\n");
   const prefix = `请结合下列上下文回答诊断对话中的最新问题。必要时直接使用浏览器或设备工具继续检查。\n\n【上下文边界】\n- “执行快照”和“历史执行证据”来自当次测试，表示历史事实。\n- “当前资源与环境”来自平台此刻的配置，可能已在测试后发生变化，只能用于现在的补充检查。\n- 设备凭据由平台工具内部使用，不应询问、输出或猜测密码。\n\n【产品与测试单】\n产品：${context.product.name}（${context.product.id}）\n产品描述：${context.product.description || "无"}\n测试单：${context.testOrder.name}（${context.testOrder.id}）\n\n【当前资源与环境】\n${limitText(formatDevices(context), 8_000)}\n\n【测试场景】\n${limitText(formatScenario(context), 6_000)}\n\n【用例执行快照】\n用例：${context.caseRun.caseNameSnapshot}（用例执行 ID: ${context.caseRun.id}）\n前置条件：\n${limitText(context.caseRun.preconditionSnapshot || "无", 6_000)}\n步骤：\n${limitText(context.caseRun.stepsSnapshot, 6_000)}\n预期结果：\n${limitText(context.caseRun.expectedResultSnapshot, 6_000)}\n执行状态：${context.caseRun.status}\n执行结果：${context.caseRun.outcome || "无结论"}\n执行结论：${limitText(context.caseRun.summary || "未记录", 4_000)}\n\n【历史执行证据】\n${formatEvidence(context, events)}`;
-  const suffix = `\n\n【诊断对话】\n${history}`;
+  const suffix = `${resultDetails ? `\n\n【当次提交的结果明细】\n${resultDetails}` : ""}\n\n【诊断对话】\n${history}`;
   return `${limitText(prefix, Math.max(1_000, MAX_PROMPT_LENGTH - suffix.length))}${suffix}`;
 }

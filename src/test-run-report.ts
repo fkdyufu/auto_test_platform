@@ -1,4 +1,5 @@
 import type { CaseRun, RunStatus, TestRun } from "./api";
+import type { TestResultDetails } from "../shared/test-result";
 
 export type ReportCaseState = "passed" | "failed" | "cancelled" | "pending";
 
@@ -9,6 +10,7 @@ export interface ReportCaseResult {
   state: ReportCaseState;
   status: RunStatus;
   summary: string;
+  resultDetails?: TestResultDetails;
   durationMs?: number;
 }
 
@@ -28,6 +30,11 @@ export interface TestRunReport {
   cases: ReportCaseResult[];
   failedCases: ReportCaseResult[];
   scenarioIssues: ReportScenarioIssue[];
+}
+
+export function previewReportText(value: string, limit = 140): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > limit ? `${normalized.slice(0, limit).trimEnd()}…` : normalized;
 }
 
 function durationMs(startedAt?: string, finishedAt?: string): number | undefined {
@@ -66,6 +73,7 @@ export function buildTestRunReport(run: TestRun): TestRunReport {
       state,
       status: caseRun.status,
       summary: caseRun.summary || (state === "pending" ? "尚未执行或未产生结论" : "未记录执行结论"),
+      resultDetails: caseRun.resultDetails,
       durationMs: durationMs(caseRun.startedAt, caseRun.finishedAt),
     };
   });

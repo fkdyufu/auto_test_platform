@@ -1,4 +1,5 @@
 import type { AssistantConversation, AssistantPageContext } from "../shared/assistant";
+import type { TestResultDetails } from "../shared/test-result";
 export type { AssistantConversation, AssistantPageContext, AssistantProposal, AssetKind } from "../shared/assistant";
 export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 export type TestOutcome = "passed" | "failed";
@@ -190,6 +191,7 @@ export interface CaseRun {
   status: RunStatus;
   outcome?: TestOutcome;
   summary?: string;
+  resultDetails?: TestResultDetails;
   startedAt?: string;
   finishedAt?: string;
 }
