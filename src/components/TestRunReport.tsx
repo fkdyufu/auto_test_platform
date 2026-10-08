@@ -1,15 +1,17 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
   Clock3,
+  Download,
   FileText,
+  LoaderCircle,
   MessageSquareText,
   MinusCircle,
   X,
   XCircle,
 } from "lucide-react";
-import type { RunStatus, TestRun } from "../api";
+import { api, type RunStatus, type TestRun } from "../api";
 import type { TestResultDetails } from "../../shared/test-result";
 import { buildTestRunReport, formatRunDuration, previewReportText, type ReportCaseState } from "../test-run-report";
 
@@ -79,16 +81,21 @@ function ReportExplanation({ text, details, previewLength = 140 }: { text: strin
 }
 
 export function TestRunReportDialog({
+  productId,
   run,
   orderName,
   onDiagnose,
   onClose,
 }: {
+  productId: string;
   run: TestRun;
   orderName: string;
   onDiagnose: (target: { caseRunId: string; caseName: string; scenarioName: string }) => void;
   onClose: () => void;
 }) {
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState("");
+  const canExport = run.status !== "queued" && run.status !== "running";
   const report = buildTestRunReport(run);
   const totalDuration = run.startedAt && run.finishedAt
     ? new Date(run.finishedAt).getTime() - new Date(run.startedAt).getTime()
@@ -102,6 +109,19 @@ export function TestRunReportDialog({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
 
+  async function exportReport() {
+    if (exporting || !canExport) return;
+    setExporting(true);
+    setExportError("");
+    try {
+      await api.downloadTestRunReport(productId, run.id);
+    } catch (error) {
+      setExportError(error instanceof Error ? error.message : "导出失败，请稍后重试");
+    } finally {
+      setExporting(false);
+    }
+  }
+
   return (
     <div className="modal-backdrop report-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <div className="modal test-run-report-modal" role="dialog" aria-modal="true" aria-label="执行报告">
@@ -113,6 +133,7 @@ export function TestRunReportDialog({
         </header>
 
         <div className="modal-body report-body">
+          {exportError && <p className="inline-notice error" role="alert">{exportError}</p>}
           <section className="report-overview">
             <div>
               <span className="detail-kicker">{run.triggerType === "all" ? "整单执行" : "单用例执行"}</span>
@@ -216,6 +237,10 @@ export function TestRunReportDialog({
         </div>
 
         <footer className="modal-actions">
+          <button type="button" className="button secondary" disabled={exporting || !canExport} onClick={() => void exportReport()} title={canExport ? "下载本次执行的 Word 报告" : "测试执行结束后才能导出报告"}>
+            {exporting ? <LoaderCircle size={15} className="spin" /> : <Download size={15} />}
+            {exporting ? "正在生成…" : "导出 Word 报告"}
+          </button>
           <button type="button" className="button primary" onClick={onClose}>关闭</button>
         </footer>
       </div>

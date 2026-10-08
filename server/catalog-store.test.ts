@@ -51,6 +51,56 @@ test("creates product cases and a test order collection", async (t) => {
   assert.equal(detail.cases[0].id, testCase.id);
 });
 
+test("stores paired steps and keeps immutable execution snapshots across edits", async (t) => {
+  const store = await createStore(t);
+  const [product] = await store.listProducts();
+  const rows = [{ step: "登录\n输入账号", expected: "登录成功" }, { step: "查看状态", expected: "版本可见" }];
+  const testCase = await store.createTestCase(product.id, { name: "检查", stepRows: rows });
+  const order = await store.createTestOrder(product.id, { name: "冒烟", caseIds: [testCase.id] });
+  await store.createTestRun("paired-step-run", order.id);
+  assert.deepEqual(testCase.stepRows, rows);
+  assert.equal(testCase.steps, "1. 登录\n输入账号\n2. 查看状态");
+  const updated = await store.updateTestCase(product.id, testCase.id, { name: "检查", stepRows: [{ step: "读取计数", expected: "计数增加" }] });
+  const detail = await store.getTestOrderDetail(product.id, order.id);
+  assert.deepEqual(detail.runs[0].caseRuns[0].stepRowsSnapshot, rows);
+  assert.deepEqual(updated.stepRows, [{ step: "读取计数", expected: "计数增加" }]);
+
+  const legacyUpdated = await store.updateTestCase(product.id, testCase.id, { ...updated, steps: "旧接口修改步骤", expectedResult: "旧接口修改预期" });
+  assert.deepEqual(legacyUpdated.stepRows, [{ step: "旧接口修改步骤", expected: "旧接口修改预期" }]);
+});
+
+test("validates paired step content and retains blank intermediate expectations on import", async (t) => {
+  const store = await createStore(t);
+  const [product] = await store.listProducts();
+  await assert.rejects(store.createTestCase(product.id, { name: "空步骤", stepRows: [{ step: "", expected: "通过" }] }), /第 1 行步骤不能为空/);
+  await assert.rejects(store.createTestCase(product.id, { name: "空预期", stepRows: [{ step: "执行", expected: "" }] }), /至少需要一个预期/);
+  await assert.rejects(store.createTestCase(product.id, { name: "无步骤", stepRows: [] }), /1 至 100 行/);
+  const stepRows = [{ step: "启动抓包", expected: "" }, { step: "发送流量", expected: "捕获报文" }];
+  await store.importZentaoTestCases(product.id, [{ zentaoCaseId: 1, name: "抓包", precondition: "", steps: "旧文本", expectedResult: "旧预期", stepRows }]);
+  const [imported] = await store.listTestCases(product.id);
+  assert.deepEqual(imported.stepRows, stepRows);
+  await store.importZentaoTestCases(product.id, [{ zentaoCaseId: 2, name: "待补充", precondition: "", steps: "打开页面", expectedResult: "未提供", stepRows: [{ step: "打开页面", expected: "" }] }]);
+  assert.deepEqual((await store.listTestCases(product.id)).find((item) => item.zentaoCaseId === 2)?.stepRows, [{ step: "打开页面", expected: "" }]);
+});
+
+test("upgrades v11 cases with matching numbered rows and backs up the original data", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "ai-test-step-migration-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const filePath = path.join(directory, "catalog.json");
+  const store = new CatalogStore(filePath);
+  const [product] = await store.listProducts();
+  await store.createTestCase(product.id, { name: "旧用例", steps: "1. 登录\n2. 查看状态", expectedResult: "1. 成功\n2. 正常" });
+  const data = JSON.parse(await readFile(filePath, "utf8"));
+  data.version = 11;
+  delete data.testCases[0].stepRows;
+  await writeFile(filePath, JSON.stringify(data));
+  const reloaded = new CatalogStore(filePath);
+  const [migrated] = await reloaded.listTestCases(product.id);
+  assert.deepEqual(migrated.stepRows, [{ step: "登录", expected: "成功" }, { step: "查看状态", expected: "正常" }]);
+  assert.equal(migrated.steps, data.testCases[0].steps);
+  assert.equal(JSON.parse(await readFile(`${filePath}.v11.bak`, "utf8")).version, 11);
+});
+
 test("migrates legacy test order fields without losing the collection", async (t) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "ai-test-catalog-legacy-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -861,7 +911,7 @@ test("migrates v10 environments and roles without guessing bindings or changing 
   assert.deepEqual(diagnostic.devices.map((item) => item.id), [device.id]);
   await migratedStore.updateTestScenario(product.id, scenario.id, { ...migrated, roles: [{ ...migrated.roles[0], deviceId: device.id }] });
   const persisted = JSON.parse(await readFile(filePath, "utf8"));
-  assert.equal(persisted.version, 11);
+  assert.equal(persisted.version, 12);
   assert.equal("physicalEnvironments" in persisted, false);
   assert.equal("physicalEnvironmentId" in persisted.testOrders[0], false);
   assert.equal((await migratedStore.listTestScenarios(product.id)).find((item) => item.id === scenario.id)?.description, migrated.description);

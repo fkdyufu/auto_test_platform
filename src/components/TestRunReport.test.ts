@@ -48,11 +48,15 @@ test("reports preview long legacy failures and retain multiline structured detai
     }],
   };
 
-  const markup = renderToStaticMarkup(createElement(TestRunReportDialog, { run, orderName: "性能测试", onDiagnose: () => undefined, onClose: () => undefined }));
+  const markup = renderToStaticMarkup(createElement(TestRunReportDialog, { productId: "product-1", run, orderName: "性能测试", onDiagnose: () => undefined, onClose: () => undefined }));
   assert.match(markup, /故障概况 实际收不到流量/);
   assert.match(markup, /故障概况\n实际收不到流量/);
   assert.match(markup, /<details class="report-details">/);
   assert.match(markup, /<strong>预期<\/strong><p>计数增加<\/p>/);
   assert.match(markup, /<strong>实际观察<\/strong><p>计数未增加<\/p>/);
   assert.match(markup, /端口计数\n0 packets/);
+  assert.match(markup, /导出 Word 报告/);
+  assert.doesNotMatch(markup, /disabled=""/);
+  const runningMarkup = renderToStaticMarkup(createElement(TestRunReportDialog, { productId: "product-1", run: { ...run, status: "running" }, orderName: "性能测试", onDiagnose: () => undefined, onClose: () => undefined }));
+  assert.match(runningMarkup, /disabled=""[^>]*title="测试执行结束后才能导出报告"/);
 });

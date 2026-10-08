@@ -1,5 +1,6 @@
 import type { AssistantConversation, AssistantPageContext } from "../shared/assistant";
 import type { TestResultDetails } from "../shared/test-result";
+import type { TestCaseStep } from "../shared/test-case-steps";
 export type { AssistantConversation, AssistantPageContext, AssistantProposal, AssetKind } from "../shared/assistant";
 export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 export type TestOutcome = "passed" | "failed";
@@ -120,6 +121,7 @@ export interface TestCase {
   precondition: string;
   steps: string;
   expectedResult: string;
+  stepRows: TestCaseStep[];
   createdAt: string;
   updatedAt: string;
 }
@@ -188,6 +190,7 @@ export interface CaseRun {
   preconditionSnapshot: string;
   stepsSnapshot: string;
   expectedResultSnapshot: string;
+  stepRowsSnapshot?: TestCaseStep[];
   status: RunStatus;
   outcome?: TestOutcome;
   summary?: string;
@@ -257,6 +260,7 @@ export interface TestCaseInput {
   precondition: string;
   steps: string;
   expectedResult: string;
+  stepRows?: TestCaseStep[];
 }
 
 export interface ZentaoCaseSummary {
@@ -375,6 +379,29 @@ export const api = {
     request<void>(`/api/products/${productId}/test-scenarios/${id}`, { method: "DELETE" }),
   getTestOrders: (productId: string) => request<TestOrderSummary[]>(`/api/products/${productId}/test-orders`),
   getTestOrder: (productId: string, id: string) => request<TestOrderDetail>(`/api/products/${productId}/test-orders/${id}`),
+  downloadTestRunReport: async (productId: string, runId: string): Promise<void> => {
+    const response = await fetch(`/api/products/${encodeURIComponent(productId)}/test-runs/${encodeURIComponent(runId)}/report.docx`);
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({})) as { error?: string };
+      throw new Error(payload.error || `导出失败 (${response.status})`);
+    }
+    const disposition = response.headers.get("Content-Disposition") || "";
+    const encodedFilename = /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1];
+    let filename = "测试报告.docx";
+    if (encodedFilename) {
+      try { filename = decodeURIComponent(encodedFilename); } catch { /* Use the default filename. */ }
+    }
+    const url = URL.createObjectURL(await response.blob());
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    try { anchor.click(); } finally {
+      anchor.remove();
+      // Give the browser time to start downloading before releasing the URL.
+      window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    }
+  },
   createTestOrder: (productId: string, input: TestOrderInput) =>
     request<TestOrderDetail>(`/api/products/${productId}/test-orders`, { method: "POST", body: JSON.stringify(input) }),
   updateTestOrder: (productId: string, id: string, input: TestOrderInput) =>

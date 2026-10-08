@@ -34,6 +34,8 @@ import { DiagnosticAssistant, type DiagnosticTarget } from "../components/Diagno
 import { TestRunReportDialog } from "../components/TestRunReport";
 import { AutoResizeTextarea, InlineNotice, Modal, PageHeader, type Notice } from "../components/ui";
 import { useAssistantPage } from "../components/AssistantContext";
+import { CaseStepsEditor } from "../components/CaseStepsEditor";
+import { stepRowsFromLegacy, stepRowsToText } from "../../shared/test-case-steps";
 import { flattenExecutionGroups, groupCasesByExecutionOrder, moveCaseWithinScenario, moveScenarioGroup, toggleOrderedCase } from "../test-order-sequence";
 
 const STATUS_LABELS: Record<RunStatus, string> = {
@@ -228,6 +230,7 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
         precondition: testCase.precondition,
         steps: testCase.steps,
         expectedResult: testCase.expectedResult,
+        stepRows: testCase.stepRows || stepRowsFromLegacy(testCase.steps, testCase.expectedResult),
       },
     });
   };
@@ -684,28 +687,14 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
                 placeholder="可选"
               />
             </label>
-            <label className="field full-width">
-              <span>测试步骤</span>
-              <AutoResizeTextarea
-                value={caseDialog.form.steps}
-                onChange={(event) => setCaseDialog({ ...caseDialog, form: { ...caseDialog.form, steps: event.target.value } })}
-                rows={9}
-              />
-            </label>
-            <label className="field full-width">
-              <span>预期结果</span>
-              <AutoResizeTextarea
-                value={caseDialog.form.expectedResult}
-                onChange={(event) => setCaseDialog({ ...caseDialog, form: { ...caseDialog.form, expectedResult: event.target.value } })}
-                rows={6}
-              />
-            </label>
+            <CaseStepsEditor rows={caseDialog.form.stepRows || stepRowsFromLegacy(caseDialog.form.steps, caseDialog.form.expectedResult)} disabled={submitting} onChange={(stepRows) => setCaseDialog({ ...caseDialog, form: { ...caseDialog.form, stepRows, ...stepRowsToText(stepRows) } })} />
           </div>
         </Modal>
       )}
 
       {reportRun && detail && (
         <TestRunReportDialog
+          productId={product.id}
           run={reportRun}
           orderName={detail.name}
           onDiagnose={(target) => {

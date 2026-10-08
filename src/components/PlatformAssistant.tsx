@@ -4,7 +4,7 @@ import { api, type AssistantConversation, type AssistantPageContext, type Assist
 import { buildTimelineItems } from "../run-events";
 
 const KIND_LABELS = { case: "用例", scenario: "场景", device: "设备", order: "测试单" };
-const FIELD_LABELS: Record<string, string> = { name: "名称", scenarioId: "场景", precondition: "前置条件", steps: "步骤", expectedResult: "预期结果", description: "描述", category: "功能分类", roles: "设备角色", parameters: "场景参数", setupInstructions: "搭建要求", verificationInstructions: "验证要求", cleanupInstructions: "清理要求", caseIds: "关联用例", types: "设备类型", model: "型号", controlInterfaces: "控制接口" };
+const FIELD_LABELS: Record<string, string> = { name: "名称", scenarioId: "场景", precondition: "前置条件", steps: "步骤", expectedResult: "预期结果", stepRows: "用例步骤", description: "描述", category: "功能分类", roles: "设备角色", parameters: "场景参数", setupInstructions: "搭建要求", verificationInstructions: "验证要求", cleanupInstructions: "清理要求", caseIds: "关联用例", types: "设备类型", model: "型号", controlInterfaces: "控制接口" };
 const TOOL_LABELS: Record<string, string> = { platform_context: "读取页面上下文", platform_query: "查询资产", platform_get: "读取资产详情", platform_propose_changes: "生成资产变更预览", platform_propose_draft: "生成表单修改预览", device_ssh_exec: "SSH 执行命令", device_telnet_exec: "Telnet 执行命令", device_serial_exec: "串口交互", device_http_request: "设备 API 请求" };
 const display = (value: unknown) => value === undefined || value === null || value === "" ? "（空）" : typeof value === "string" ? value : JSON.stringify(value, null, 2);
 

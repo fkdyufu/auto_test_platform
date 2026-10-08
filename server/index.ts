@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express, { type Response } from "express";
 import { catalogRouter } from "./catalog-routes.js";
+import { createTestRunReportRouter } from "./test-run-report-routes.js";
 import {
   CatalogError,
   catalogStore,
@@ -33,6 +34,7 @@ import {
 } from "./pi-runner.js";
 import { resolveRunResult } from "./run-result.js";
 import { decideScenarioCleanup } from "./scenario-cleanup-policy.js";
+import { formatStepRows, stepRowsFromLegacy } from "../shared/test-case-steps.js";
 import {
   readModelSettings,
   readZentaoSettings,
@@ -296,7 +298,16 @@ function buildCaseRequirement(
   scenarioRun: ScenarioRun,
   context: TestOrderExecutionContext,
 ): string {
-  return `执行产品测试用例。${buildDeviceDescription(context)}\n\n${buildScenarioDescription(scenario, scenarioRun, context)}\n\n场景搭建结论：${scenarioRun.summary || "无"}\n\n用例名称：${caseRun.caseNameSnapshot}\n\n前置条件：\n${caseRun.preconditionSnapshot || "无"}\n\n测试步骤：\n${caseRun.stepsSnapshot}\n\n预期结果：\n${caseRun.expectedResultSnapshot}\n\n请先检查前置条件；未满足时按前置条件及执行规则做必要准备，并回读验证。准备成功后再执行测试步骤和判断预期结果；无法准备时提交 failed，摘要说明“前置准备失败”及原因。最后根据实际观察调用 finish_test：summary 用一句话概括结论；failed 时尽量分别填写 expected（未满足的预期或前置条件）、actual（实际观察）和 evidence（已获取的关键证据）。没有实际证据的字段留空，不要编造，也不要因整理结论继续操作设备。`;
+  const rows = caseRun.stepRowsSnapshot || stepRowsFromLegacy(caseRun.stepsSnapshot, caseRun.expectedResultSnapshot);
+  return [
+    `执行产品测试用例。${buildDeviceDescription(context)}`,
+    buildScenarioDescription(scenario, scenarioRun, context),
+    `场景搭建结论：${scenarioRun.summary || "无"}`,
+    `用例名称：${caseRun.caseNameSnapshot}`,
+    `前置条件：\n${caseRun.preconditionSnapshot || "无"}`,
+    `用例步骤（每一步与其预期逐行对应）：\n${formatStepRows(rows)}`,
+    "请先检查前置条件；未满足时按前置条件及执行规则做必要准备，并回读验证。准备成功后按顺序执行每一步并检查对应预期；无法准备时提交 failed，摘要说明‘前置准备失败’及原因。用例没有任何预期结果时应报告缺少判定依据，不能提交通过。最后根据实际观察调用 finish_test：summary 用一句话概括结论；failed 时尽量分别填写 expected（未满足的预期或前置条件）、actual（实际观察）和 evidence（已获取的关键证据）。没有实际证据的字段留空，不要编造，也不要因整理结论继续操作设备。",
+  ].join("\n\n");
 }
 
 function buildScenarioCleanupRequirement(
@@ -1076,6 +1087,7 @@ app.use("/api", createAssistantRouter({
 
 app.use("/api", zentaoRouter);
 app.use("/api", catalogRouter);
+app.use("/api", createTestRunReportRouter());
 
 app.post("/api/runs", async (request, response, next) => {
   try {

@@ -116,6 +116,15 @@ test("includes structured historical observations when diagnosing a failed case"
   assert.match(prompt, /关键证据：状态输出：BACKUP/);
 });
 
+test("uses paired execution snapshots when formatting diagnostic steps", () => {
+  const detailedContext = structuredClone(context);
+  detailedContext.caseRun.stepRowsSnapshot = [{ step: "关闭主机上联", expected: "主机退出 MASTER" }, { step: "检查备机", expected: "备机接管" }];
+  const prompt = buildDiagnosticPrompt(detailedContext, [], []);
+  assert.match(prompt, /步骤 1：\n关闭主机上联\n对应预期：\n主机退出 MASTER/);
+  assert.match(prompt, /步骤 2：\n检查备机\n对应预期：\n备机接管/);
+  assert.doesNotMatch(prompt, /断开主设备上联/);
+});
+
 test("keeps the newest question when diagnostic context must be truncated", () => {
   const largeContext = structuredClone(context);
   largeContext.caseRun.stepsSnapshot = "步骤".repeat(30_000);

@@ -1,4 +1,5 @@
 import type { ZentaoSettings } from "./settings-store.js";
+import type { TestCaseStep } from "../shared/test-case-steps.js";
 import { ZENTAO_API_BASE_PATH, ZENTAO_API_V2_BASE_PATH } from "./settings-store.js";
 
 const REQUEST_TIMEOUT_MS = 20_000;
@@ -35,6 +36,7 @@ export interface ZentaoCaseImportData {
   precondition: string;
   steps: string;
   expectedResult: string;
+  stepRows: TestCaseStep[];
 }
 
 class ZentaoResponseError extends Error {
@@ -361,6 +363,7 @@ export class ZentaoClient {
       precondition,
       steps: numberedSteps.join("\n") || "禅道用例未提供测试步骤",
       expectedResult: numberedExpectations.join("\n") || "禅道用例未提供预期结果",
+      stepRows: stepPairs.length ? stepPairs.map((row) => ({ step: row.description, expected: row.expectation })) : [{ step: "禅道用例未提供测试步骤", expected: "禅道用例未提供预期结果" }],
     };
   }
 

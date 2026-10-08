@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AssetChange, AssetDifference, AssetKind, AssetPreview } from "../shared/assistant.js";
 import type { TestResultDetails } from "../shared/test-result.js";
+import { parseStepRows, stepRowsFromLegacy, stepRowsToText, type TestCaseStep } from "../shared/test-case-steps.js";
 
 export type ExecutionStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 export type TestOutcome = "passed" | "failed";
@@ -28,6 +29,7 @@ export interface TestCase {
   precondition: string;
   steps: string;
   expectedResult: string;
+  stepRows: TestCaseStep[];
   createdAt: string;
   updatedAt: string;
   archivedAt?: string;
@@ -137,6 +139,7 @@ export interface CaseRun {
   preconditionSnapshot: string;
   stepsSnapshot: string;
   expectedResultSnapshot: string;
+  stepRowsSnapshot?: TestCaseStep[];
   status: ExecutionStatus;
   outcome?: TestOutcome;
   summary?: string;
@@ -177,7 +180,7 @@ export interface TestRun {
 }
 
 interface CatalogData {
-  version: 11;
+  version: 12;
   products: Product[];
   testCases: TestCase[];
   deviceResources: DeviceResource[];
@@ -186,10 +189,11 @@ interface CatalogData {
   testRuns: TestRun[];
 }
 
-type LegacyTestCase = Omit<TestCase, "scenarioId" | "source" | "precondition"> & {
+type LegacyTestCase = Omit<TestCase, "scenarioId" | "source" | "precondition" | "stepRows"> & {
   scenarioId?: string;
   source?: TestCase["source"];
   precondition?: string;
+  stepRows?: TestCaseStep[];
 };
 type LegacyCaseRun = Omit<CaseRun, "scenarioRunId" | "preconditionSnapshot"> & {
   scenarioRunId?: string;
@@ -233,6 +237,12 @@ export interface TestOrderExecutionContext {
   scenarios: TestScenario[];
 }
 
+export interface TestRunReportContext {
+  product: Pick<Product, "id" | "name">;
+  testOrder: Pick<TestOrder, "id" | "name" | "description">;
+  testRun: TestRun;
+}
+
 export interface DiagnosticExecutionContext extends TestOrderExecutionContext {
   product: Product;
   testOrder: TestOrder;
@@ -248,6 +258,7 @@ export interface ImportedTestCaseInput {
   precondition: string;
   steps: string;
   expectedResult: string;
+  stepRows?: TestCaseStep[];
 }
 
 export interface TestCaseImportResult {
@@ -346,7 +357,7 @@ function defaultData(): CatalogData {
     updatedAt: timestamp,
   }));
   return {
-    version: 11,
+    version: 12,
     products,
     testCases: [],
     deviceResources: [],
@@ -378,7 +389,7 @@ export class CatalogStore {
     try {
       const original = await readFile(this.filePath, "utf8");
       const data = JSON.parse(original) as { version?: number };
-      if (typeof data.version === "number" && data.version >= 1 && data.version < 11) {
+      if (typeof data.version === "number" && data.version >= 1 && data.version < 12) {
         try {
           await writeFile(`${this.filePath}.v${data.version}.bak`, original, { flag: "wx", mode: 0o600 });
         } catch (error) {
@@ -396,13 +407,13 @@ export class CatalogStore {
     this.initializePromise ??= this.initialize();
     await this.initializePromise;
     const data = JSON.parse(await readFile(this.filePath, "utf8")) as CatalogData & { version: number };
-    if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].includes(data.version) || !Array.isArray(data.products) || !Array.isArray(data.testCases)) {
+    if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].includes(data.version) || !Array.isArray(data.products) || !Array.isArray(data.testCases)) {
       throw new CatalogError("业务数据文件格式不正确", 500);
     }
     const sourceVersion = data.version;
     const legacyData = data as typeof data & { labEnvironments?: LegacyPhysicalEnvironment[]; physicalEnvironments?: LegacyPhysicalEnvironment[] };
     let physicalEnvironments = legacyData.physicalEnvironments ?? legacyData.labEnvironments ?? [];
-    data.version = 11;
+    data.version = 12;
     data.deviceResources ??= [];
     delete legacyData.physicalEnvironments;
     delete legacyData.labEnvironments;
@@ -475,6 +486,7 @@ export class CatalogStore {
         precondition,
         steps,
         expectedResult: testCase.expectedResult,
+        stepRows: testCase.stepRows === undefined ? stepRowsFromLegacy(steps, testCase.expectedResult) : parseStepRows(testCase.stepRows),
         createdAt: testCase.createdAt,
         updatedAt: testCase.updatedAt,
         archivedAt: testCase.archivedAt,
@@ -631,7 +643,7 @@ export class CatalogStore {
     working.memoryData = clone(data);
     await working.getProduct(productId);
     const fields: Record<AssetKind, string[]> = {
-      case: ["name", "scenarioId", "precondition", "steps", "expectedResult"],
+      case: ["name", "scenarioId", "precondition", "steps", "expectedResult", "stepRows"],
       device: ["name", "types", "model", "description", "controlInterfaces"],
       scenario: ["name", "category", "description", "roles", "parameters", "setupInstructions", "verificationInstructions", "cleanupInstructions", "caseIds"],
       order: ["name", "description", "caseIds"],
@@ -799,6 +811,31 @@ export class CatalogStore {
     return scenarioId;
   }
 
+  private normalizeCaseSteps(input: Record<string, unknown>, current?: TestCase, allowEmptyExpectations = false): Pick<TestCase, "steps" | "expectedResult" | "stepRows"> {
+    const legacyChanged = current && (input.steps !== undefined && input.steps !== current.steps || input.expectedResult !== undefined && input.expectedResult !== current.expectedResult);
+    const rowsUnchanged = current && JSON.stringify(input.stepRows) === JSON.stringify(current.stepRows);
+    // Legacy clients can send a full saved object with changed text and stale rows.
+    if (input.stepRows !== undefined && !(legacyChanged && rowsUnchanged)) {
+      try {
+        const stepRows = parseStepRows(input.stepRows).map((row, index) => ({
+          step: requiredText(row.step, `第 ${index + 1} 行步骤`, 20_000),
+          expected: row.expected.trim(),
+        }));
+        if (!allowEmptyExpectations && !stepRows.some((row) => row.expected)) throw new CatalogError("用例步骤至少需要一个预期结果");
+        const text = stepRowsToText(stepRows);
+        requiredText(text.steps, "测试步骤", 20_000);
+        if (allowEmptyExpectations) optionalText(text.expectedResult, 10_000);
+        else requiredText(text.expectedResult, "预期结果", 10_000);
+        return { stepRows, ...text };
+      } catch (error) {
+        throw error instanceof CatalogError ? error : new CatalogError(error instanceof Error ? error.message : "用例步骤格式不正确");
+      }
+    }
+    const steps = requiredText(input.steps ?? current?.steps, "测试步骤", 20_000);
+    const expectedResult = requiredText(input.expectedResult ?? current?.expectedResult, "预期结果", 10_000);
+    return { steps, expectedResult, stepRows: stepRowsFromLegacy(steps, expectedResult) };
+  }
+
   async createTestCase(productId: string, input: Record<string, unknown>): Promise<TestCase> {
     return this.mutate((data) => {
       const product = data.products.find((item) => item.id === productId && !item.archivedAt);
@@ -811,8 +848,7 @@ export class CatalogStore {
         source: "local",
         name: requiredText(input.name, "用例名称", 200),
         precondition: optionalText(input.precondition, 10_000),
-        steps: requiredText(input.steps, "测试步骤", 20_000),
-        expectedResult: requiredText(input.expectedResult, "预期结果", 10_000),
+        ...this.normalizeCaseSteps(input),
         createdAt: timestamp,
         updatedAt: timestamp,
       };
@@ -828,8 +864,7 @@ export class CatalogStore {
       testCase.scenarioId = this.validateTestCaseScenario(data, productId, input.scenarioId ?? testCase.scenarioId);
       testCase.name = requiredText(input.name, "用例名称", 200);
       testCase.precondition = optionalText(input.precondition, 10_000);
-      testCase.steps = requiredText(input.steps, "测试步骤", 20_000);
-      testCase.expectedResult = requiredText(input.expectedResult, "预期结果", 10_000);
+      Object.assign(testCase, this.normalizeCaseSteps(input, testCase));
       testCase.updatedAt = new Date().toISOString();
       return clone(testCase);
     });
@@ -868,14 +903,12 @@ export class CatalogStore {
 
         const name = requiredText(item.name, "用例名称", 200);
         const precondition = optionalText(item.precondition, 10_000);
-        const steps = requiredText(item.steps, "测试步骤", 20_000);
-        const expectedResult = requiredText(item.expectedResult, "预期结果", 10_000);
+        const caseSteps = this.normalizeCaseSteps(item as unknown as Record<string, unknown>, undefined, true);
         if (existing) {
           existing.source = "zentao";
           existing.name = name;
           existing.precondition = precondition;
-          existing.steps = steps;
-          existing.expectedResult = expectedResult;
+          Object.assign(existing, caseSteps);
           existing.lastImportedAt = timestamp;
           existing.updatedAt = timestamp;
           result.updated += 1;
@@ -891,8 +924,7 @@ export class CatalogStore {
           lastImportedAt: timestamp,
           name,
           precondition,
-          steps,
-          expectedResult,
+          ...caseSteps,
           createdAt: timestamp,
           updatedAt: timestamp,
         });
@@ -1267,6 +1299,22 @@ export class CatalogStore {
     };
   }
 
+  async getTestRunReportContext(productId: string, runId: string): Promise<TestRunReportContext> {
+    const data = await this.read();
+    const product = data.products.find((item) => item.id === productId && !item.archivedAt);
+    if (!product) throw new CatalogError("产品不存在", 404);
+    const testRun = data.testRuns.find((item) => item.id === runId);
+    const testOrder = testRun
+      ? data.testOrders.find((item) => item.id === testRun.testOrderId && item.productId === productId)
+      : undefined;
+    if (!testRun || !testOrder) throw new CatalogError("测试执行记录不存在或不属于当前产品", 404);
+    return clone({
+      product: { id: product.id, name: product.name },
+      testOrder: { id: testOrder.id, name: testOrder.name, description: testOrder.description },
+      testRun,
+    });
+  }
+
   async getTestOrderExecutionContext(id: string): Promise<TestOrderExecutionContext> {
     const data = await this.read();
     const order = data.testOrders.find((item) => item.id === id && !item.archivedAt);
@@ -1359,6 +1407,7 @@ export class CatalogStore {
           preconditionSnapshot: testCase.precondition,
           stepsSnapshot: testCase.steps,
           expectedResultSnapshot: testCase.expectedResult,
+          stepRowsSnapshot: clone(testCase.stepRows),
           status: "queued",
         };
         scenarioRun.caseRunIds.push(caseRun.id);

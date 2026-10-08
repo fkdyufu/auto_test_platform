@@ -1,4 +1,5 @@
 import type { AssetKind } from "./assistant.js";
+import { parseStepRows, stepRowsFromLegacy, stepRowsToText } from "./test-case-steps.js";
 
 const textFields: Record<AssetKind, string[]> = {
   case: ["name", "scenarioId", "precondition", "steps", "expectedResult"],
@@ -13,6 +14,8 @@ export function applyDraftPatch(kind: AssetKind, draft: Record<string, unknown>,
     if (textFields[kind].includes(field)) {
       if (typeof value !== "string") throw new Error(`字段 ${field} 必须是文本`);
       next[field] = value;
+    } else if (field === "stepRows" && kind === "case") {
+      next.stepRows = parseStepRows(value);
     } else if ((field === "caseIds" && ["scenario", "order"].includes(kind)) || (field === "types" && kind === "device")) {
       if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) throw new Error(`字段 ${field} 必须是文本数组`);
       next[field] = [...value];
@@ -31,6 +34,12 @@ export function applyDraftPatch(kind: AssetKind, draft: Record<string, unknown>,
         return { ...input, id, ...(field === "controlInterfaces" ? { password: input.password ?? old?.password ?? "" } : {}) };
       });
     } else throw new Error(`不可修改字段 ${field}`);
+  }
+  if (kind === "case") {
+    if (values.stepRows !== undefined) Object.assign(next, stepRowsToText(parseStepRows(next.stepRows)));
+    else if (Object.hasOwn(values, "steps") || Object.hasOwn(values, "expectedResult")) {
+      next.stepRows = stepRowsFromLegacy(typeof next.steps === "string" ? next.steps : "", typeof next.expectedResult === "string" ? next.expectedResult : "");
+    }
   }
   return next;
 }

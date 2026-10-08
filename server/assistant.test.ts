@@ -158,6 +158,22 @@ test("draft patches preserve interface passwords and validate controlled form sh
   assert.throws(() => applyDraftPatch("order", {}, { caseIds: [1] }));
 });
 
+test("assistant updates paired rows in both saved cases and unsaved drafts", async (t) => {
+  const f = await fixture(t);
+  const rows = [{ step: "准备接口", expected: "" }, { step: "读取状态", expected: "状态正确" }];
+  const preview = await f.catalog.previewAssetChanges(f.product.id, [{ kind: "case", operation: "update", id: f.first.id, values: { stepRows: rows } }]);
+  await f.catalog.applyAssetChanges(f.product.id, preview);
+  const saved = await f.catalog.getTestCase(f.product.id, f.first.id);
+  assert.deepEqual(saved.stepRows, rows);
+  assert.equal(saved.steps, "1. 准备接口\n2. 读取状态");
+  const patched = applyDraftPatch("case", { steps: "旧步骤", expectedResult: "旧预期" }, { stepRows: rows });
+  assert.deepEqual(patched.stepRows, rows);
+  assert.equal(patched.expectedResult, "1. \n2. 状态正确");
+  const legacyPatched = applyDraftPatch("case", patched, { steps: "旧工具的修改" });
+  assert.deepEqual(legacyPatched.stepRows, [{ step: "旧工具的修改", expected: "1. \n2. 状态正确" }]);
+  assert.throws(() => applyDraftPatch("case", {}, { stepRows: [{ step: "执行" }] }));
+});
+
 test("assistant bounds conversation context without replaying old draft content", async (t) => {
   const f = await fixture(t);
   const conversation = await f.store.create(f.product.id);

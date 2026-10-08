@@ -78,6 +78,7 @@ test("loads product cases, test tasks, task cases and case details", async () =>
     precondition: "设备已启动",
     steps: "1. 打开页面\n2. 查看状态",
     expectedResult: "1. 页面正常\n2. 状态正常",
+    stepRows: [{ step: "打开页面", expected: "页面正常" }, { step: "查看状态", expected: "状态正常" }],
   });
   assert.equal(tokenRequests, 1);
 });
@@ -102,6 +103,23 @@ test("refreshes the token once after an authentication failure", async () => {
   await new ZentaoClient(settings, fetchImplementation).testConnection();
   assert.equal(tokenRequests, 2);
   assert.equal(productRequests, 2);
+});
+
+test("retains multiline steps and empty expectations in their original row positions", async () => {
+  const fetchImplementation = (async (input: URL | RequestInfo) => {
+    const url = new URL(input instanceof URL ? input : input.toString());
+    if (url.pathname.endsWith("/api.php/v2/users/login")) return jsonResponse({}, 404);
+    if (url.pathname.endsWith("/tokens")) return jsonResponse({ token: "runtime-token" });
+    return jsonResponse({ id: 28, product: 8, title: "打流", steps: [
+      { desc: "<p>启动抓包</p><p>记录路径</p>", expect: "" },
+      { desc: "发送流量", expect: "<p>收到报文</p><p>计数增加</p>" },
+    ] });
+  }) as typeof fetch;
+  const client = new ZentaoClient(settings, fetchImplementation);
+  assert.deepEqual((await client.getCaseImportData(28, 8)).stepRows, [
+    { step: "启动抓包\n记录路径", expected: "" },
+    { step: "发送流量", expected: "收到报文\n计数增加" },
+  ]);
 });
 
 test("rejects cases and test tasks from another product", async () => {
@@ -186,6 +204,7 @@ test("uses Zentao v2 endpoints and response envelopes", async () => {
     precondition: "设备已启动",
     steps: "1. 打开页面",
     expectedResult: "1. 页面正常",
+    stepRows: [{ step: "打开页面", expected: "页面正常" }],
   });
   assert.equal(requests.filter((item) => item.includes("/api.php/v1/")).length, 0);
   assert.ok(requests.some((item) => item.includes("pageID=1")));
