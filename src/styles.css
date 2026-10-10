@@ -964,6 +964,50 @@ button:disabled {
   min-width: 1240px;
 }
 
+.case-library-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 14px;
+  border-bottom: 1px solid var(--border);
+  padding: 16px;
+}
+
+.case-library-filters .case-search-field {
+  min-width: 0;
+  flex: 1 1 260px;
+}
+
+.case-library-filters .case-scenario-field {
+  min-width: 0;
+  flex: 0 1 240px;
+}
+
+.case-filter-summary {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+@media (max-width: 600px) {
+  .case-library-filters .case-search-field,
+  .case-library-filters .case-scenario-field {
+    flex: 1 1 100%;
+  }
+
+  .case-filter-summary {
+    width: 100%;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    margin-left: 0;
+  }
+}
+
 .cases-empty-state {
   display: flex;
   min-height: 168px;
@@ -1001,7 +1045,8 @@ button:disabled {
   width: min(980px, 100%);
 }
 
-.modal-backdrop:has(> .test-case-detail-modal) {
+.modal-backdrop:has(> .test-case-detail-modal),
+.modal-backdrop:has(> .test-order-modal) {
   z-index: 150;
 }
 
@@ -1705,6 +1750,10 @@ button:disabled {
 
 .test-order-modal {
   width: min(860px, 100%);
+}
+
+.test-order-modal .modal-body > * {
+  flex-shrink: 0;
 }
 
 .order-case-plan {

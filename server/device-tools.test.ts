@@ -280,7 +280,11 @@ test("browser snapshots use fresh references and serialize overlapping operation
   assert.notEqual(initial.elements[0].ref, refreshed.elements[0].ref);
   await assert.rejects(driver.click(initial.elements[0].ref), /已失效.*browser_inspect.*不要原样重试/);
 
-  const click = driver.click(refreshed.elements[0].ref);
+  // A failed operation now returns a fresh snapshot too, invalidating the
+  // references from before the failure just like a successful operation does.
+  const recovered = JSON.parse(await driver.inspect()) as { elements: Array<{ ref: string }> };
+  assert.notEqual(recovered.elements[0].ref, refreshed.elements[0].ref);
+  const click = driver.click(recovered.elements[0].ref);
   const inspect = driver.inspect();
   const [clicked, inspected] = await Promise.all([click, inspect]);
   assert.match(JSON.parse(clicked).text, /clicked/);

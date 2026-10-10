@@ -22,6 +22,7 @@ import { AutoResizeTextarea, InlineNotice, Modal, PageHeader, type Notice } from
 import { useAssistantPage } from "../components/AssistantContext";
 import { CaseStepsEditor } from "../components/CaseStepsEditor";
 import { stepRowsFromLegacy, stepRowsToText } from "../../shared/test-case-steps";
+import { matchesTestCaseSearch, testCaseDisplayId } from "../test-case-search";
 
 type CaseDialog = { id?: string; form: TestCaseInput } | null;
 type ImportSource = "product" | "testTask";
@@ -39,10 +40,6 @@ interface ImportDialogState {
 
 const EMPTY_CASE: TestCaseInput = { scenarioId: "", name: "", precondition: "", steps: "", expectedResult: "", stepRows: [{ step: "", expected: "" }] };
 
-function shortId(testCase: TestCase): string {
-  return testCase.zentaoCaseId ? `Z-${testCase.zentaoCaseId}` : testCase.id.slice(0, 8).toUpperCase();
-}
-
 export function TestCasesPage({
   product,
   onCasesChanged,
@@ -52,6 +49,8 @@ export function TestCasesPage({
 }) {
   const [cases, setCases] = useState<TestCase[]>([]);
   const [scenarios, setScenarios] = useState<TestScenario[]>([]);
+  const [caseQuery, setCaseQuery] = useState("");
+  const [scenarioFilter, setScenarioFilter] = useState("");
   const [caseDialog, setCaseDialog] = useState<CaseDialog>(null);
   const [importDialog, setImportDialog] = useState<ImportDialogState | null>(null);
   const [dialogError, setDialogError] = useState("");
@@ -65,6 +64,7 @@ export function TestCasesPage({
     ]);
     setCases(nextCases);
     setScenarios(nextScenarios);
+    setScenarioFilter((current) => nextScenarios.some((scenario) => scenario.id === current) ? current : "");
   };
 
   useAssistantPage({ page: "cases", title: caseDialog ? caseDialog.form.name || "新增测试用例" : "用例库", assetKind: "case", assetId: caseDialog?.id, ...(caseDialog && !submitting ? { draft: { ...caseDialog.form } } : {}) }, (draft) => {
@@ -75,6 +75,8 @@ export function TestCasesPage({
     setCaseDialog(null);
     setImportDialog(null);
     setNotice(null);
+    setCaseQuery("");
+    setScenarioFilter("");
     void reload().catch((error) =>
       setNotice({ kind: "error", message: error instanceof Error ? error.message : "读取用例库失败" }),
     );
@@ -93,7 +95,7 @@ export function TestCasesPage({
             expectedResult: testCase.expectedResult,
             stepRows: testCase.stepRows || stepRowsFromLegacy(testCase.steps, testCase.expectedResult),
           }
-        : { ...EMPTY_CASE, scenarioId: scenarios.find((scenario) => scenario.isDefault)?.id || scenarios[0]?.id || "" },
+        : { ...EMPTY_CASE, scenarioId: scenarioFilter || scenarios.find((scenario) => scenario.isDefault)?.id || scenarios[0]?.id || "" },
     });
   };
 
@@ -238,6 +240,12 @@ export function TestCasesPage({
   const scenarioName = (scenarioId: string) =>
     scenarios.find((scenario) => scenario.id === scenarioId)?.name || "场景已删除";
 
+  const filteredCases = cases.filter((testCase) =>
+    (!scenarioFilter || testCase.scenarioId === scenarioFilter) && matchesTestCaseSearch(testCase, caseQuery),
+  );
+  const scenarioCaseCounts = new Map<string, number>();
+  for (const testCase of cases) scenarioCaseCounts.set(testCase.scenarioId, (scenarioCaseCounts.get(testCase.scenarioId) || 0) + 1);
+
   return (
     <div className="page cases-page">
       <PageHeader
@@ -260,14 +268,34 @@ export function TestCasesPage({
       {notice && <InlineNotice notice={notice} onClose={() => setNotice(null)} />}
 
       <div className="list-surface cases-list-surface">
+        <div className="case-library-filters">
+          <label className="field case-search-field">
+            <span>搜索用例</span>
+            <div className="input-with-icon">
+              <Search size={16} />
+              <input type="search" value={caseQuery} onChange={(event) => setCaseQuery(event.target.value)} placeholder="输入用例名称或 ID" />
+            </div>
+          </label>
+          <label className="field case-scenario-field">
+            <span>按测试场景查看</span>
+            <select value={scenarioFilter} onChange={(event) => setScenarioFilter(event.target.value)}>
+              <option value="">全部场景（{cases.length}）</option>
+              {scenarios.map((scenario) => <option key={scenario.id} value={scenario.id}>{scenario.name}（{scenarioCaseCounts.get(scenario.id) || 0}）</option>)}
+            </select>
+          </label>
+          <div className="case-filter-summary">
+            <span role="status">显示 {filteredCases.length} / {cases.length} 个用例</span>
+            {(caseQuery || scenarioFilter) && <button type="button" className="button secondary compact" onClick={() => { setCaseQuery(""); setScenarioFilter(""); }}>清除筛选</button>}
+          </div>
+        </div>
         <div className="table-wrap">
-          {cases.length ? (
+          {filteredCases.length ? (
             <table className="data-table cases-table">
               <thead><tr><th>ID</th><th>名称</th><th>来源</th><th>测试场景</th><th>前置条件</th><th>步骤</th><th>预期结果</th><th aria-label="操作" /></tr></thead>
               <tbody>
-                {cases.map((testCase) => (
+                {filteredCases.map((testCase) => (
                   <tr key={testCase.id}>
-                    <td className="mono-cell" title={testCase.zentaoCaseId ? `禅道用例 #${testCase.zentaoCaseId}` : testCase.id}>{shortId(testCase)}</td>
+                    <td className="mono-cell" title={testCase.zentaoCaseId ? `禅道用例 #${testCase.zentaoCaseId}` : testCase.id}>{testCaseDisplayId(testCase)}</td>
                     <td className="name-cell">{testCase.name}</td>
                     <td><span className={`source-label ${testCase.source}`}>{testCase.source === "zentao" ? "禅道" : "本地"}</span></td>
                     <td><span className="category-label">{scenarioName(testCase.scenarioId)}</span></td>
@@ -283,7 +311,7 @@ export function TestCasesPage({
               </tbody>
             </table>
           ) : (
-            <div className="cases-empty-state"><FileText size={24} />暂无测试用例</div>
+            <div className="cases-empty-state"><FileText size={24} />{cases.length ? "没有匹配的用例，请调整搜索词或场景筛选" : "暂无测试用例"}</div>
           )}
         </div>
       </div>

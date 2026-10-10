@@ -4,6 +4,7 @@ import type { Browser, BrowserContext, Locator, Page } from "playwright-core";
 import { Type } from "typebox";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { ensureBrowserRuntime } from "./browser-runtime.js";
+import { readBrowserPageState } from "./browser-page-state.js";
 import type { ToolEvidence } from "./tool-evidence.js";
 import type { TestResultDetails } from "../shared/test-result.js";
 
@@ -33,6 +34,7 @@ export class BrowserDriver {
   private page?: Page;
   private operationQueue: Promise<void> = Promise.resolve();
   private nextRef = 1;
+  private nextTarget = 1;
   private activeRefs = new Set<string>();
   constructor(
     private readonly artifactsDirectory: string,
@@ -89,58 +91,7 @@ export class BrowserDriver {
     this.activeRefs.clear();
     const firstRef = this.nextRef;
     this.nextRef += 120;
-    const snapshot = await page.evaluate((firstRef) => {
-      document.querySelectorAll("[data-pi-agent-ref]").forEach((element) => {
-        element.removeAttribute("data-pi-agent-ref");
-      });
-
-      const selector = [
-        "a",
-        "button",
-        "input",
-        "textarea",
-        "select",
-        "[draggable='true']",
-        ".drag-handle",
-        "[aria-grabbed]",
-        "[role='button']",
-        "[role='link']",
-        "[role='textbox']",
-        "[contenteditable='true']",
-      ].join(",");
-
-      const elements = Array.from(document.querySelectorAll<HTMLElement>(selector))
-        .filter((element) => {
-          const style = window.getComputedStyle(element);
-          const rect = element.getBoundingClientRect();
-          return style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0;
-        })
-        .slice(0, 120)
-        .map((element, index) => {
-          const ref = `e${firstRef + index}`;
-          element.setAttribute("data-pi-agent-ref", ref);
-          const input = element as HTMLInputElement;
-          return {
-            ref: `@${ref}`,
-            tag: element.tagName.toLowerCase(),
-            role: element.getAttribute("role") || undefined,
-            text: (element.innerText || element.getAttribute("aria-label") || element.title || input.value || "").trim().slice(0, 180),
-            ariaLabel: element.getAttribute("aria-label") || undefined,
-            title: element.title || undefined,
-            placeholder: input.placeholder || undefined,
-            type: input.type || undefined,
-            name: input.name || undefined,
-            draggable: element.draggable || undefined,
-          };
-        });
-
-      return {
-        title: document.title,
-        url: window.location.href,
-        text: (document.body?.innerText || "").replace(/\s+/g, " ").trim().slice(0, 6000),
-        elements,
-      };
-    }, firstRef);
+    const snapshot = await page.evaluate(readBrowserPageState, { firstRef });
     this.activeRefs = new Set(snapshot.elements.map((element) => element.ref));
 
     const observedUrl = new URL(snapshot.url);
@@ -153,77 +104,95 @@ export class BrowserDriver {
 
   private async locator(page: Page, target: string): Promise<Locator> {
     const refMatch = target.match(/^@e(\d+)$/);
-    if (!refMatch) return page.locator(target).first();
-    if (!this.activeRefs.has(target)) throw this.staleRef(target);
-    const locator = page.locator(`[data-pi-agent-ref="e${refMatch[1]}"]`).first();
-    if (await locator.count() === 0) throw this.staleRef(target);
-    return locator;
+    if (refMatch && !this.activeRefs.has(target)) throw this.staleRef(target);
+    const locator = refMatch ? page.locator(`[data-pi-agent-ref="e${refMatch[1]}"]`) : page.locator(target);
+    if (await locator.count() === 0) {
+      if (refMatch) throw this.staleRef(target);
+      // Allow controls that appear asynchronously, but do not wait for a known
+      // hidden/closed target to become visible or choose a random first match.
+      await locator.first().waitFor({ state: "attached", timeout: 2_000 });
+    }
+    const handles = await locator.elementHandles();
+    try {
+      const { targetStates = [] } = await page.evaluate(readBrowserPageState, { targets: handles });
+      const available = targetStates.map((state, index) => ({ ...state, index })).filter((state) => state.available);
+      if (available.length === 0) throw new Error(targetStates[0]?.reason || "没有找到当前可操作的目标，请检查最新页面状态");
+      if (available.length > 1) {
+        const labels = available.slice(0, 5).map((state) => `${state.tag}「${state.label || "未标注"}」`).join("、");
+        throw new Error(`目标匹配到 ${available.length} 个可操作元素（${labels}），请使用最新 @eN 引用或更精确的选择器`);
+      }
+      // Anchor the validated element itself. A later DOM reorder must not make
+      // nth(index) silently point at a different button during Playwright retries.
+      const marker = `t${this.nextTarget++}`;
+      await handles[available[0].index].evaluate((element, marker) => {
+        (element as Element).setAttribute("data-pi-agent-target", marker);
+      }, marker);
+      return page.locator(`[data-pi-agent-target="${marker}"]`);
+    } finally {
+      await Promise.all(handles.map((handle) => handle.dispose()));
+    }
   }
 
   private staleRef(target: string): Error {
     return new Error(`元素引用 ${target} 已失效。请调用 browser_inspect 读取最新页面，再使用新引用；不要原样重试。`);
   }
 
-  private async operateOnRefs(page: Page, targets: string[], operation: () => Promise<unknown>): Promise<void> {
+  private async operate(page: Page, operation: () => Promise<unknown>, settleMs: number): Promise<string> {
+    let operated = false;
     try {
       await operation();
+      operated = true;
+      await page.waitForTimeout(settleMs);
+      return await this.inspectPage(page);
     } catch (error) {
-      for (const target of targets) {
-        const refMatch = target.match(/^@e(\d+)$/);
-        if (refMatch && (!this.activeRefs.has(target) || await page.locator(`[data-pi-agent-ref="e${refMatch[1]}"]`).count().catch(() => 0) === 0)) {
-          throw this.staleRef(target);
-        }
-      }
-      throw error;
+      const message = `${operated ? "浏览器操作已完成，但读取页面状态失败；请先检查结果，不要重复发送写操作。\n" : ""}${error instanceof Error ? error.message : String(error)}`;
+      const snapshot = await this.inspectPage(page).catch(() => undefined);
+      throw new Error(`${message}${snapshot ? `\n\n操作失败后的最新页面状态（旧引用已失效，请使用以下新引用；若出现 validationErrors，请先修正字段）：\n${snapshot}` : "\n无法读取最新页面，请重新打开或检查页面。"}`, { cause: error });
     }
   }
 
   click(target: string): Promise<string> {
     return this.serialize(async () => {
       const page = await this.ensurePage();
-      await this.operateOnRefs(page, [target], async () => (await this.locator(page, target)).click({ timeout: target.startsWith("@e") ? 2_000 : 12_000 }));
-      await page.waitForTimeout(400);
-      return this.inspectPage(page);
+      return this.operate(page, async () => (await this.locator(page, target)).click({ timeout: target.startsWith("@e") ? 2_000 : 12_000 }), 400);
     });
   }
 
   fill(target: string, value: string): Promise<string> {
     return this.serialize(async () => {
       const page = await this.ensurePage();
-      await this.operateOnRefs(page, [target], async () => (await this.locator(page, target)).fill(value, { timeout: target.startsWith("@e") ? 2_000 : 12_000 }));
-      await page.waitForTimeout(200);
-      return this.inspectPage(page);
+      return this.operate(page, async () => (await this.locator(page, target)).fill(value, { timeout: target.startsWith("@e") ? 2_000 : 12_000 }), 200);
     });
   }
 
   select(target: string, value: string): Promise<string> {
     return this.serialize(async () => {
       const page = await this.ensurePage();
-      await this.operateOnRefs(page, [target], async () => (await this.locator(page, target)).selectOption(value, { timeout: target.startsWith("@e") ? 2_000 : 12_000 }));
-      await page.waitForTimeout(200);
-      return this.inspectPage(page);
+      return this.operate(page, async () => {
+        const locator = await this.locator(page, target);
+        if (await locator.evaluate((element) => element.tagName !== "SELECT")) {
+          throw new Error("browser_select 仅支持原生 <select>。当前是自定义控件，请 browser_click 展开后，使用返回的新引用点击所需选项");
+        }
+        await locator.selectOption(value, { timeout: target.startsWith("@e") ? 2_000 : 12_000 });
+      }, 200);
     });
   }
 
   drag(sourceTarget: string, destinationTarget: string): Promise<string> {
     return this.serialize(async () => {
       const page = await this.ensurePage();
-      await this.operateOnRefs(page, [sourceTarget, destinationTarget], async () => {
+      return this.operate(page, async () => {
         const source = await this.locator(page, sourceTarget);
         const destination = await this.locator(page, destinationTarget);
         await source.dragTo(destination, { timeout: sourceTarget.startsWith("@e") || destinationTarget.startsWith("@e") ? 2_000 : 12_000 });
-      });
-      await page.waitForTimeout(500);
-      return this.inspectPage(page);
+      }, 500);
     });
   }
 
   press(key: string): Promise<string> {
     return this.serialize(async () => {
       const page = await this.ensurePage();
-      await page.keyboard.press(key);
-      await page.waitForTimeout(300);
-      return this.inspectPage(page);
+      return this.operate(page, () => page.keyboard.press(key), 300);
     });
   }
 
@@ -276,14 +245,14 @@ export function createBrowserTools(options: BrowserToolsOptions) {
     defineTool({
       name: "browser_inspect",
       label: "检查页面",
-      description: "读取当前页面文本和可交互元素。页面变化后应重新调用。",
+      description: "读取当前可见页面或活动弹窗的文本、字段标签、控件类型和 validationErrors。inViewport=false 表示可能需要滚动；已关闭弹窗不包含在结果中。每次操作返回的新快照会替换旧 @eN 引用。",
       parameters: Type.Object({}),
       execute: async () => textResult(await driver.inspect()),
     }),
     defineTool({
       name: "browser_click",
       label: "点击元素",
-      description: "点击 browser_inspect 返回的 @eN 引用，或一个 CSS 选择器。",
+      description: "点击最新快照中的 @eN 引用或 CSS 选择器；有活动弹窗时仅操作弹窗内目标。选择器有多个可操作匹配时会报错。失败会附带最新页面状态，请据此更换目标，不要重复使用旧引用。",
       parameters: Type.Object({
         target: Type.String({ description: "元素引用，如 @e3；也可以是 CSS 选择器" }),
       }),
@@ -292,7 +261,7 @@ export function createBrowserTools(options: BrowserToolsOptions) {
     defineTool({
       name: "browser_fill",
       label: "填写输入框",
-      description: "清空并填写输入框。target 使用 @eN 引用或 CSS 选择器。",
+      description: "清空并填写输入框。target 使用最新 @eN 引用或唯一 CSS 选择器。返回后检查 validationErrors；填写成功不代表字段值已通过页面校验。",
       parameters: Type.Object({
         target: Type.String(),
         value: Type.String(),
@@ -302,7 +271,7 @@ export function createBrowserTools(options: BrowserToolsOptions) {
     defineTool({
       name: "browser_select",
       label: "选择选项",
-      description: "按 value 选择下拉框选项。",
+      description: "仅对原生 <select> 按 value 选择选项。controlType=custom-select 的自定义下拉框必须先用 browser_click 展开，再使用返回的新引用点击选项。",
       parameters: Type.Object({
         target: Type.String(),
         value: Type.String(),

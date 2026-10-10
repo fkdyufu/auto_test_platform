@@ -12,6 +12,7 @@ import {
   Pencil,
   Play,
   Plus,
+  Search,
   Trash2,
   Workflow,
 } from "lucide-react";
@@ -37,6 +38,7 @@ import { useAssistantPage } from "../components/AssistantContext";
 import { CaseStepsEditor } from "../components/CaseStepsEditor";
 import { stepRowsFromLegacy, stepRowsToText } from "../../shared/test-case-steps";
 import { flattenExecutionGroups, groupCasesByExecutionOrder, moveCaseWithinScenario, moveScenarioGroup, toggleOrderedCase } from "../test-order-sequence";
+import { matchesTestCaseSearch, testCaseDisplayId } from "../test-case-search";
 
 const STATUS_LABELS: Record<RunStatus, string> = {
   queued: "等待执行",
@@ -83,6 +85,7 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
   const [dialog, setDialog] = useState<{ id?: string; form: TestOrderInput } | null>(null);
   const [caseDialog, setCaseDialog] = useState<CaseDialog | null>(null);
   const [availableCases, setAvailableCases] = useState<TestCase[]>([]);
+  const [caseQuery, setCaseQuery] = useState("");
   const [dialogError, setDialogError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
@@ -132,6 +135,7 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
     setReportRun(null);
     setDiagnosticTarget(null);
     setActiveRun(null);
+    setCaseQuery("");
     void Promise.all([
       api.getTestOrders(product.id),
       api.getTestScenarios(product.id),
@@ -163,6 +167,7 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
       ]);
       setAvailableCases(nextCases);
       setScenarios(nextScenarios);
+      setCaseQuery("");
       setDialog({
         id: order?.id,
         form: order
@@ -342,6 +347,7 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
   const executionPlanCases = groupedCases.flatMap(([, testCases]) => testCases);
   const dialogCaseGroups = dialog ? groupCasesByExecutionOrder(dialog.form.caseIds, availableCases) : [];
   const dialogExecutionCaseIds = flattenExecutionGroups(dialogCaseGroups);
+  const filteredAvailableCases = availableCases.filter((testCase) => matchesTestCaseSearch(testCase, caseQuery));
   const activeTestRun = activeRun ? detail?.runs.find((run) => run.id === activeRun.id) : undefined;
 
   return (
@@ -623,20 +629,33 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
           </div>
           <div className="case-picker-heading">
             <span>选择用例</span>
-            <small>{dialog.form.caseIds.length} / {availableCases.length}</small>
+            <small role="status">已选 {dialog.form.caseIds.length} · 显示 {filteredAvailableCases.length} / {availableCases.length}</small>
           </div>
+          <label className="field">
+            <span>搜索可选用例</span>
+            <div className="input-with-icon">
+              <Search size={16} />
+              <input
+                type="search"
+                value={caseQuery}
+                onChange={(event) => setCaseQuery(event.target.value)}
+                onKeyDown={(event) => { if (event.key === "Enter") event.preventDefault(); }}
+                placeholder="输入用例名称或 ID"
+              />
+            </div>
+          </label>
           <div className="case-picker">
-            {availableCases.map((testCase) => (
+            {filteredAvailableCases.map((testCase) => (
               <label key={testCase.id} className="case-option">
                 <input
                   type="checkbox"
                   checked={dialog.form.caseIds.includes(testCase.id)}
                   onChange={() => toggleCase(testCase.id)}
                 />
-                <span><strong>{testCase.name}</strong><small>{scenarioName(testCase.scenarioId)} · {testCase.expectedResult}</small></span>
+                <span><strong>{testCase.name}</strong><small>{testCaseDisplayId(testCase)} · {scenarioName(testCase.scenarioId)} · {testCase.expectedResult}</small></span>
               </label>
             ))}
-            {!availableCases.length && <div className="list-empty">{product.name} 暂无测试用例</div>}
+            {!filteredAvailableCases.length && <div className="list-empty">{availableCases.length ? "没有匹配的用例，请调整搜索词" : `${product.name} 暂无测试用例`}</div>}
           </div>
         </Modal>
       )}
