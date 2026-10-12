@@ -88,6 +88,11 @@ test("builds a scoped diagnostic prompt without credentials or unrelated case ev
   assert.match(prompt, /为什么没有切换/);
   assert.match(prompt, /管理 SSH\[ssh, ID: ssh-1/);
   assert.match(prompt, /历史记录未保存场景快照/);
+  assert.match(prompt, /请先根据当次用例执行快照、历史执行证据和提交的结果明细/);
+  assert.match(prompt, /只有用户本轮明确要求.*才允许调用 browser_\* 或 device_\* 工具（包括只读查询）/);
+  assert.match(prompt, /历史证据不足、被截断或未记录时.*不得自行读取设备当前状态/);
+  assert.match(prompt, /提供设备信息不代表授权访问/);
+  assert.doesNotMatch(prompt, /必要时直接使用浏览器或设备工具继续检查/);
   assert.doesNotMatch(prompt, /top-secret/);
   assert.doesNotMatch(prompt, /其他用例内容/);
   assert.doesNotMatch(prompt, /模型流式文本/);

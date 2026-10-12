@@ -7,6 +7,8 @@ const MAX_EVENT_TEXT = 1_800;
 const MAX_PROMPT_LENGTH = 48_000;
 const MAX_HISTORY_LENGTH = 12_000;
 
+export const DIAGNOSTIC_DEVICE_ACCESS_RULE = "只有用户本轮明确要求连接或访问真实设备、检查设备当前状态或在设备上复现问题时，才允许调用 browser_* 或 device_* 工具（包括只读查询）。仅要求分析日志、执行记录、执行结果或报告，或询问失败原因，不构成设备访问授权。历史对话中的设备操作要求不得自动视为本轮授权。";
+
 export interface DiagnosticEvidenceEvent {
   timestamp: string;
   type: string;
@@ -111,8 +113,8 @@ export function buildDiagnosticPrompt(
   ].filter(Boolean).join("\n");
   const rows = context.caseRun.stepRowsSnapshot || stepRowsFromLegacy(context.caseRun.stepsSnapshot, context.caseRun.expectedResultSnapshot);
   const prefix = [
-    "请结合下列上下文回答诊断对话中的最新问题。必要时直接使用浏览器或设备工具继续检查。",
-    "【上下文边界】\n- ‘执行快照’和‘历史执行证据’来自当次测试，表示历史事实。\n- ‘当前资源与环境’来自平台此刻的配置，可能已在测试后发生变化，只能用于现在的补充检查。\n- 设备凭据由平台工具内部使用，不应询问、输出或猜测密码。",
+    `请先根据当次用例执行快照、历史执行证据和提交的结果明细，回答诊断对话中的最新问题。\n${DIAGNOSTIC_DEVICE_ACCESS_RULE}\n历史证据不足、被截断或未记录时，说明能确定的事实和缺失的信息，不得自行读取设备当前状态、重新执行测试或修改配置来推断历史失败原因。`,
+    "【上下文边界】\n- ‘执行快照’和‘历史执行证据’来自当次测试，表示历史事实。\n- ‘当前资源与环境’来自平台此刻的配置，可能已在测试后发生变化；提供设备信息不代表授权访问，仅在用户本轮明确要求设备访问后供补充检查使用。设备当前状态不能作为历史测试发生时状态的证明。\n- 设备凭据由平台工具内部使用，不应询问、输出或猜测密码。",
     `【产品与测试单】\n产品：${context.product.name}（${context.product.id}）\n产品描述：${context.product.description || "无"}\n测试单：${context.testOrder.name}（${context.testOrder.id}）`,
     `【当前资源与环境】\n${limitText(formatDevices(context), 8_000)}`,
     `【测试场景】\n${limitText(formatScenario(context), 6_000)}`,

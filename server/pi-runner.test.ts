@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import test from "node:test";
-import { executePiRun, AgentExecutionError, type RunnerEvent } from "./pi-runner.js";
+import { executePiRun, executePiDiagnostic, AgentExecutionError, type RunnerEvent } from "./pi-runner.js";
 import { modelRuntimePaths, type ModelSettings } from "./settings-store.js";
 import { buildExecutionPolicy } from "./execution-policy.js";
 
@@ -36,10 +36,35 @@ async function fixture(t: test.TestContext, answer: (index: number, body: Record
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const settings: ModelSettings = { providerPreset: "custom", apiType: "openai-completions", reasoningLevel: "max", model: "mock", baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, apiKey: "mock-private-key", userAgent: "" };
   const execute = (onAbortReady: (abort: () => Promise<void>) => void = () => {}) => executePiRun({ runId: "recovery", phase: "case", requirement: "通过 Web 配置镜像并验证", settings, onEvent: (event) => events.push(event), onAbortReady });
-  return { requests, events, execute };
+  return { requests, events, execute, settings };
 }
 
 const finishCall = { role: "assistant", tool_calls: [{ index: 0, id: "finish", type: "function", function: { name: "finish_test", arguments: JSON.stringify({ status: "failed", summary: "观察主机没有捕获到业务帧，验证未通过，根因尚未确认" }) } }] };
+
+test("diagnostic model requests require explicit current-turn device access and prioritize historical evidence", async (t) => {
+  const f = await fixture(t, () => ({ delta: { role: "assistant", content: "根据历史记录，未观察到备机接管；没有查询设备当前状态。" } }));
+  const prompt = "当次执行结论：未观察到备机接管。最新问题：从执行记录上看，失败的原因是什么？";
+  const result = await executePiDiagnostic({
+    runId: "historical-diagnostic", prompt, settings: f.settings,
+    onEvent: (event) => f.events.push(event), onAbortReady: () => {},
+  });
+  assert.equal(f.requests.length, 1);
+  const messages = f.requests[0].messages as { role: string; content: unknown }[];
+  const instructions = messages.find((message) => message.role === "system" || message.role === "developer");
+  assert.ok(instructions, `request roles: ${messages.map((message) => message.role).join(", ")}`);
+  const system = JSON.stringify(instructions.content);
+  assert.match(system, /默认先依据当次执行快照、历史日志和结果明细/);
+  assert.match(system, /只有用户本轮明确要求.*才允许调用 browser_\* 或 device_\* 工具（包括只读查询）/);
+  assert.match(system, /历史对话中的设备操作要求不得自动视为本轮授权/);
+  assert.match(system, /历史证据不足、被截断或未记录时.*不得自行访问设备、重跑测试或修改配置/);
+  assert.doesNotMatch(system, /必要时直接调用浏览器或 device_\* 工具补充检查/);
+  assert.ok(messages.some((message) => message.role === "user" && JSON.stringify(message.content).includes(prompt)));
+  const tools = f.requests[0].tools as { function: { name: string } }[];
+  assert.ok(tools.some((tool) => tool.function.name === "browser_open"));
+  assert.ok(!tools.some((tool) => tool.function.name === "finish_test"));
+  assert.equal(f.events.some((event) => event.type === "tool_start"), false);
+  assert.match(result.finalText, /根据历史记录/);
+});
 
 test("unfinished runs get exactly one finish-only recovery without repeating device actions", async (t) => {
   const f = await fixture(t, (index) => ({ delta: index === 1 ? { role: "assistant", content: "准备继续分析" } : index === 2 ? finishCall : { role: "assistant", content: "已提交失败结论" }, finish: index === 2 ? "tool_calls" : "stop" }));
