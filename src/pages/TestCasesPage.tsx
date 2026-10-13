@@ -291,17 +291,14 @@ export function TestCasesPage({
         <div className="table-wrap">
           {filteredCases.length ? (
             <table className="data-table cases-table">
-              <thead><tr><th>ID</th><th>名称</th><th>来源</th><th>测试场景</th><th>前置条件</th><th>步骤</th><th>预期结果</th><th aria-label="操作" /></tr></thead>
+              <thead><tr><th>ID</th><th>名称</th><th>来源</th><th>测试场景</th><th aria-label="操作" /></tr></thead>
               <tbody>
                 {filteredCases.map((testCase) => (
                   <tr key={testCase.id}>
                     <td className="mono-cell" title={testCase.zentaoCaseId ? `禅道用例 #${testCase.zentaoCaseId}` : testCase.id}>{testCaseDisplayId(testCase)}</td>
-                    <td className="name-cell">{testCase.name}</td>
+                    <td className="name-cell"><button className="link-button" onClick={() => openCaseDialog(testCase)} title="查看并编辑用例">{testCase.name}</button></td>
                     <td><span className={`source-label ${testCase.source}`}>{testCase.source === "zentao" ? "禅道" : "本地"}</span></td>
                     <td><span className="category-label">{scenarioName(testCase.scenarioId)}</span></td>
-                    <td className="truncate-cell">{testCase.precondition || "-"}</td>
-                    <td className="truncate-cell">{testCase.steps}</td>
-                    <td className="truncate-cell">{testCase.expectedResult}</td>
                     <td><div className="row-actions">
                       <button className="icon-action" onClick={() => openCaseDialog(testCase)} title="编辑用例"><Pencil size={16} /></button>
                       <button className="icon-action danger" onClick={() => void deleteCase(testCase)} title="删除用例"><Trash2 size={16} /></button>

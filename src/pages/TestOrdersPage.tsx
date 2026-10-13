@@ -473,27 +473,23 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
               <span className="muted-count">按场景组和组内用例顺序执行</span>
             </div>
             <div className="table-wrap">
-              <table className="data-table">
+              <table className="data-table order-cases-table">
                 <thead>
-                  <tr><th>顺序</th><th>测试场景</th><th>用例名称</th><th>前置条件</th><th>测试步骤</th><th>预期结果</th><th aria-label="操作" /></tr>
+                  <tr><th>顺序</th><th>用例名称</th><th aria-label="操作" /></tr>
                 </thead>
                 <tbody>
                   {groupedCases.map(([scenarioId, testCases]) => <Fragment key={scenarioId}>
                     <tr className="scenario-group-row">
-                      <td colSpan={7}><div><Workflow size={14} /><strong>{scenarioName(scenarioId)}</strong><span>{testCases.length} 个用例</span></div></td>
+                      <td colSpan={3}><div><Workflow size={14} /><strong>{scenarioName(scenarioId)}</strong><span>{testCases.length} 个用例</span></div></td>
                     </tr>
                     {testCases.map((testCase) => (
                       <tr key={testCase.id}>
                         <td className="order-index">{String(executionPlanCases.indexOf(testCase) + 1).padStart(2, "0")}</td>
-                        <td><span className="category-label">{scenarioName(testCase.scenarioId)}</span></td>
                         <td className="name-cell">
                           <button className="link-button" onClick={() => openCaseDialog(testCase)} title="查看并编辑用例">
                             {testCase.name}
                           </button>
                         </td>
-                        <td className="truncate-cell">{testCase.precondition || "-"}</td>
-                        <td className="truncate-cell">{testCase.steps}</td>
-                        <td className="truncate-cell">{testCase.expectedResult}</td>
                         <td>
                           <button className="button secondary compact" onClick={() => void execute(detail, testCase.id)} disabled={active}>
                             <Play size={15} />
