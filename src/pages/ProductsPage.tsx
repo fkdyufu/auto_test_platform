@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { Package, Pencil, Plus, Trash2 } from "lucide-react";
+import { ClipboardList, Library, Link2, Package, Pencil, Plus, Trash2 } from "lucide-react";
 import {
   api,
   type ProductInput,
@@ -96,9 +96,21 @@ export function ProductsPage({
           </header>
 
           <div className="detail-content">
+            <div className="product-stats">
+              <div className="product-stat">
+                <span className="product-stat-icon"><Library size={18} /></span>
+                <div><span>用例</span><strong>{product.caseCount}</strong></div>
+              </div>
+              <div className="product-stat">
+                <span className="product-stat-icon"><ClipboardList size={18} /></span>
+                <div><span>测试单</span><strong>{product.orderCount}</strong></div>
+              </div>
+              <div className="product-stat">
+                <span className="product-stat-icon"><Link2 size={18} /></span>
+                <div><span>禅道产品 ID</span><strong className={product.zentaoId ? "" : "unset"}>{product.zentaoId || "未配置"}</strong></div>
+              </div>
+            </div>
             <dl className="definition-grid">
-              <div><dt>产品名称</dt><dd>{product.name}</dd></div>
-              <div><dt>禅道产品 ID</dt><dd>{product.zentaoId || "未配置"}</dd></div>
               <div className="wide"><dt>产品描述</dt><dd>{product.description || "暂无产品描述"}</dd></div>
               <div><dt>创建日期</dt><dd>{formatDate(product.createdAt)}</dd></div>
               <div><dt>最后更新</dt><dd>{formatDate(product.updatedAt)}</dd></div>
