@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   AlertCircle,
   Bot,
-  ChevronRight,
   CircleStop,
   Cpu,
   Eye,
@@ -179,7 +178,10 @@ function App() {
           <span className="brand-mark" aria-hidden="true">
             <TestTubeDiagonal size={20} strokeWidth={2} />
           </span>
-          <span className="brand-name">AI Test Runner</span>
+          <span className="brand-text">
+            <span className="brand-name">AI Test Runner</span>
+            <span className="brand-tagline">智能自动化测试平台</span>
+          </span>
         </div>
 
         <label className="product-context">
@@ -190,36 +192,31 @@ function App() {
           </select>
         </label>
 
+        <div className="nav-section-label">工作台</div>
         <nav className="nav-list" aria-label="主导航">
           <button className={`nav-item ${page === "products" ? "active" : ""}`} onClick={() => navigate("products")} title="产品概览">
             <Package size={18} />
             <span>产品概览</span>
-            {page === "products" && <ChevronRight className="nav-chevron" size={16} />}
           </button>
           <button className={`nav-item ${page === "resources" ? "active" : ""}`} onClick={() => navigate("resources")} title="资源与场景" disabled={!activeProduct}>
             <Network size={18} />
             <span>资源与场景</span>
-            {page === "resources" && <ChevronRight className="nav-chevron" size={16} />}
           </button>
           <button className={`nav-item ${page === "cases" ? "active" : ""}`} onClick={() => navigate("cases")} title="用例库" disabled={!activeProduct}>
             <Library size={18} />
             <span>用例库</span>
-            {page === "cases" && <ChevronRight className="nav-chevron" size={16} />}
           </button>
           <button className={`nav-item ${page === "orders" ? "active" : ""}`} onClick={() => navigate("orders")} title="测试单" disabled={!activeProduct}>
             <ClipboardList size={18} />
             <span>测试单</span>
-            {page === "orders" && <ChevronRight className="nav-chevron" size={16} />}
           </button>
           <button className={`nav-item ${page === "run" ? "active" : ""}`} onClick={() => navigate("run")} title="自由执行">
             <Play size={18} />
             <span>自由执行</span>
-            {page === "run" && <ChevronRight className="nav-chevron" size={16} />}
           </button>
           <button className={`nav-item ${page === "settings" ? "active" : ""}`} onClick={() => navigate("settings")} title="设置">
             <Settings2 size={18} />
             <span>设置</span>
-            {page === "settings" && <ChevronRight className="nav-chevron" size={16} />}
           </button>
         </nav>
 
