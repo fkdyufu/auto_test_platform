@@ -9,6 +9,7 @@ import type { ToolEvidence } from "./tool-evidence.js";
 import {
   CHECK_ACTUAL_MAX_LENGTH,
   EVIDENCE_ITEM_MAX_LENGTH,
+  EVIDENCE_MAX_ITEMS,
   HEADLINE_MAX_LENGTH,
   NOTES_MAX_LENGTH,
   resolveFinishSubmission,
@@ -338,7 +339,7 @@ export function createBrowserTools(options: BrowserToolsOptions) {
           result: Type.Union([Type.Literal("passed"), Type.Literal("failed"), Type.Literal("not_run")], { description: "该步骤预期是否满足；因前置失败或中断而未执行填 not_run" }),
           actual: Type.String({ description: `与该步预期对照的实际观察，不超过 ${CHECK_ACTUAL_MAX_LENGTH} 字，只写事实` }),
         }), { description: caseExecution ? `必填，每个用例步骤一条，共 ${options.stepCount} 条` : "仅执行测试用例时使用" })),
-        evidence: Type.Optional(Type.Array(Type.String(), { description: `关键证据，每条一项（命令输出要点、计数、截图或文件路径），每条不超过 ${EVIDENCE_ITEM_MAX_LENGTH} 字；只写实际获取的证据` })),
+        evidence: Type.Optional(Type.Array(Type.String(), { description: `关键证据，每条一项（命令输出要点、计数、截图或文件路径），最多 ${EVIDENCE_MAX_ITEMS} 条，每条不超过 ${EVIDENCE_ITEM_MAX_LENGTH} 字；只写实际获取的证据` })),
         notes: Type.Optional(Type.String({ description: `可选，不超过 ${NOTES_MAX_LENGTH} 字：推测的原因、环境限制或对用例本身的意见，须明确标注为推测` })),
         log: Type.Optional(Type.String({ description: "可选：完整的执行过程记录，报告中默认折叠" })),
       }),
