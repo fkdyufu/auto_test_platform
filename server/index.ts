@@ -289,7 +289,11 @@ function buildScenarioSetupRequirement(
   scenarioRun: ScenarioRun,
   context: TestOrderExecutionContext,
 ): string {
-  return `为后续测试用例搭建并验证测试场景。${buildDeviceDescription(context)}\n\n${buildScenarioDescription(scenario, scenarioRun, context)}\n\n场景搭建要求：\n${scenario.setupInstructions}\n\n场景验证要求：\n${scenario.verificationInstructions}\n\n请严格按指定设备、接口和步骤执行。先读取相关配置，按搭建要求清除冲突并应用目标配置，然后逐项验证。不允许自行替换设备、选择其他拓扑或省略验证。无法达到要求时提交失败。当前未提供的控制接口不得假装已调用。完成后调用 finish_test 提交结论，角色绑定由平台提供，不需要提交。`;
+  return `为后续测试用例搭建并验证测试场景。${buildDeviceDescription(context)}\n\n${buildScenarioDescription(scenario, scenarioRun, context)}\n\n场景搭建要求：\n${scenario.setupInstructions}\n\n场景验证要求：\n${scenario.verificationInstructions}\n\n请严格按指定设备、接口和步骤执行。先读取相关配置，按搭建要求清除冲突并应用目标配置，然后逐项验证。不允许自行替换设备、选择其他拓扑或省略验证。无法达到要求时提交失败。当前未提供的控制接口不得假装已调用。完成后调用 finish_test 提交结论：headline 一句话说明搭建是否完成，搭建后各设备接口、地址和链路的实际状态写在 log，供后续用例参考；角色绑定由平台提供，不需要提交。`;
+}
+
+function caseStepRows(caseRun: CaseRun) {
+  return caseRun.stepRowsSnapshot || stepRowsFromLegacy(caseRun.stepsSnapshot, caseRun.expectedResultSnapshot);
 }
 
 function buildCaseRequirement(
@@ -298,7 +302,7 @@ function buildCaseRequirement(
   scenarioRun: ScenarioRun,
   context: TestOrderExecutionContext,
 ): string {
-  const rows = caseRun.stepRowsSnapshot || stepRowsFromLegacy(caseRun.stepsSnapshot, caseRun.expectedResultSnapshot);
+  const rows = caseStepRows(caseRun);
   return [
     `执行产品测试用例。${buildDeviceDescription(context)}`,
     buildScenarioDescription(scenario, scenarioRun, context),
@@ -306,7 +310,7 @@ function buildCaseRequirement(
     `用例名称：${caseRun.caseNameSnapshot}`,
     `前置条件：\n${caseRun.preconditionSnapshot || "无"}`,
     `用例步骤（每一步与其预期逐行对应）：\n${formatStepRows(rows)}`,
-    "请先检查前置条件；未满足时按前置条件及执行规则做必要准备，并回读验证。准备成功后按顺序执行每一步并检查对应预期；无法准备时提交 failed，摘要说明‘前置准备失败’及原因。用例没有任何预期结果时应报告缺少判定依据，不能提交通过。最后根据实际观察调用 finish_test：summary 用一句话概括结论；failed 时尽量分别填写 expected（未满足的预期或前置条件）、actual（实际观察）和 evidence（已获取的关键证据）。没有实际证据的字段留空，不要编造，也不要因整理结论继续操作设备。",
+    "请先检查前置条件；未满足时按前置条件及执行规则做必要准备，并回读验证。准备成功后按顺序执行每一步并检查对应预期；无法准备时提交 failed，摘要说明‘前置准备失败’及原因。用例没有任何预期结果时应报告缺少判定依据，不能提交通过。最后根据实际观察调用 finish_test：headline 用一句话（不超过 60 字）给出结论，失败时直接说明哪里不符合；checks 按上面的步骤逐条填写是否满足对应预期及实际观察；failed 时用 failureType 区分产品缺陷、用例问题和环境限制；evidence 每条列一项关键证据；推测的原因写在 notes；完整过程可放在 log。没有实际证据的内容不要编造，也不要因整理结论继续操作设备。",
   ].join("\n\n");
 }
 
@@ -371,7 +375,7 @@ async function executeScenarioCleanup(
       },
     });
     const result = resolveRunResult(execution);
-    return { outcome: result.outcome, summary: result.message };
+    return { outcome: result.outcome, summary: result.fullText };
   } catch (error) {
     const reason = error instanceof Error ? error.message : "场景清理失败";
     return {
@@ -460,9 +464,9 @@ async function executeTestOrderRun(run: RunRecord, order: TestOrder, testRun: Te
         });
         if (!run.cancelRequested) {
           const result = resolveRunResult(execution);
-          if (result.outcome === "failed") setupFailure = result.message;
+          if (result.outcome === "failed") setupFailure = result.fullText;
           else {
-            scenarioRun.summary = result.message;
+            scenarioRun.summary = result.fullText;
             await updateStoredScenarioRun(testRun.id, scenarioRun.id, {
               summary: scenarioRun.summary,
             });
@@ -539,6 +543,7 @@ async function executeTestOrderRun(run: RunRecord, order: TestOrder, testRun: Te
             runId: caseRun.id,
             phase: "case",
             requirement: buildCaseRequirement(caseRun, scenario!, scenarioRun, executionContext),
+            stepCount: caseStepRows(caseRun).length,
             settings,
             devices: executionContext.devices,
             onEvent: (event) =>

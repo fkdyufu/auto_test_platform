@@ -52,6 +52,8 @@ export interface PiRunOptions {
   onAbortReady: (abort: () => Promise<void>) => void;
   devices?: DeviceResource[];
   phase?: ExecutionPhase;
+  // Step rows of the executed test case; finish_test then requires one check per step.
+  stepCount?: number;
 }
 
 export interface PiDiagnosticOptions extends Omit<PiRunOptions, "requirement"> {
@@ -187,14 +189,9 @@ async function executePiAgent(options: PiAgentOptions): Promise<{ result?: Finis
     artifactsDirectory: modelRuntimePaths.artifactsDirectory,
     evidence,
     includeFinishTool: options.includeFinishTool,
+    stepCount: options.stepCount,
     onFinish: (result) => {
-      finishResult = {
-        ...result,
-        summary: redact(result.summary),
-        ...(result.expected ? { expected: redact(result.expected) } : {}),
-        ...(result.actual ? { actual: redact(result.actual) } : {}),
-        ...(result.evidence ? { evidence: redact(result.evidence) } : {}),
-      };
+      finishResult = redactArgs(result) as FinishResult;
     },
   });
   const deviceToolset = createDeviceTools({ devices: options.devices || [], evidence });

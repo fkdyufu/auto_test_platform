@@ -35,11 +35,11 @@ async function fixture(t: test.TestContext, answer: (index: number, body: Record
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const settings: ModelSettings = { providerPreset: "custom", apiType: "openai-completions", reasoningLevel: "max", model: "mock", baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, apiKey: "mock-private-key", userAgent: "" };
-  const execute = (onAbortReady: (abort: () => Promise<void>) => void = () => {}) => executePiRun({ runId: "recovery", phase: "case", requirement: "通过 Web 配置镜像并验证", settings, onEvent: (event) => events.push(event), onAbortReady });
+  const execute = (onAbortReady: (abort: () => Promise<void>) => void = () => {}, stepCount?: number) => executePiRun({ runId: "recovery", phase: "case", requirement: "通过 Web 配置镜像并验证", settings, onEvent: (event) => events.push(event), onAbortReady, stepCount });
   return { requests, events, execute, settings };
 }
 
-const finishCall = { role: "assistant", tool_calls: [{ index: 0, id: "finish", type: "function", function: { name: "finish_test", arguments: JSON.stringify({ status: "failed", summary: "观察主机没有捕获到业务帧，验证未通过，根因尚未确认" }) } }] };
+const finishCall = { role: "assistant", tool_calls: [{ index: 0, id: "finish", type: "function", function: { name: "finish_test", arguments: JSON.stringify({ status: "failed", headline: "观察主机没有捕获到业务帧，验证未通过，根因尚未确认" }) } }] };
 
 test("diagnostic model requests require explicit current-turn device access and prioritize historical evidence", async (t) => {
   const f = await fixture(t, () => ({ delta: { role: "assistant", content: "根据历史记录，未观察到备机接管；没有查询设备当前状态。" } }));
@@ -125,17 +125,43 @@ test("a successful retry clears the initial model error", async (t) => {
 });
 
 test("saved tool output and structured conclusions redact configured secrets", async (t) => {
-  const privateFinishCall = { role: "assistant", tool_calls: [{ index: 0, id: "private-finish", type: "function", function: { name: "finish_test", arguments: JSON.stringify({ status: "failed", summary: "未完成 mock-private-key", expected: "预期 mock-private-key", actual: "实际 mock-private-key", evidence: "证据 mock-private-key" }) } }] };
+  const privateFinishCall = { role: "assistant", tool_calls: [{ index: 0, id: "private-finish", type: "function", function: { name: "finish_test", arguments: JSON.stringify({ status: "failed", headline: "未完成 mock-private-key", evidence: ["证据 mock-private-key"], notes: "推测 mock-private-key", log: "过程 mock-private-key" }) } }] };
   const f = await fixture(t, (index) => ({ delta: index === 1 ? privateFinishCall : { role: "assistant", content: "已提交 mock-private-key" }, finish: index === 1 ? "tool_calls" : "stop" }));
   const result = await f.execute();
   assert.doesNotMatch(result.finalText, /mock-private-key/);
   assert.doesNotMatch(result.result!.summary, /mock-private-key/);
   assert.doesNotMatch(JSON.stringify(result.result), /mock-private-key/);
-  assert.match(result.result!.evidence || "", /\[REDACTED\]/);
+  assert.match(result.result!.evidenceList?.[0] || "", /\[REDACTED\]/);
+  assert.match(result.result!.log || "", /\[REDACTED\]/);
   const output = f.events.find((event) => event.type === "tool_end")!;
   assert.ok(output.toolOutput);
   assert.doesNotMatch(output.toolOutput, /mock-private-key/);
   assert.doesNotMatch(JSON.stringify(f.events), /mock-private-key/);
+});
+
+test("rejected conclusion formats are resubmitted with per-step checks", async (t) => {
+  const call = (id: string, args: unknown) => ({ role: "assistant", tool_calls: [{ index: 0, id, type: "function", function: { name: "finish_test", arguments: JSON.stringify(args) } }] });
+  const invalid = call("finish-invalid", { status: "failed", headline: `前置条件已满足。${"执行过程很长。".repeat(12)}` });
+  const valid = call("finish-valid", {
+    status: "failed",
+    headline: "第 2 步镜像报文未到达观察主机",
+    failureType: "product_defect",
+    checks: [{ step: 1, result: "passed", actual: "配置已保存" }, { step: 2, result: "failed", actual: "observer 抓包 0 包" }],
+    evidence: ["tcpdump：0 packets captured"],
+  });
+  const f = await fixture(t, (index) => ({ delta: index === 1 ? invalid : index === 2 ? valid : { role: "assistant", content: "已提交" }, finish: index <= 2 ? "tool_calls" : "stop" }));
+  const result = await f.execute(undefined, 2);
+  const rejection = f.events.find((event) => event.type === "tool_end" && event.tool === "finish_test" && event.error);
+  assert.match(rejection?.toolOutput || "", /headline 有 \d+ 字，超过 60 字上限/);
+  assert.match(rejection?.toolOutput || "", /checks 须与用例的 2 个步骤一一对应/);
+  assert.match(rejection?.toolOutput || "", /failureType/);
+  assert.deepEqual(result.result, {
+    status: "failed",
+    summary: "第 2 步镜像报文未到达观察主机",
+    failureType: "product_defect",
+    checks: [{ step: 1, result: "passed", actual: "配置已保存" }, { step: 2, result: "failed", actual: "observer 抓包 0 包" }],
+    evidenceList: ["tcpdump：0 packets captured"],
+  });
 });
 
 test("the case policy prepares and verifies preconditions without repairing a failed assertion", () => {

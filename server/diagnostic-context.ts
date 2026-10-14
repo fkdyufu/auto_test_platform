@@ -1,6 +1,7 @@
 import type { DiagnosticExecutionContext } from "./catalog-store.js";
 import type { DiagnosticMessage } from "./diagnostic-store.js";
 import { formatStepRows, stepRowsFromLegacy } from "../shared/test-case-steps.js";
+import { FAILURE_TYPE_LABELS, STEP_CHECK_LABELS } from "../shared/test-result.js";
 
 const MAX_EVIDENCE_EVENTS = 40;
 const MAX_EVENT_TEXT = 1_800;
@@ -107,6 +108,11 @@ export function buildDiagnosticPrompt(
   const history = formatHistory(messages);
   const details = context.caseRun.resultDetails;
   const resultDetails = [
+    details?.failureType && `失败类型：${FAILURE_TYPE_LABELS[details.failureType]}`,
+    details?.checks?.length && `逐步结果：\n${limitText(details.checks.map((check) => `步骤 ${check.step}【${STEP_CHECK_LABELS[check.result]}】${check.actual}`).join("\n"), 4_000)}`,
+    details?.evidenceList?.length && `关键证据：\n${limitText(details.evidenceList.map((item) => `- ${item}`).join("\n"), 3_000)}`,
+    details?.notes && `备注（推测或环境说明）：${limitText(details.notes, 1_000)}`,
+    details?.log && `执行记录：${limitText(details.log, 4_000)}`,
     details?.expected && `预期：${limitText(details.expected, 2_000)}`,
     details?.actual && `实际观察：${limitText(details.actual, 2_000)}`,
     details?.evidence && `关键证据：${limitText(details.evidence, 3_000)}`,

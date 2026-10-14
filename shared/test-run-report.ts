@@ -1,11 +1,16 @@
-import type { TestResultDetails } from "./test-result.js";
+import type { FailureType, StepCheckResult, TestResultDetails } from "./test-result.js";
+import { stepRowsFromLegacy, type TestCaseStep } from "./test-case-steps.js";
 
 type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 
 interface CaseRun {
   id: string;
+  testCaseId?: string;
   scenarioRunId: string;
   caseNameSnapshot: string;
+  stepsSnapshot?: string;
+  expectedResultSnapshot?: string;
+  stepRowsSnapshot?: TestCaseStep[];
   status: RunStatus;
   outcome?: "passed" | "failed";
   summary?: string;
@@ -28,14 +33,26 @@ interface ReportRunSource {
 
 export type ReportCaseState = "passed" | "failed" | "cancelled" | "pending";
 
+export interface ReportStepResult {
+  index: number;
+  step: string;
+  expected: string;
+  result?: StepCheckResult;
+  actual?: string;
+}
+
 export interface ReportCaseResult {
   id: string;
+  testCaseId?: string;
   name: string;
   scenarioName: string;
   state: ReportCaseState;
   status: RunStatus;
   summary: string;
   resultDetails?: TestResultDetails;
+  failureType?: FailureType;
+  // Present when the conclusion was submitted with per-step checks.
+  steps?: ReportStepResult[];
   durationMs?: number;
 }
 
@@ -54,7 +71,31 @@ export interface TestRunReport {
   passRate: number;
   cases: ReportCaseResult[];
   failedCases: ReportCaseResult[];
+  failureTypeCounts: Partial<Record<FailureType, number>>;
   scenarioIssues: ReportScenarioIssue[];
+}
+
+const FAILURE_TYPE_ORDER: FailureType[] = ["product_defect", "case_issue", "environment"];
+
+function stepResults(caseRun: CaseRun): ReportStepResult[] | undefined {
+  const checks = caseRun.resultDetails?.checks;
+  if (!checks?.length) return undefined;
+  const rows = caseRun.stepRowsSnapshot?.length
+    ? caseRun.stepRowsSnapshot
+    : stepRowsFromLegacy(caseRun.stepsSnapshot || "", caseRun.expectedResultSnapshot || "");
+  const byStep = new Map(checks.map((check) => [check.step, check]));
+  const count = Math.max(rows.length, ...checks.map((check) => check.step));
+  return Array.from({ length: count }, (_, offset) => {
+    const index = offset + 1;
+    const row = rows[offset];
+    const check = byStep.get(index);
+    return { index, step: row?.step || "", expected: row?.expected || "", result: check?.result, actual: check?.actual };
+  });
+}
+
+function failureRank(item: ReportCaseResult): number {
+  const rank = item.failureType ? FAILURE_TYPE_ORDER.indexOf(item.failureType) : -1;
+  return rank === -1 ? FAILURE_TYPE_ORDER.length : rank;
 }
 
 export function previewReportText(value: string, limit = 140): string {
@@ -91,14 +132,18 @@ export function buildTestRunReport(run: ReportRunSource): TestRunReport {
   const cases = run.caseRuns.map((caseRun): ReportCaseResult => {
     const scenario = scenarioByRunId.get(caseRun.scenarioRunId);
     const state = caseState(caseRun);
+    const steps = stepResults(caseRun);
     return {
       id: caseRun.id,
+      testCaseId: caseRun.testCaseId,
       name: caseRun.caseNameSnapshot,
       scenarioName: scenario?.scenarioNameSnapshot || "场景已删除",
       state,
       status: caseRun.status,
       summary: caseRun.summary || (state === "pending" ? "尚未执行或未产生结论" : "未记录执行结论"),
       resultDetails: caseRun.resultDetails,
+      ...(state === "failed" && caseRun.resultDetails?.failureType ? { failureType: caseRun.resultDetails.failureType } : {}),
+      ...(steps ? { steps } : {}),
       durationMs: durationMs(caseRun.startedAt, caseRun.finishedAt),
     };
   });
@@ -141,7 +186,12 @@ export function buildTestRunReport(run: ReportRunSource): TestRunReport {
     incomplete,
     passRate: cases.length ? Math.round((passed / cases.length) * 100) : 0,
     cases,
-    failedCases: cases.filter((item) => item.state === "failed"),
+    // Stable sort: product defects first, then case issues, environment limits and untyped legacy failures.
+    failedCases: cases.filter((item) => item.state === "failed").sort((a, b) => failureRank(a) - failureRank(b)),
+    failureTypeCounts: cases.reduce<Partial<Record<FailureType, number>>>((counts, item) => {
+      if (item.failureType) counts[item.failureType] = (counts[item.failureType] || 0) + 1;
+      return counts;
+    }, {}),
     scenarioIssues,
   };
 }

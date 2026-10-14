@@ -712,6 +712,7 @@ export function TestOrdersPage({ product }: { product: ProductSummary }) {
           productId={product.id}
           run={reportRun}
           orderName={detail.name}
+          caseCodes={Object.fromEntries(detail.cases.map((testCase) => [testCase.id, testCaseDisplayId(testCase)]))}
           onDiagnose={(target) => {
             setDiagnosticTarget({ testRunId: reportRun.id, ...target });
             setReportRun(null);

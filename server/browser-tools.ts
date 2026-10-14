@@ -6,12 +6,14 @@ import { defineTool } from "@earendil-works/pi-coding-agent";
 import { ensureBrowserRuntime } from "./browser-runtime.js";
 import { readBrowserPageState } from "./browser-page-state.js";
 import type { ToolEvidence } from "./tool-evidence.js";
-import type { TestResultDetails } from "../shared/test-result.js";
-
-interface FinishResult extends TestResultDetails {
-  status: "passed" | "failed";
-  summary: string;
-}
+import {
+  CHECK_ACTUAL_MAX_LENGTH,
+  EVIDENCE_ITEM_MAX_LENGTH,
+  HEADLINE_MAX_LENGTH,
+  NOTES_MAX_LENGTH,
+  resolveFinishSubmission,
+  type FinishResult,
+} from "./finish-result.js";
 
 interface BrowserToolsOptions {
   runId: string;
@@ -19,6 +21,8 @@ interface BrowserToolsOptions {
   onFinish: (result: FinishResult) => void;
   evidence: ToolEvidence;
   includeFinishTool?: boolean;
+  // Step rows of the test case being executed; enables per-step checks.
+  stepCount?: number;
 }
 
 function textResult(text: string, details: Record<string, unknown> = {}) {
@@ -315,28 +319,40 @@ export function createBrowserTools(options: BrowserToolsOptions) {
       },
     }),
   ];
+  let rejectedSubmissions = 0;
+  const caseExecution = options.stepCount !== undefined;
   const finishTool = defineTool({
       name: "finish_test",
       label: "结束测试",
-      description: "完成需求后必须调用一次，提交通过或失败结论。",
+      description: caseExecution
+        ? `完成需求后必须调用一次，提交通过或失败结论。headline 只写一句结论；checks 按用例步骤逐条填写，条数必须等于用例步骤数（${options.stepCount}）。格式不符时会被拒绝并说明原因，按提示修正后重新调用即可，不要为此重新操作设备。`
+        : "完成需求后必须调用一次，提交通过或失败结论。headline 只写一句结论，过程放在 log。格式不符时会被拒绝并说明原因，按提示修正后重新调用。",
       parameters: Type.Object({
         status: Type.Union([Type.Literal("passed"), Type.Literal("failed")]),
-        summary: Type.String({ description: "基于实际观察的一句话结论，失败时说明失败点；详细信息填在后续字段" }),
-        expected: Type.Optional(Type.String({ description: "预期行为；执行用例失败时填写，前置准备失败时填写所需条件" })),
-        actual: Type.Optional(Type.String({ description: "实际观察；执行用例失败时填写，明确区分事实和推测" })),
-        evidence: Type.Optional(Type.String({ description: "关键证据：设备输出、状态值、计数或截图路径；只写实际获取的证据" })),
+        headline: Type.String({ description: `一句话结论，不超过 ${HEADLINE_MAX_LENGTH} 字，不换行。失败时直接说明哪里不符合，例如“非法掩码无提示，并产生无掩码的半配置”；不要写前置条件、执行过程或证据` }),
+        failureType: Type.Optional(Type.Union([Type.Literal("product_defect"), Type.Literal("case_issue"), Type.Literal("environment")], {
+          description: "status 为 failed 时必填：product_defect 被测产品行为不符合预期；case_issue 用例步骤或预期本身有问题（如预期与产品默认设计冲突）；environment 测试环境或工具限制导致无法验证（含前置准备失败）",
+        })),
+        checks: Type.Optional(Type.Array(Type.Object({
+          step: Type.Integer({ minimum: 1, description: "步骤序号，从 1 开始" }),
+          result: Type.Union([Type.Literal("passed"), Type.Literal("failed"), Type.Literal("not_run")], { description: "该步骤预期是否满足；因前置失败或中断而未执行填 not_run" }),
+          actual: Type.String({ description: `与该步预期对照的实际观察，不超过 ${CHECK_ACTUAL_MAX_LENGTH} 字，只写事实` }),
+        }), { description: caseExecution ? `必填，每个用例步骤一条，共 ${options.stepCount} 条` : "仅执行测试用例时使用" })),
+        evidence: Type.Optional(Type.Array(Type.String(), { description: `关键证据，每条一项（命令输出要点、计数、截图或文件路径），每条不超过 ${EVIDENCE_ITEM_MAX_LENGTH} 字；只写实际获取的证据` })),
+        notes: Type.Optional(Type.String({ description: `可选，不超过 ${NOTES_MAX_LENGTH} 字：推测的原因、环境限制或对用例本身的意见，须明确标注为推测` })),
+        log: Type.Optional(Type.String({ description: "可选：完整的执行过程记录，报告中默认折叠" })),
       }),
       execute: async (_id, params) => {
         if (params.status === "passed" && !options.evidence.hasEvidence()) {
           throw new Error("尚未通过工具获取真实设备或页面结果，不能提交通过结论");
         }
-        const result: FinishResult = {
-          status: params.status,
-          summary: params.summary,
-          ...(params.expected?.trim() ? { expected: params.expected.trim() } : {}),
-          ...(params.actual?.trim() ? { actual: params.actual.trim() } : {}),
-          ...(params.evidence?.trim() ? { evidence: params.evidence.trim() } : {}),
-        };
+        let result: FinishResult;
+        try {
+          result = resolveFinishSubmission(params, { stepCount: options.stepCount }, rejectedSubmissions);
+        } catch (error) {
+          rejectedSubmissions += 1;
+          throw error;
+        }
         options.onFinish(result);
         return textResult("测试结果已提交", { ...result });
       },
