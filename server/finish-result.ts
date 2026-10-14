@@ -44,6 +44,11 @@ function clean(value: string | undefined): string {
   return (value || "").trim();
 }
 
+// Models sometimes send escaped "\\n" sequences instead of line breaks; only unescape text that has no real line breaks.
+function unescapeLineBreaks(value: string): string {
+  return /[\r\n]/.test(value) ? value : value.replace(/(?:\\r)?\\n/g, "\n");
+}
+
 function collectProblems(submission: FinishSubmission, rules: FinishRules): string[] {
   const problems: string[] = [];
   const headline = clean(submission.headline);
@@ -89,7 +94,7 @@ function collectProblems(submission: FinishSubmission, rules: FinishRules): stri
 function normalize(submission: FinishSubmission, rules: FinishRules, lenient: boolean): FinishResult {
   const rawHeadline = clean(submission.headline).replace(/\s+/g, " ");
   const headline = truncate(rawHeadline || (submission.status === "passed" ? "通过" : "未通过，未提交结论"), HEADLINE_MAX_LENGTH);
-  let log = clean(submission.log);
+  let log = unescapeLineBreaks(clean(submission.log));
   if (lenient && headline !== rawHeadline) log = [rawHeadline, log].filter(Boolean).join("\n\n");
 
   const checks: StepCheck[] = rules.stepCount === undefined ? [] : (submission.checks || [])
@@ -97,7 +102,7 @@ function normalize(submission: FinishSubmission, rules: FinishRules, lenient: bo
     .map((check) => ({ step: check.step, result: check.result, actual: clean(check.actual) }))
     .sort((a, b) => a.step - b.step);
   const evidenceList = (submission.evidence || []).map(clean).filter(Boolean);
-  const notes = clean(submission.notes);
+  const notes = unescapeLineBreaks(clean(submission.notes));
   const failureType = submission.status === "failed" && submission.failureType && FAILURE_TYPES.has(submission.failureType)
     ? submission.failureType
     : undefined;

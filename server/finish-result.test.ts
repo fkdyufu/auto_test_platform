@@ -89,3 +89,9 @@ test("after repeated rejections the submission is kept rather than losing the re
   assert.equal(result.log, `${longHeadline}\n\n原始记录`);
   assert.equal(result.checks, undefined);
 });
+
+test("unescapes literal line breaks in logs that contain no real ones", () => {
+  const result = resolveFinishSubmission({ status: "passed", headline: "场景搭建完成", log: "步骤1：登录\\n步骤2：配置", notes: "第一行\n含 printf 'a\\nb'" }, {}, 0);
+  assert.equal(result.log, "步骤1：登录\n步骤2：配置");
+  assert.equal(result.notes, "第一行\n含 printf 'a\\nb'");
+});
