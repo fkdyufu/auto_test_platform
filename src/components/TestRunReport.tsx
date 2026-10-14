@@ -1,19 +1,15 @@
 import { useEffect, useState } from "react";
-import {
-  AlertTriangle,
-  CheckCircle2,
-  Clock3,
-  Download,
-  FileText,
-  LoaderCircle,
-  MessageSquareText,
-  MinusCircle,
-  X,
-  XCircle,
-} from "lucide-react";
+import { ChevronDown, ChevronRight, Download, FileText, LoaderCircle, MessageSquareText, X } from "lucide-react";
 import { api, type RunStatus, type TestRun } from "../api";
-import type { TestResultDetails } from "../../shared/test-result";
-import { buildTestRunReport, formatRunDuration, previewReportText, type ReportCaseState } from "../test-run-report";
+import { FAILURE_TYPE_LABELS, type FailureType, type TestResultDetails } from "../../shared/test-result";
+import {
+  buildTestRunReport,
+  formatRunDuration,
+  previewReportText,
+  type ReportCaseResult,
+  type ReportCaseState,
+  type ReportStepResult,
+} from "../test-run-report";
 
 const RUN_STATUS_LABELS: Record<RunStatus, string> = {
   queued: "等待执行",
@@ -30,6 +26,12 @@ const CASE_STATE_LABELS: Record<ReportCaseState, string> = {
   pending: "未完成",
 };
 
+const FAILURE_TYPES: FailureType[] = ["product_defect", "case_issue", "environment"];
+
+type CaseFilter = "all" | "failed" | "passed" | "incomplete";
+
+type DiagnoseTarget = { caseRunId: string; caseName: string; scenarioName: string };
+
 function formatDateTime(value?: string): string {
   if (!value) return "-";
   return new Intl.DateTimeFormat("zh-CN", {
@@ -38,45 +40,149 @@ function formatDateTime(value?: string): string {
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
-    second: "2-digit",
     hour12: false,
   }).format(new Date(value));
 }
 
-function runAppearance(run: TestRun): string {
-  return run.status === "completed" && run.outcome ? run.outcome : run.status;
+function formatTime(value?: string): string {
+  if (!value) return "-";
+  return new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(value));
 }
 
 function runLabel(run: TestRun): string {
-  if (run.status === "completed" && run.outcome) return run.outcome === "passed" ? "通过" : "失败";
+  if (run.status === "completed" && run.outcome) return run.outcome === "passed" ? "全部通过" : "存在失败";
   return RUN_STATUS_LABELS[run.status];
 }
 
-function ReportExplanation({ text, details, previewLength = 140 }: { text: string; details?: TestResultDetails; previewLength?: number }) {
-  const preview = previewReportText(text, previewLength);
-  const fields = [
-    { label: "预期", value: details?.expected },
-    { label: "实际观察", value: details?.actual },
-    { label: "关键证据", value: details?.evidence },
-  ].filter((field) => Boolean(field.value));
+function StateDot({ state }: { state: ReportCaseState }) {
+  return <span className={`report-dot ${state}`} title={CASE_STATE_LABELS[state]} aria-label={CASE_STATE_LABELS[state]} />;
+}
 
+function FailureTag({ type }: { type?: FailureType }) {
+  return type ? <span className="report-tag">{FAILURE_TYPE_LABELS[type]}</span> : null;
+}
+
+function StepChecks({ rows, hiddenPassed = 0, onShowAll }: { rows: ReportStepResult[]; hiddenPassed?: number; onShowAll?: () => void }) {
   return (
-    <div className="report-explanation">
-      <p className="report-preview">{preview}</p>
-      {(preview !== text || fields.length > 0) && (
-        <details className="report-details">
-          <summary>展开完整结果</summary>
-          <div className="report-details-content">
-            <div className="report-detail-field"><strong>结论</strong><p>{text}</p></div>
-            {fields.map((field) => (
-              <div className="report-detail-field" key={field.label}>
-                <strong>{field.label}</strong><p>{field.value}</p>
-              </div>
-            ))}
-          </div>
-        </details>
+    <div className="report-checks">
+      <div className="report-check report-check-head"><span /><span>步骤</span><span>预期</span><span>实际</span></div>
+      {rows.map((row) => (
+        <div className={`report-check ${row.result || "unknown"}`} key={row.index}>
+          <span className="report-check-icon">{row.result === "passed" ? "✓" : row.result === "failed" ? "✕" : "–"}</span>
+          <span className="report-check-index">{row.index}</span>
+          <span className="report-check-expected">{row.expected || "未指定单独预期"}</span>
+          <span className="report-check-actual">{row.result === "not_run" ? `未执行${row.actual ? `：${row.actual}` : ""}` : row.actual || "未记录"}</span>
+        </div>
+      ))}
+      {hiddenPassed > 0 && (
+        <div className="report-checks-more">
+          <span className="report-check-icon passed">✓</span>其余 {hiddenPassed} 步通过 ·{" "}
+          <button type="button" className="report-link" onClick={onShowAll}>展开</button>
+        </div>
       )}
     </div>
+  );
+}
+
+function ResultFacts({ details }: { details?: TestResultDetails }) {
+  return (
+    <>
+      {details?.evidenceList?.length ? (
+        <div className="report-fact"><span>证据</span><ul>{details.evidenceList.map((item, index) => <li key={index}>{item}</li>)}</ul></div>
+      ) : null}
+      {details?.notes && <div className="report-fact muted"><span>备注</span><p>{details.notes}</p></div>}
+    </>
+  );
+}
+
+function LegacyDetails({ item }: { item: ReportCaseResult }) {
+  const fields = [
+    { label: "预期", value: item.resultDetails?.expected },
+    { label: "实际观察", value: item.resultDetails?.actual },
+    { label: "关键证据", value: item.resultDetails?.evidence },
+  ].filter((field) => Boolean(field.value));
+  return (
+    <details className="report-raw">
+      <summary>完整执行结论</summary>
+      <div className="report-raw-content">
+        <div className="report-detail-field"><strong>结论</strong><p>{item.summary}</p></div>
+        {fields.map((field) => (
+          <div className="report-detail-field" key={field.label}><strong>{field.label}</strong><p>{field.value}</p></div>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+function LogDetails({ log }: { log?: string }) {
+  if (!log) return null;
+  return (
+    <details className="report-raw">
+      <summary>完整执行记录</summary>
+      <div className="report-raw-content"><p>{log}</p></div>
+    </details>
+  );
+}
+
+function FailureCard({ item, code, onDiagnose }: { item: ReportCaseResult; code?: string; onDiagnose: (target: DiagnoseTarget) => void }) {
+  const [showAll, setShowAll] = useState(false);
+  const unmet = item.steps?.filter((row) => row.result !== "passed") || [];
+  const rows = showAll ? item.steps || [] : unmet;
+  return (
+    <article className="report-failure-card">
+      <div className="report-failure-head">
+        <div className="report-failure-title">
+          <StateDot state={item.state} />
+          <span className="report-case-name">{item.name}</span>
+          {code && <span className="report-case-code">{code}</span>}
+          <FailureTag type={item.failureType} />
+        </div>
+        <div className="report-failure-meta">
+          <span>{formatRunDuration(item.durationMs)}</span>
+          <button type="button" className="button secondary compact" onClick={() => onDiagnose({ caseRunId: item.id, caseName: item.name, scenarioName: item.scenarioName })}>
+            <MessageSquareText size={14} />
+            深入分析
+          </button>
+        </div>
+      </div>
+      <p className={`report-headline${item.steps ? "" : " legacy"}`}>{item.steps ? item.summary : previewReportText(item.summary, 140)}</p>
+      <div className="report-failure-body">
+        {item.steps && (
+          <StepChecks rows={rows} hiddenPassed={showAll ? 0 : item.steps.length - unmet.length} onShowAll={() => setShowAll(true)} />
+        )}
+        <ResultFacts details={item.resultDetails} />
+        {item.steps || item.resultDetails?.log ? <LogDetails log={item.resultDetails?.log} /> : <LegacyDetails item={item} />}
+      </div>
+    </article>
+  );
+}
+
+function CaseRow({ item, code, onDiagnose }: { item: ReportCaseResult; code?: string; onDiagnose: (target: DiagnoseTarget) => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button type="button" className={`report-case-row${open ? " open" : ""}`} aria-expanded={open} onClick={() => setOpen(!open)}>
+        <StateDot state={item.state} />
+        <span className="report-case-name" title={item.name}>{item.name}{code && <small>{code}</small>}</span>
+        <span className="report-case-headline" title={previewReportText(item.summary, 300)}>{previewReportText(item.summary, 120)}</span>
+        <span className="report-case-tag"><FailureTag type={item.failureType} /></span>
+        <span className="report-case-duration">{formatRunDuration(item.durationMs)}</span>
+        {open ? <ChevronDown size={14} className="report-case-chevron" /> : <ChevronRight size={14} className="report-case-chevron" />}
+      </button>
+      {open && (
+        <div className="report-case-expand">
+          {item.steps ? <StepChecks rows={item.steps} /> : <p className="report-case-summary">{item.summary}</p>}
+          <ResultFacts details={item.resultDetails} />
+          <div className="report-case-actions">
+            {item.steps || item.resultDetails?.log ? <LogDetails log={item.resultDetails?.log} /> : <LegacyDetails item={item} />}
+            <button type="button" className="button secondary compact" onClick={() => onDiagnose({ caseRunId: item.id, caseName: item.name, scenarioName: item.scenarioName })}>
+              <MessageSquareText size={14} />
+              分析
+            </button>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -84,22 +190,37 @@ export function TestRunReportDialog({
   productId,
   run,
   orderName,
+  caseCodes = {},
   onDiagnose,
   onClose,
 }: {
   productId: string;
   run: TestRun;
   orderName: string;
-  onDiagnose: (target: { caseRunId: string; caseName: string; scenarioName: string }) => void;
+  // Display IDs keyed by test case ID, e.g. Zentao case numbers.
+  caseCodes?: Record<string, string>;
+  onDiagnose: (target: DiagnoseTarget) => void;
   onClose: () => void;
 }) {
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState("");
+  const [filter, setFilter] = useState<CaseFilter>("all");
   const canExport = run.status !== "queued" && run.status !== "running";
   const report = buildTestRunReport(run);
   const totalDuration = run.startedAt && run.finishedAt
     ? new Date(run.finishedAt).getTime() - new Date(run.startedAt).getTime()
     : undefined;
+  const codeOf = (item: ReportCaseResult) => (item.testCaseId ? caseCodes[item.testCaseId] : undefined);
+  const typeBreakdown = FAILURE_TYPES
+    .filter((type) => report.failureTypeCounts[type])
+    .map((type) => `${FAILURE_TYPE_LABELS[type]} ${report.failureTypeCounts[type]}`);
+  const scenarioNames = [...new Set(run.scenarioRuns.map((scenario) => scenario.scenarioNameSnapshot))];
+  const filtered = report.cases.filter((item) =>
+    filter === "all" || (filter === "incomplete" ? item.state === "cancelled" || item.state === "pending" : item.state === filter));
+  const groups = scenarioNames.length > 1
+    ? scenarioNames.map((name) => ({ name, cases: filtered.filter((item) => item.scenarioName === name) })).filter((group) => group.cases.length)
+    : [{ name: "", cases: filtered }];
+  const pct = (count: number) => `${report.total ? (count / report.total) * 100 : 0}%`;
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -136,102 +257,87 @@ export function TestRunReportDialog({
           {exportError && <p className="inline-notice error" role="alert">{exportError}</p>}
           <section className="report-overview">
             <div>
-              <span className="detail-kicker">{run.triggerType === "all" ? "整单执行" : "单用例执行"}</span>
+              <span className="detail-kicker">
+                {run.triggerType === "all" ? "整单执行" : "单用例执行"}
+                {scenarioNames.length === 1 ? ` · ${scenarioNames[0]}` : ` · ${scenarioNames.length} 个场景`}
+                {` · ${runLabel(run)}`}
+              </span>
               <h3>{orderName}</h3>
-              <p>{formatDateTime(run.startedAt || run.createdAt)} · {run.scenarioRuns.length} 个场景 · {formatRunDuration(totalDuration)}</p>
+              <p>
+                {formatDateTime(run.startedAt || run.createdAt)}
+                {run.finishedAt ? ` – ${formatTime(run.finishedAt)}` : ""}
+                {totalDuration !== undefined ? ` · 用时 ${formatRunDuration(totalDuration)}` : ""}
+              </p>
             </div>
-            <span className={`status-badge report-status ${runAppearance(run)}`}>{runLabel(run)}</span>
+            <div className="report-score">
+              <div className="report-score-line"><span><strong>{report.passRate}%</strong>通过</span><span>{report.total} 个用例</span></div>
+              <div className="report-bar" aria-hidden="true">
+                {report.passed > 0 && <span className="passed" style={{ width: pct(report.passed) }} />}
+                {report.failed > 0 && <span className="failed" style={{ width: pct(report.failed) }} />}
+                {report.incomplete > 0 && <span className="pending" style={{ width: pct(report.incomplete) }} />}
+              </div>
+              <div className="report-legend">
+                <span>通过 <b>{report.passed}</b></span>
+                <span>失败 <b>{report.failed}</b></span>
+                {report.incomplete > 0 && <span>未完成 <b>{report.incomplete}</b></span>}
+                {typeBreakdown.length > 0 && <span className="report-legend-types">{typeBreakdown.join(" · ")}</span>}
+              </div>
+            </div>
           </section>
-
-          <dl className="report-metrics">
-            <div><dt>用例总数</dt><dd>{report.total}</dd></div>
-            <div className="passed"><dt>通过</dt><dd>{report.passed}</dd></div>
-            <div className="failed"><dt>失败</dt><dd>{report.failed}</dd></div>
-            <div className="incomplete"><dt>未完成</dt><dd>{report.incomplete}</dd></div>
-            <div><dt>通过率</dt><dd>{report.passRate}%</dd></div>
-          </dl>
 
           {report.scenarioIssues.length > 0 && (
             <section className="report-section">
-              <div className="report-section-heading">
-                <div><AlertTriangle size={16} /><h4>场景异常</h4></div>
-                <span>{report.scenarioIssues.length} 项</span>
-              </div>
+              <div className="report-section-heading"><h4>场景异常 · {report.scenarioIssues.length}</h4></div>
               <div className="report-issue-list">
                 {report.scenarioIssues.map((issue) => (
                   <div className="report-issue-row" key={issue.id}>
-                    <span className="status-badge failed">{issue.phase}</span>
-                    <div><strong>{issue.scenarioName}</strong><ReportExplanation text={issue.reason} /></div>
+                    <span className="report-dot failed" />
+                    <div>
+                      <strong>{issue.scenarioName} · {issue.phase}</strong>
+                      <p>{previewReportText(issue.reason, 200)}</p>
+                    </div>
                   </div>
                 ))}
               </div>
             </section>
           )}
 
-          <section className="report-section">
-            <div className="report-section-heading">
-              <div><XCircle size={16} /><h4>失败项</h4></div>
-              <span>{report.failedCases.length} 项</span>
-            </div>
-            {report.failedCases.length > 0 ? (
-              <div className="report-failure-list">
-                {report.failedCases.map((item) => (
-                  <div className="report-failure-row" key={item.id}>
-                    <XCircle size={16} />
-                    <div>
-                      <div className="report-result-title"><strong>{item.name}</strong><span>{item.scenarioName}</span></div>
-                      <ReportExplanation text={item.summary} details={item.resultDetails} />
-                    </div>
-                    <small>{formatRunDuration(item.durationMs)}</small>
-                    <button
-                      type="button"
-                      className="button secondary compact"
-                      onClick={() => onDiagnose({ caseRunId: item.id, caseName: item.name, scenarioName: item.scenarioName })}
-                    >
-                      <MessageSquareText size={14} />
-                      深入分析
-                    </button>
-                  </div>
-                ))}
+          {report.failedCases.length > 0 && (
+            <section className="report-section">
+              <div className="report-section-heading">
+                <h4>需要关注 · {report.failedCases.length}</h4>
+                {report.failedCases.some((item) => item.steps) && <span>只展开不通过的步骤</span>}
               </div>
-            ) : (
-              <div className="report-no-failures"><CheckCircle2 size={17} /><span>没有失败用例</span></div>
-            )}
-          </section>
+              <div className="report-failure-list">
+                {report.failedCases.map((item) => <FailureCard key={item.id} item={item} code={codeOf(item)} onDiagnose={onDiagnose} />)}
+              </div>
+            </section>
+          )}
 
           <section className="report-section">
             <div className="report-section-heading">
-              <div><FileText size={16} /><h4>全部用例结果</h4></div>
-              <span>{report.total} 项</span>
+              <h4>全部用例 · {report.total}</h4>
+              <div className="report-filter" role="tablist" aria-label="筛选用例">
+                {([
+                  ["all", "全部", report.total],
+                  ["failed", "失败", report.failed],
+                  ["passed", "通过", report.passed],
+                  ["incomplete", "未完成", report.incomplete],
+                ] as const).filter(([key, , count]) => key === "all" || count > 0).map(([key, label, count]) => (
+                  <button type="button" role="tab" aria-selected={filter === key} className={filter === key ? "active" : ""} key={key} onClick={() => setFilter(key)}>
+                    {label}{key === "all" ? "" : ` ${count}`}
+                  </button>
+                ))}
+              </div>
             </div>
-            <div className="table-wrap report-results-wrap">
-              <table className="data-table report-results-table">
-                <thead><tr><th>结果</th><th>测试场景</th><th>用例名称</th><th>执行结论</th><th>耗时</th><th aria-label="操作" /></tr></thead>
-                <tbody>
-                  {report.cases.map((item) => (
-                    <tr key={item.id}>
-                      <td><span className={`status-badge ${item.state}`}>{CASE_STATE_LABELS[item.state]}</span></td>
-                      <td>{item.scenarioName}</td>
-                      <td className="name-cell">{item.name}</td>
-                      <td className="report-summary-cell"><ReportExplanation text={item.summary} details={item.resultDetails} previewLength={90} /></td>
-                      <td className="report-duration-cell">
-                        {item.state === "passed" ? <CheckCircle2 size={13} /> : item.state === "failed" ? <XCircle size={13} /> : item.state === "cancelled" ? <MinusCircle size={13} /> : <Clock3 size={13} />}
-                        {formatRunDuration(item.durationMs)}
-                      </td>
-                      <td>
-                        <button
-                          type="button"
-                          className="button secondary compact"
-                          onClick={() => onDiagnose({ caseRunId: item.id, caseName: item.name, scenarioName: item.scenarioName })}
-                        >
-                          <MessageSquareText size={14} />
-                          分析
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="report-case-list">
+              {groups.map((group) => (
+                <div key={group.name || "all"}>
+                  {group.name && <div className="report-case-group">{group.name}</div>}
+                  {group.cases.map((item) => <CaseRow key={item.id} item={item} code={codeOf(item)} onDiagnose={onDiagnose} />)}
+                </div>
+              ))}
+              {filtered.length === 0 && <p className="report-empty">没有符合条件的用例</p>}
             </div>
           </section>
         </div>

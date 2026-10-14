@@ -92,3 +92,25 @@ test("Word sanitizes invalid XML control characters and unsafe download names", 
   assert.match(xml, /控制字符仍可阅读/);
   assert.doesNotMatch(xml, /\u0000|\u001b/);
 });
+
+test("Word exports structured conclusions with unmet steps, failure types and an appendix log", async () => {
+  const context = fixture();
+  const structured = context.testRun.caseRuns[0];
+  structured.summary = "接收方向丢包，吞吐率仅 80%";
+  structured.resultDetails = {
+    failureType: "product_defect",
+    checks: [{ step: 1, result: "passed", actual: "抓包已启动" }, { step: 2, result: "failed", actual: "收到 800 / 1000 个报文" }],
+    evidenceList: ["RX 800", "TX 1000"],
+    notes: "推测：接收队列溢出",
+    log: "完整执行过程记录尾部",
+  };
+  const xml = await (await JSZip.loadAsync(await generateTestRunDocx(context))).file("word/document.xml")!.async("string");
+  for (const content of ["接收方向丢包，吞吐率仅 80%", "产品缺陷", "未满足的步骤", "收到 800 / 1000 个报文", "• RX 800", "推测：接收队列溢出", "完整执行记录见附录", "附录 完整执行记录", "完整执行过程记录尾部"]) {
+    assert.ok(xml.includes(content), `missing report content: ${content}`);
+  }
+  const unmetTable = [...xml.matchAll(/<w:tbl>.*?<\/w:tbl>/g)].map((match) => match[0]).find((value) => value.includes("未满足") || (value.includes("收到 800") && !value.includes("启动抓包")))!;
+  assert.doesNotMatch(unmetTable, /抓包已启动/);
+  const detailTable = [...xml.matchAll(/<w:tbl>.*?<\/w:tbl>/g)].map((match) => match[0]).find((value) => value.includes("启动抓包"))!;
+  assert.match(detailTable, /抓包已启动/);
+  assert.match(detailTable, /不通过/);
+});

@@ -5,7 +5,8 @@ import {
 } from "docx";
 import type { CaseRun, ExecutionStatus, TestRunReportContext } from "./catalog-store.js";
 import { stepRowsFromLegacy } from "../shared/test-case-steps.js";
-import { buildTestRunReport, formatRunDuration, type ReportCaseResult } from "../shared/test-run-report.js";
+import { buildTestRunReport, formatRunDuration, previewReportText, type ReportCaseResult, type ReportStepResult } from "../shared/test-run-report.js";
+import { FAILURE_TYPE_LABELS, STEP_CHECK_LABELS } from "../shared/test-result.js";
 
 export const DOCX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const PAGE_WIDTH = 11906;
@@ -87,12 +88,37 @@ function resultParagraph(item: ReportCaseResult): Paragraph {
   });
 }
 
-function conclusion(item: ReportCaseResult, snapshot: CaseRun, failureDetails = false): Paragraph[] {
+function stepResultLabel(row: ReportStepResult): string {
+  return row.result ? STEP_CHECK_LABELS[row.result] : "未记录";
+}
+
+function hasStructuredResult(item: ReportCaseResult): boolean {
+  const details = item.resultDetails;
+  return Boolean(item.steps || details?.failureType || details?.evidenceList?.length || details?.notes || details?.log);
+}
+
+function conclusion(item: ReportCaseResult, snapshot: CaseRun, failureDetails = false): (Paragraph | Table)[] {
+  const details = item.resultDetails;
+  if (!hasStructuredResult(item)) {
+    return [
+      ...field("执行结论", item.summary),
+      ...(failureDetails || details?.expected ? field("预期结果", details?.expected || snapshot.expectedResultSnapshot) : []),
+      ...(failureDetails || details?.actual ? field("实际观察", details?.actual, "未单独记录，请参阅执行结论") : []),
+      ...(failureDetails || details?.evidence ? field("关键证据", details?.evidence, "未单独记录，请参阅执行结论") : []),
+    ];
+  }
+  const unmet = failureDetails ? (item.steps || []).filter((row) => row.result !== "passed") : [];
   return [
     ...field("执行结论", item.summary),
-    ...(failureDetails || item.resultDetails?.expected ? field("预期结果", item.resultDetails?.expected || snapshot.expectedResultSnapshot) : []),
-    ...(failureDetails || item.resultDetails?.actual ? field("实际观察", item.resultDetails?.actual, "未单独记录，请参阅执行结论") : []),
-    ...(failureDetails || item.resultDetails?.evidence ? field("关键证据", item.resultDetails?.evidence, "未单独记录，请参阅执行结论") : []),
+    ...(item.failureType ? field("失败类型", FAILURE_TYPE_LABELS[item.failureType]) : []),
+    ...(unmet.length ? [
+      new Paragraph({ children: [new TextRun({ text: "未满足的步骤", bold: true, color: "344054" })], keepNext: true, spacing: { before: 140, after: 70 } }),
+      table(["步骤", "预期", "实际", "结果"], unmet.map((row) => [String(row.index), row.expected, row.actual || "", stepResultLabel(row)]),
+        [700, 3500, 4300, CONTENT_WIDTH - 8500]),
+    ] : []),
+    ...(details?.evidenceList?.length ? field("关键证据", details.evidenceList.map((entry) => `• ${entry}`).join("\n")) : []),
+    ...(details?.notes ? field("备注", details.notes) : []),
+    ...(details?.log ? paragraphs("完整执行记录见附录。") : []),
   ];
 }
 
@@ -140,9 +166,14 @@ export async function generateTestRunDocx(context: TestRunReportContext): Promis
   });
   children.push(heading("4. 全部用例结果", HeadingLevel.HEADING_1));
   if (report.cases.length) {
-    children.push(table(["序号", "测试场景", "用例名称", "结果", "耗时"], report.cases.map((item, index) => [
-      String(index + 1), item.scenarioName, item.name, RESULT_LABELS[item.state], formatRunDuration(item.durationMs),
-    ]), [900, 2000, 3750, 1000, CONTENT_WIDTH - 7650]));
+    const multipleScenarios = run.scenarioRuns.length > 1;
+    children.push(table(["序号", "用例名称", "结果", "结论", "耗时"], report.cases.map((item, index) => [
+      String(index + 1),
+      multipleScenarios ? `${item.name}\n${item.scenarioName}` : item.name,
+      item.failureType ? `${RESULT_LABELS[item.state]}\n${FAILURE_TYPE_LABELS[item.failureType]}` : RESULT_LABELS[item.state],
+      previewReportText(item.summary, 80),
+      formatRunDuration(item.durationMs),
+    ]), [700, 2700, 1000, CONTENT_WIDTH - 5600, 1200]));
   } else children.push(...paragraphs("本次执行没有用例记录。"));
 
   children.push(heading("5. 场景与用例详情", HeadingLevel.HEADING_1));
@@ -156,8 +187,11 @@ export async function generateTestRunDocx(context: TestRunReportContext): Promis
       ...paragraphs(`用例 ID：${snapshot.testCaseId}`), resultParagraph(item),
       ...field("前置条件", snapshot.preconditionSnapshot, "未设置"),
       new Paragraph({ text: "用例步骤", keepNext: true, spacing: { before: 140, after: 70 } }),
-      table(["序号", "步骤", "预期"], rows.map((row, index) => [String(index + 1), row.step, row.expected]),
-        [900, 4369, CONTENT_WIDTH - 5269]),
+      item.steps
+        ? table(["序号", "步骤", "预期", "实际", "结果"], item.steps.map((row) => [String(row.index), row.step, row.expected, row.actual || "", stepResultLabel(row)]),
+          [700, 2600, 2300, 2900, CONTENT_WIDTH - 8500])
+        : table(["序号", "步骤", "预期"], rows.map((row, index) => [String(index + 1), row.step, row.expected]),
+          [900, 4369, CONTENT_WIDTH - 5269]),
       ...conclusion(item, snapshot));
   };
   run.scenarioRuns.forEach((scenario, index) => {
@@ -176,6 +210,13 @@ export async function generateTestRunDocx(context: TestRunReportContext): Promis
   if (unmatched.length) {
     children.push(heading(`5.${run.scenarioRuns.length + 1} 未关联场景的历史用例`, HeadingLevel.HEADING_2));
     unmatched.forEach((item, index) => appendCase(item, `5.${run.scenarioRuns.length + 1}.${index + 1}`));
+  }
+  const logged = report.cases.filter((item) => item.resultDetails?.log);
+  if (logged.length) {
+    children.push(heading("附录 完整执行记录", HeadingLevel.HEADING_1));
+    logged.forEach((item, index) => {
+      children.push(heading(`附录 ${index + 1} ${item.name}`, HeadingLevel.HEADING_2), ...paragraphs(item.resultDetails!.log));
+    });
   }
   const doc = new Document({
     title: `${product.name} · ${testOrder.name} · 测试报告`, creator: "AI Test Runner",

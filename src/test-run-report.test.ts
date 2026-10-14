@@ -112,3 +112,25 @@ test("keeps historical conclusions and includes structured fields on new failure
   assert.equal(previewReportText("问题".repeat(100), 5), "问题问题问…");
   assert.equal(report.cases[0].resultDetails, undefined);
 });
+
+test("merges per-step checks with step rows and orders failures by type", () => {
+  const structuredRun = structuredClone(run);
+  structuredRun.caseRuns[0].outcome = "failed";
+  structuredRun.caseRuns[0].stepsSnapshot = "1. 打开页面\n2. 保存";
+  structuredRun.caseRuns[0].expectedResultSnapshot = "1. 页面打开\n2. 保存成功";
+  structuredRun.caseRuns[0].resultDetails = {
+    failureType: "environment",
+    checks: [{ step: 1, result: "passed", actual: "已打开" }, { step: 2, result: "not_run", actual: "设备离线" }],
+  };
+  structuredRun.caseRuns[1].stepRowsSnapshot = [{ step: "读取计数", expected: "计数增加" }];
+  structuredRun.caseRuns[1].resultDetails = { failureType: "product_defect", checks: [{ step: 1, result: "failed", actual: "仍为 0" }] };
+
+  const report = buildTestRunReport(structuredRun);
+  assert.deepEqual(report.failedCases.map((item) => item.name), ["用例二", "用例一"]);
+  assert.deepEqual(report.failureTypeCounts, { environment: 1, product_defect: 1 });
+  assert.deepEqual(report.cases[0].steps, [
+    { index: 1, step: "打开页面", expected: "页面打开", result: "passed", actual: "已打开" },
+    { index: 2, step: "保存", expected: "保存成功", result: "not_run", actual: "设备离线" },
+  ]);
+  assert.equal(report.cases[2].steps, undefined);
+});
