@@ -66,21 +66,28 @@ export function InlineNotice({ notice, onClose }: { notice: Exclude<Notice, null
 
 export function Modal({
   title,
+  subtitle,
   children,
   onClose,
   onSubmit,
   submitting,
   submitLabel = "保存",
   submitDisabled = false,
+  hideSubmit = false,
+  footerStart,
   className = "",
 }: {
   title: string;
+  subtitle?: string;
   children: ReactNode;
   onClose: () => void;
   onSubmit: (event: FormEvent) => void;
   submitting: boolean;
   submitLabel?: string;
   submitDisabled?: boolean;
+  hideSubmit?: boolean;
+  /** Extra buttons on the left of the footer, e.g. a back button. */
+  footerStart?: ReactNode;
   className?: string;
 }) {
   useEffect(() => {
@@ -95,19 +102,22 @@ export function Modal({
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <form className={`modal ${className}`.trim()} role="dialog" aria-modal="true" aria-label={title} onSubmit={onSubmit}>
         <header className="modal-header">
-          <h2>{title}</h2>
+          <h2>{title}{subtitle && <span className="modal-subtitle">{subtitle}</span>}</h2>
           <button type="button" className="icon-button static" onClick={onClose} disabled={submitting} title="关闭">
             <X size={18} />
           </button>
         </header>
         <div className="modal-body">{children}</div>
         <footer className="modal-actions">
+          {footerStart && <div className="modal-actions-start">{footerStart}</div>}
           <button type="button" className="button secondary" onClick={onClose} disabled={submitting}>
             取消
           </button>
-          <button type="submit" className="button primary" disabled={submitting || submitDisabled}>
-            {submitting ? "保存中..." : submitLabel}
-          </button>
+          {!hideSubmit && (
+            <button type="submit" className="button primary" disabled={submitting || submitDisabled}>
+              {submitting ? "保存中..." : submitLabel}
+            </button>
+          )}
         </footer>
       </form>
     </div>

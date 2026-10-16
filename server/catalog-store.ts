@@ -20,7 +20,23 @@ import {
   type PhysicalLab,
 } from "../shared/physical-lab.js";
 
+import {
+  CONTROL_KINDS,
+  controlFromLegacy,
+  isControlKind,
+  isFieldShown,
+  missingControlFields,
+  secretKeys,
+  type ControlInterface,
+  type ControlKind,
+  type LegacyControlInterface,
+  type PublicControlInterface,
+} from "../shared/control-interfaces.js";
+import { deviceTemplateName, isDeviceTemplateId, templateFromLegacyTypes, type DeviceTemplateId } from "../shared/device-templates.js";
+
 export type { PhysicalLab } from "../shared/physical-lab.js";
+export type { ControlInterface, ControlKind, PublicControlInterface } from "../shared/control-interfaces.js";
+export type { DeviceTemplateId } from "../shared/device-templates.js";
 
 export type ExecutionStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 export type TestOutcome = "passed" | "failed";
@@ -52,23 +68,12 @@ export interface TestCase {
   archivedAt?: string;
 }
 
-export type ControlInterfaceType = "web" | "ssh" | "telnet" | "serial" | "api" | "other";
-
-export interface ControlInterface {
-  id: string;
-  name: string;
-  type: ControlInterfaceType;
-  address: string;
-  username: string;
-  password: string;
-}
-
 export interface DeviceResource {
   id: string;
   productId: string;
   name: string;
-  types: string[];
-  model: string;
+  /** The type card picked when the device was added. */
+  template: DeviceTemplateId;
   description: string;
   controlInterfaces: ControlInterface[];
   createdAt: string;
@@ -199,7 +204,7 @@ export interface TestRun {
 }
 
 interface CatalogData {
-  version: 13;
+  version: 14;
   products: Product[];
   testCases: TestCase[];
   deviceResources: DeviceResource[];
@@ -224,9 +229,12 @@ type LegacyTestRun = Omit<TestRun, "scenarioRuns" | "caseRuns"> & {
   scenarioRuns?: ScenarioRun[];
   caseRuns: LegacyCaseRun[];
 };
-type LegacyDeviceResource = Omit<DeviceResource, "types"> & {
+type LegacyDeviceResource = Omit<DeviceResource, "template" | "controlInterfaces"> & {
+  template?: string;
   type?: string;
-  types?: string[];
+  types?: string[] | string;
+  model?: string;
+  controlInterfaces?: Array<Partial<ControlInterface> & Partial<LegacyControlInterface>>;
 };
 
 export interface ProductSummary extends Product {
@@ -234,11 +242,9 @@ export interface ProductSummary extends Product {
   orderCount: number;
 }
 
-export interface PublicControlInterface extends Omit<ControlInterface, "password"> {
-  hasPassword: boolean;
-}
-
 export interface DeviceResourceSummary extends Omit<DeviceResource, "controlInterfaces"> {
+  /** The type's display name; the product type shows the product's name. */
+  templateName: string;
   controlInterfaces: PublicControlInterface[];
 }
 
@@ -254,6 +260,7 @@ export interface TestOrderDetail extends TestOrderSummary {
 }
 
 export interface TestOrderExecutionContext {
+  productName?: string;
   devices: DeviceResource[];
   scenarios: TestScenario[];
   physicalLab?: PhysicalLab;
@@ -313,24 +320,30 @@ function optionalText(value: unknown, maxLength = 10_000): string {
   return text;
 }
 
-function normalizeDeviceTypes(value: unknown): string[] {
+/** Free-text type labels used before catalog version 14, e.g. "host / peer". */
+function legacyDeviceTypes(value: unknown): string[] {
   const values = Array.isArray(value) ? value : typeof value === "string" ? [value] : [];
   const types = values
     .flatMap((item) => typeof item === "string" ? item.split(/[/,，]/) : [])
     .map((item) => item.trim())
     .filter(Boolean);
-  if (!types.length) throw new CatalogError("设备类型不能为空");
-  if (types.length > 20) throw new CatalogError("设备类型不能超过 20 个");
-  types.forEach((item) => {
-    if (item.length > 120) throw new CatalogError("单个设备类型不能超过 120 个字符");
-  });
-  const seen = new Set<string>();
-  return types.filter((item) => {
-    const normalized = item.toLowerCase();
-    if (seen.has(normalized)) return false;
-    seen.add(normalized);
-    return true;
-  });
+  return [...new Map(types.map((item) => [item.toLowerCase(), item])).values()];
+}
+
+/**
+ * Turns the old type labels and model into a type card plus description lines, so nothing typed before is lost:
+ * the model and any labels that did not map to a card are kept in the description.
+ */
+function migrateDeviceIdentity(input: { types?: unknown; type?: unknown; model?: unknown; description?: unknown }, productName: string) {
+  const types = legacyDeviceTypes(input.types ?? input.type);
+  const model = typeof input.model === "string" ? input.model.trim() : "";
+  const template = templateFromLegacyTypes(types, model, productName);
+  const notes = [
+    model && !(template === "product" && model.toLowerCase() === productName.trim().toLowerCase()) ? `型号：${model}` : "",
+    template === "custom" && types.length ? `原类型：${types.join("、")}` : "",
+  ];
+  const description = [typeof input.description === "string" ? input.description.trim() : "", ...notes].filter(Boolean).join("\n");
+  return { template, description };
 }
 
 function recordValue(value: unknown): Record<string, unknown> {
@@ -390,7 +403,7 @@ function defaultData(): CatalogData {
     updatedAt: timestamp,
   }));
   return {
-    version: 13,
+    version: 14,
     products,
     testCases: [],
     deviceResources: [],
@@ -423,7 +436,7 @@ export class CatalogStore {
     try {
       const original = await readFile(this.filePath, "utf8");
       const data = JSON.parse(original) as { version?: number };
-      if (typeof data.version === "number" && data.version >= 1 && data.version < 13) {
+      if (typeof data.version === "number" && data.version >= 1 && data.version < 14) {
         try {
           await writeFile(`${this.filePath}.v${data.version}.bak`, original, { flag: "wx", mode: 0o600 });
         } catch (error) {
@@ -441,13 +454,13 @@ export class CatalogStore {
     this.initializePromise ??= this.initialize();
     await this.initializePromise;
     const data = JSON.parse(await readFile(this.filePath, "utf8")) as CatalogData & { version: number };
-    if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13].includes(data.version) || !Array.isArray(data.products) || !Array.isArray(data.testCases)) {
+    if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14].includes(data.version) || !Array.isArray(data.products) || !Array.isArray(data.testCases)) {
       throw new CatalogError("业务数据文件格式不正确", 500);
     }
     const sourceVersion = data.version;
     const legacyData = data as typeof data & { labEnvironments?: LegacyPhysicalEnvironment[]; physicalEnvironments?: LegacyPhysicalEnvironment[] };
     let physicalEnvironments = legacyData.physicalEnvironments ?? legacyData.labEnvironments ?? [];
-    data.version = 13;
+    data.version = 14;
     data.deviceResources ??= [];
     data.physicalLabs = Array.isArray(data.physicalLabs) ? data.physicalLabs : [];
     delete legacyData.physicalEnvironments;
@@ -533,25 +546,32 @@ export class CatalogStore {
         if (!deviceOwners.has(deviceId)) deviceOwners.set(deviceId, physicalEnvironment.productId);
       });
     });
-    data.deviceResources = (data.deviceResources as LegacyDeviceResource[]).map((device) => ({
-      id: device.id,
-      productId: productIds.has(device.productId) ? device.productId : deviceOwners.get(device.id) || fallbackProductId,
-      name: device.name,
-      types: normalizeDeviceTypes(device.types?.length ? device.types : device.type),
-      model: device.model || "",
-      description: device.description || "",
-      controlInterfaces: (device.controlInterfaces || []).map((control) => ({
-        id: control.id,
-        name: control.name,
-        type: control.type === ("relay" as ControlInterfaceType) ? "other" : control.type,
-        address: control.address,
-        username: control.username || "",
-        password: control.password || "",
-      })),
-      createdAt: device.createdAt,
-      updatedAt: device.updatedAt,
-      archivedAt: device.archivedAt,
-    }));
+    const productNameById = new Map(data.products.map((product) => [product.id, product.name]));
+    data.deviceResources = (data.deviceResources as LegacyDeviceResource[]).map((device) => {
+      const productId = productIds.has(device.productId) ? device.productId : deviceOwners.get(device.id) || fallbackProductId;
+      const identity = isDeviceTemplateId(device.template)
+        ? { template: device.template, description: device.description || "" }
+        : migrateDeviceIdentity(device, productNameById.get(productId) || "");
+      return {
+        id: device.id,
+        productId,
+        name: device.name,
+        ...identity,
+        controlInterfaces: (device.controlInterfaces || []).map((control) => isControlKind(control.kind) && control.settings && typeof control.settings === "object"
+          ? { id: String(control.id), name: control.name || "", kind: control.kind, settings: Object.fromEntries(Object.entries(control.settings).map(([key, value]) => [key, String(value ?? "")])) }
+          : controlFromLegacy({
+              id: String(control.id),
+              name: control.name || "",
+              type: control.type === "relay" ? "other" : control.type || "other",
+              address: control.address || "",
+              username: control.username,
+              password: control.password,
+            })),
+        createdAt: device.createdAt,
+        updatedAt: device.updatedAt,
+        archivedAt: device.archivedAt,
+      };
+    });
 
     const deviceProductById = new Map(data.deviceResources.map((device) => [device.id, device.productId]));
     physicalEnvironments.forEach((physicalEnvironment) => {
@@ -679,7 +699,7 @@ export class CatalogStore {
     await working.getProduct(productId);
     const fields: Record<AssetKind, string[]> = {
       case: ["name", "scenarioId", "precondition", "steps", "expectedResult", "stepRows"],
-      device: ["name", "types", "model", "description", "controlInterfaces"],
+      device: ["name", "template", "description", "controlInterfaces"],
       scenario: ["name", "category", "description", "roles", "parameters", "setupInstructions", "verificationInstructions", "cleanupInstructions", "caseIds"],
       order: ["name", "description", "caseIds"],
     };
@@ -729,7 +749,7 @@ export class CatalogStore {
       for (const id of new Set([...before, ...after].map((item) => item.id))) {
         const previous = before.find((item) => item.id === id);
         const current = after.find((item) => item.id === id);
-        const publicValue = (asset: typeof previous) => asset ? recordValue(kind === "device" ? this.publicDevice(asset as DeviceResource) : clone(asset)) : null;
+        const publicValue = (asset: typeof previous) => asset ? recordValue(kind === "device" ? this.publicDevice(next, asset as DeviceResource) : clone(asset)) : null;
         if (JSON.stringify(previous) !== JSON.stringify(current)) differences.push({ kind, id, name: current?.name || previous!.name, before: publicValue(previous), after: publicValue(current) });
       }
     }
@@ -985,36 +1005,98 @@ export class CatalogStore {
     });
   }
 
+  /**
+   * Validates interfaces against each method's field list. An empty secret keeps the stored one; fields hidden by
+   * the current choice (e.g. the password after switching API auth to a token) are cleared. The pre-version-14 shape
+   * with type/address/username/password is still accepted and converted.
+   */
   private normalizeControlInterfaces(value: unknown, existing: ControlInterface[] = []): ControlInterface[] {
     if (!Array.isArray(value)) throw new CatalogError("控制接口格式不正确");
     if (value.length > 30) throw new CatalogError("控制接口不能超过 30 个");
-    const allowedTypes = new Set<ControlInterfaceType>(["web", "ssh", "telnet", "serial", "api", "other"]);
-    return value.map((item) => {
-      const input = recordValue(item);
+    const controls = value.map((item): ControlInterface => {
+      let input = recordValue(item);
+      if (input.kind === undefined && typeof input.type === "string") {
+        if (!["web", "ssh", "telnet", "serial", "api", "other"].includes(input.type)) throw new CatalogError("控制接口类型不正确");
+        const legacy = controlFromLegacy({
+          id: optionalText(input.id, 100),
+          name: optionalText(input.name, 120),
+          type: input.type,
+          address: requiredText(input.address, "接口地址", 2_048),
+          username: optionalText(input.username, 300),
+          password: optionalText(input.password, 1_000),
+        });
+        input = { ...legacy };
+      }
+      if (!isControlKind(input.kind)) throw new CatalogError("控制方式不正确");
+      const kind: ControlKind = input.kind;
       const id = optionalText(input.id, 100) || randomUUID();
-      const type = optionalText(input.type, 30) as ControlInterfaceType;
-      if (!allowedTypes.has(type)) throw new CatalogError("控制接口类型不正确");
-      const previous = existing.find((control) => control.id === id);
-      const nextPassword = optionalText(input.password, 1_000);
-      return {
-        id,
-        name: requiredText(input.name, "接口名称", 120),
-        type,
-        address: requiredText(input.address, "接口地址", 2_048),
-        username: optionalText(input.username, 300),
-        password: nextPassword || previous?.password || "",
-      };
+      const name = optionalText(input.name, 120);
+      const label = name || CONTROL_KINDS[kind].label;
+      const previous = existing.find((control) => control.id === id && control.kind === kind);
+      const raw = recordValue(input.settings);
+      const known = new Set(CONTROL_KINDS[kind].fields.map((field) => field.key));
+      const unknown = Object.keys(raw).find((key) => !known.has(key));
+      if (unknown) throw new CatalogError(`控制接口“${label}”包含未知字段 ${unknown}`);
+      const settings: Record<string, string> = {};
+      for (const field of CONTROL_KINDS[kind].fields) {
+        const given = raw[field.key];
+        let fieldValue = typeof given === "string" ? given.trim() : typeof given === "number" ? String(given) : "";
+        if (fieldValue.length > (field.input === "textarea" ? 4_000 : 2_048)) throw new CatalogError(`控制接口“${label}”的${field.label}过长`);
+        if (field.input === "secret" && !fieldValue) fieldValue = previous?.settings[field.key] || "";
+        if (!fieldValue && field.default !== undefined) fieldValue = field.default;
+        settings[field.key] = fieldValue;
+      }
+      for (const field of CONTROL_KINDS[kind].fields) {
+        const fieldValue = settings[field.key];
+        if (!isFieldShown(field, settings)) {
+          settings[field.key] = "";
+          continue;
+        }
+        if (!fieldValue) continue;
+        if (field.input === "number" && !(/^\d{1,5}$/.test(fieldValue) && Number(fieldValue) >= 1 && Number(fieldValue) <= 65_535)) {
+          throw new CatalogError(`控制接口“${label}”的${field.label}不正确`);
+        }
+        if (field.input === "select" && !field.options?.some((option) => option.value === fieldValue) && !field.accepts?.test(fieldValue)) {
+          throw new CatalogError(`控制接口“${label}”的${field.label}不正确`);
+        }
+      }
+      const missing = missingControlFields({ kind, settings });
+      if (missing.length) throw new CatalogError(`控制接口“${label}”缺少${missing.map((field) => field.label).join("、")}`);
+      return { id, name, kind, settings };
     });
+    if (new Set(controls.map((control) => control.id)).size !== controls.length) throw new CatalogError("控制接口 ID 重复");
+    return controls;
   }
 
-  private publicDevice(device: DeviceResource): DeviceResourceSummary {
+  private publicDevice(data: CatalogData, device: DeviceResource): DeviceResourceSummary {
+    const productName = data.products.find((product) => product.id === device.productId)?.name || "";
     return {
       ...clone(device),
-      controlInterfaces: device.controlInterfaces.map(({ password, ...control }) => ({
-        ...control,
-        hasPassword: Boolean(password),
-      })),
+      templateName: deviceTemplateName(device.template, productName),
+      controlInterfaces: device.controlInterfaces.map((control) => {
+        const secrets = secretKeys(control.kind);
+        return {
+          id: control.id,
+          name: control.name,
+          kind: control.kind,
+          settings: Object.fromEntries(Object.entries(control.settings).filter(([key]) => !secrets.includes(key))),
+          secretsSet: secrets.filter((key) => Boolean(control.settings[key])),
+        };
+      }),
     };
+  }
+
+  private deviceIdentity(data: CatalogData, productId: string, input: Record<string, unknown>, current?: DeviceResource): { template: DeviceTemplateId; description: string } {
+    if (input.template !== undefined) {
+      if (!isDeviceTemplateId(input.template)) throw new CatalogError("设备类型不正确");
+      return { template: input.template, description: optionalText(input.description, 4_000) };
+    }
+    if (current) return { template: current.template, description: optionalText(input.description, 4_000) };
+    // Older clients send free-text types and a model.
+    const productName = data.products.find((product) => product.id === productId)?.name || "";
+    const migrated = migrateDeviceIdentity(input, productName);
+    if (migrated.description.length > 4_000) throw new CatalogError("设备说明不能超过 4000 个字符");
+    return migrated;
   }
 
   async listDeviceResources(productId: string): Promise<DeviceResourceSummary[]> {
@@ -1022,7 +1104,7 @@ export class CatalogStore {
     const data = await this.read();
     return data.deviceResources
       .filter((item) => item.productId === productId && !item.archivedAt)
-      .map((item) => this.publicDevice(item))
+      .map((item) => this.publicDevice(data, item))
       .sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
   }
 
@@ -1046,15 +1128,13 @@ export class CatalogStore {
         id: randomUUID(),
         productId,
         name,
-        types: normalizeDeviceTypes(input.types ?? input.type),
-        model: optionalText(input.model, 160),
-        description: optionalText(input.description, 4_000),
+        ...this.deviceIdentity(data, productId, input),
         controlInterfaces: this.normalizeControlInterfaces(input.controlInterfaces ?? []),
         createdAt: timestamp,
         updatedAt: timestamp,
       };
       data.deviceResources.push(device);
-      return this.publicDevice(device);
+      return this.publicDevice(data, device);
     });
   }
 
@@ -1064,13 +1144,13 @@ export class CatalogStore {
       if (!device) throw new CatalogError("设备资源不存在", 404);
       const name = requiredText(input.name, "设备名称", 160);
       uniqueName(data.deviceResources.filter((item) => item.productId === productId), name, "设备名称", id);
+      const identity = this.deviceIdentity(data, productId, input, device);
       device.name = name;
-      device.types = normalizeDeviceTypes(input.types ?? input.type);
-      device.model = optionalText(input.model, 160);
-      device.description = optionalText(input.description, 4_000);
+      device.template = identity.template;
+      device.description = identity.description;
       device.controlInterfaces = this.normalizeControlInterfaces(input.controlInterfaces ?? [], device.controlInterfaces);
       device.updatedAt = new Date().toISOString();
-      return this.publicDevice(device);
+      return this.publicDevice(data, device);
     });
   }
 
@@ -1511,6 +1591,7 @@ export class CatalogStore {
     const order = data.testOrders.find((item) => item.id === id && !item.archivedAt);
     if (!order) throw new CatalogError("测试单不存在", 404);
     return {
+      productName: data.products.find((product) => product.id === order.productId)?.name || "",
       devices: data.deviceResources.filter((device) => device.productId === order.productId && !device.archivedAt).map(clone),
       scenarios: data.testScenarios
         .filter((scenario) => scenario.productId === order.productId && !scenario.archivedAt)

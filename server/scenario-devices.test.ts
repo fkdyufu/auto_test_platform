@@ -6,8 +6,8 @@ import { resolveScenarioDevices } from "./scenario-devices.js";
 import { createToolEvidence } from "./tool-evidence.js";
 
 const devices: DeviceResource[] = ["dut", "src", "unused"].map((id) => ({
-  id, productId: "product", name: id, types: ["TAU"], model: "", description: "",
-  controlInterfaces: [{ id: `${id}-ssh`, name: "SSH", type: "ssh", address: "192.0.2.1", username: "root", password: "" }],
+  id, productId: "product", name: id, template: "product", description: "",
+  controlInterfaces: [{ id: `${id}-ssh`, name: "SSH", kind: "ssh", settings: { host: "192.0.2.1", port: "22", username: "root", password: "" } }],
   createdAt: "", updatedAt: "",
 }));
 const scenario: TestScenario = {

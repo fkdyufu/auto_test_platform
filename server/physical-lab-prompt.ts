@@ -7,6 +7,7 @@ import {
   resolveControlPath,
   type LabLinkEnd,
 } from "../shared/physical-lab.js";
+import { CONTROL_KINDS } from "../shared/control-interfaces.js";
 
 const MAX_LINES = 300;
 
@@ -50,7 +51,7 @@ export function formatPhysicalLab(lab: PhysicalLab | undefined, devices: PromptD
     const port = path.portId ? lab.nodes.find((node) => node.id === device.id)?.ports.find((item) => item.id === path.portId) : undefined;
     if (!port) return "";
     const band = path.band === "out-of-band" ? "带外" : path.band === "in-band" ? "带内，依赖该端口及其 IP/VLAN 配置" : "";
-    return `- ${device.name} ${control.name}（${control.type}，接口 ID: ${control.id}）：经 ${port.name}${path.peer ? ` ↔ ${endLabel(lab, path.peer)}` : ""}${band ? `，${band}` : ""}`;
+    return `- ${device.name} ${control.name || CONTROL_KINDS[control.kind].label}（${control.kind}，接口 ID: ${control.id}）：经 ${port.name}${path.peer ? ` ↔ ${endLabel(lab, path.peer)}` : ""}${band ? `，${band}` : ""}`;
   }).filter(Boolean));
 
   if (!lab.rules && !linkLines.length) return "";

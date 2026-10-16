@@ -4707,3 +4707,462 @@ select {
     display: none;
   }
 }
+
+/* Device dialog: type tiles, then name, description and control interface cards */
+.modal-subtitle {
+  margin-left: 10px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.modal-actions-start {
+  display: flex;
+  flex: 1;
+  gap: 10px;
+}
+
+.resource-config-page .modal.device-modal {
+  width: min(860px, 100%);
+}
+
+.device-type-icon {
+  display: inline-grid;
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--gray-50);
+  color: var(--gray-600);
+}
+
+.device-type-icon.large {
+  width: 52px;
+  height: 52px;
+  border-radius: 12px;
+}
+
+.device-type-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 112px), 1fr));
+  gap: 10px;
+}
+
+.device-type-tile {
+  display: flex;
+  min-height: 128px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--gray-0);
+  color: var(--gray-800);
+  padding: 16px 8px 14px;
+  text-align: center;
+}
+
+.device-type-tile:hover {
+  border-color: var(--gray-400);
+  box-shadow: var(--shadow-sm);
+}
+
+.device-type-tile strong {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.device-type-tile.custom {
+  border-style: dashed;
+  background: var(--gray-25);
+}
+
+.device-type-tile.current {
+  border-color: var(--primary-600);
+  box-shadow: 0 0 0 3px var(--ring);
+}
+
+.device-editor {
+  display: grid;
+  gap: 14px;
+}
+
+.device-chosen {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.device-chosen strong {
+  color: var(--gray-900);
+  font-size: 15px;
+}
+
+.device-repick {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--gray-600);
+  padding: 0 8px;
+  font-size: 13px;
+}
+
+.device-repick:hover {
+  background: var(--gray-50);
+  color: var(--gray-900);
+}
+
+.required-mark {
+  color: var(--danger-600);
+  font-style: normal;
+}
+
+.device-editor .field input.invalid,
+.device-editor textarea.invalid,
+.control-field input.invalid,
+.control-field textarea.invalid {
+  border-color: var(--danger-600);
+}
+
+.device-editor textarea.device-description {
+  min-height: 60px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.device-section-title {
+  margin-top: 8px;
+  color: var(--gray-900);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.control-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 176px), 1fr));
+  gap: 10px;
+}
+
+.control-card {
+  display: grid;
+  min-width: 0;
+  min-height: 72px;
+  align-content: start;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--gray-0);
+  color: var(--gray-800);
+  padding: 10px 12px;
+  text-align: left;
+}
+
+.control-card:hover {
+  border-color: var(--gray-400);
+}
+
+.control-card.selected {
+  border-color: var(--primary-600);
+  box-shadow: 0 0 0 3px var(--ring);
+}
+
+.control-card.invalid {
+  border-color: var(--danger-600);
+}
+
+.control-card-top {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.control-card-top strong {
+  flex: 0 0 auto;
+  font-size: 14px;
+}
+
+.control-card-top span,
+.control-card-summary {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.control-card-top span {
+  color: var(--gray-500);
+}
+
+.control-card-summary {
+  color: var(--gray-600);
+}
+
+.control-card-summary.empty {
+  color: var(--gray-400);
+}
+
+.control-card.add {
+  place-items: center;
+  align-content: center;
+  border-style: dashed;
+  background: var(--gray-25);
+  color: var(--gray-500);
+}
+
+.control-card.add:hover,
+.control-card.add.selected {
+  color: var(--gray-900);
+}
+
+.control-card.add.selected {
+  border-style: solid;
+}
+
+.control-panel {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--gray-0);
+}
+
+.control-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--gray-150);
+  padding: 6px 8px 6px 12px;
+}
+
+.control-kind-tag {
+  display: inline-flex;
+  min-height: 22px;
+  flex: 0 0 auto;
+  align-items: center;
+  border: 1px solid var(--gray-300);
+  border-radius: 5px;
+  color: var(--gray-800);
+  padding: 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.control-panel-head input {
+  min-width: 0;
+  min-height: 30px;
+  flex: 1;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  outline: 0;
+  background: transparent;
+  color: var(--gray-800);
+  padding: 0 6px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.control-panel-head input:hover {
+  border-color: var(--border);
+}
+
+.control-panel-head input:focus {
+  border-color: var(--primary-500);
+  background: var(--gray-0);
+  box-shadow: 0 0 0 3px var(--ring);
+}
+
+.control-fields {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px 12px;
+  padding: 12px;
+}
+
+.control-field {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+  gap: 5px;
+}
+
+.control-field.span-2 {
+  grid-column: span 2;
+}
+
+.control-field.span-3 {
+  grid-column: span 3;
+}
+
+.control-field.span-4 {
+  grid-column: span 4;
+}
+
+.control-field > span {
+  color: var(--gray-600);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.control-field input,
+.control-field select,
+.control-field textarea,
+.control-kind-picker > input {
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  outline: 0;
+  background-color: var(--gray-0);
+  color: var(--gray-800);
+  padding: 0 10px;
+  font-size: 13px;
+}
+
+.control-field select {
+  padding-right: 32px;
+}
+
+.control-field textarea {
+  min-height: 60px;
+  max-height: 240px;
+  padding: 8px 10px;
+  line-height: 1.6;
+  resize: vertical;
+  overflow-y: auto;
+}
+
+.control-field input:focus,
+.control-field select:focus,
+.control-field textarea:focus,
+.control-kind-picker > input:focus {
+  border-color: var(--primary-500);
+  box-shadow: 0 0 0 3px var(--ring);
+}
+
+.control-kind-picker {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.control-kind-group {
+  display: grid;
+  grid-template-columns: 104px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 8px;
+}
+
+.control-kind-group > span {
+  color: var(--gray-500);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.control-kind-group > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.control-kind-chip {
+  min-height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--gray-0);
+  color: var(--gray-700);
+  padding: 0 12px;
+  font-size: 12px;
+}
+
+.control-kind-chip:hover {
+  border-color: var(--gray-400);
+  color: var(--gray-900);
+}
+
+.control-kind-empty {
+  margin: 0;
+  color: var(--gray-400);
+  font-size: 13px;
+}
+
+.device-name-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.control-lines {
+  display: grid;
+  gap: 4px;
+}
+
+.control-lines > div {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.control-lines .control-kind-tag {
+  min-height: 20px;
+  border-color: var(--border);
+  color: var(--gray-600);
+  font-weight: 500;
+}
+
+.control-lines code {
+  overflow: hidden;
+  color: var(--gray-600);
+  font-family: inherit;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .device-type-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .device-type-tile {
+    min-height: 112px;
+  }
+
+  .control-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .control-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .control-field.span-2 {
+    grid-column: span 1;
+  }
+
+  .control-field.span-3,
+  .control-field.span-4 {
+    grid-column: 1 / -1;
+  }
+
+  .control-kind-group {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+}
+
+@media (max-width: 720px) {
+  /* Dialogs are bottom sheets on phones; keep the assistant button clear of their footer buttons. */
+  body:has(.modal-backdrop) .assistant-launcher {
+    bottom: 92px;
+  }
+}

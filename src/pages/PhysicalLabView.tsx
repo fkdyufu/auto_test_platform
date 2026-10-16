@@ -26,7 +26,7 @@ import {
   resolveControlPath,
   sameEnd,
 } from "../../shared/physical-lab";
-import { INTERFACE_LABELS } from "../control-interface-labels";
+import { CONTROL_KINDS, controlSummary } from "../../shared/control-interfaces";
 import { borderPoint, labelWidth, layoutLab, type PlacedNode } from "../lab-layout";
 import { AutoResizeTextarea, Modal, type Notice } from "../components/ui";
 
@@ -55,13 +55,13 @@ function touches(link: LabLink, nodeId: string, portId?: string): boolean {
 function nodeSubtitle(node: LabNode, device?: DeviceResource): string {
   if (node.kind === "platform") return "测试平台";
   if (node.kind === "external") return "外部节点 · 不受平台控制";
-  return [device?.types.join(" / "), device?.model].filter(Boolean).join(" · ");
+  return device?.templateName || "";
 }
 
 function nodeShortSubtitle(node: LabNode, device?: DeviceResource): string {
   if (node.kind === "platform") return "测试平台";
   if (node.kind === "external") return "外部";
-  return device?.types[0] || "设备";
+  return device?.templateName || "设备";
 }
 
 export function PhysicalLabView({
@@ -445,9 +445,9 @@ function PortPanel({
                 return (
                   <li key={control.id}>
                     <div className="lab-control-what">
-                      <strong>{INTERFACE_LABELS[control.type]}</strong>
-                      <span>{control.name}</span>
-                      <code>{control.address}</code>
+                      <strong>{CONTROL_KINDS[control.kind].label}</strong>
+                      {control.name && <span>{control.name}</span>}
+                      <code>{controlSummary(control)}</code>
                     </div>
                     {path.band && <span className={`lab-tag ${path.band === "out-of-band" ? "strong" : ""}`}>{path.band === "out-of-band" ? "带外" : "带内"}</span>}
                     <div className="lab-control-path">
@@ -459,7 +459,7 @@ function PortPanel({
                         </select>
                       </label>
                       <span className="lab-control-route">
-                        {port && path.peer ? `${port.name} ── ${endLabel(lab, path.peer)}` : port ? `${port.name}（未接线）` : control.type === "serial" ? "在平台服务器上登记与地址同名的串口并接线后会自动识别" : "未指定"}
+                        {port && path.peer ? `${port.name} ── ${endLabel(lab, path.peer)}` : port ? `${port.name}（未接线）` : control.kind === "serial" ? "在平台服务器上登记与串口设备同名的串口并接线后会自动识别" : "未指定"}
                         {path.addressMatches === true && <em className="ok">✓ 地址与连线一致</em>}
                         {path.addressMatches === false && <em className="bad">地址与连线不一致</em>}
                       </span>
@@ -528,7 +528,7 @@ function DeviceCards({
                   const path = resolveControlPath(lab, node.id, control);
                   return (
                     <li key={control.id}>
-                      <span>{INTERFACE_LABELS[control.type]} {control.address}</span>
+                      <span>{CONTROL_KINDS[control.kind].label} {controlSummary(control)}</span>
                       {path.band ? <span className={`lab-tag ${path.band === "out-of-band" ? "strong" : ""}`}>{path.band === "out-of-band" ? "带外" : "带内"}</span> : <span className="lab-muted">未指定端口</span>}
                     </li>
                   );

@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer, type Socket } from "node:net";
 import test from "node:test";
-import { TELNET_PROMPT, TelnetSessionPool } from "./telnet-session.js";
-import type { ControlInterface } from "./catalog-store.js";
+import { TELNET_PROMPT, TelnetSessionPool, type TelnetCredentials } from "./telnet-session.js";
 
 async function fakeSwitch(t: test.TestContext) {
   const sockets = new Set<Socket>();
@@ -46,7 +45,7 @@ async function fakeSwitch(t: test.TestContext) {
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const target = { host: "127.0.0.1", port: (server.address() as { port: number }).port };
-  const control: ControlInterface = { id: "switch-console", name: "Telnet", type: "telnet", address: `127.0.0.1:${target.port}`, username: "", password: "" };
+  const control: TelnetCredentials = { username: "", password: "" };
   const pool = new TelnetSessionPool();
   t.after(async () => {
     await pool.close();

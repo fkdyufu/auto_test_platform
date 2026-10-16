@@ -3,6 +3,8 @@ import type { DiagnosticMessage } from "./diagnostic-store.js";
 import { formatStepRows, stepRowsFromLegacy } from "../shared/test-case-steps.js";
 import { FAILURE_TYPE_LABELS, STEP_CHECK_LABELS } from "../shared/test-result.js";
 import { formatPhysicalLab } from "./physical-lab-prompt.js";
+import { CONTROL_KINDS, describeControlSettings } from "../shared/control-interfaces.js";
+import { deviceTemplateName } from "../shared/device-templates.js";
 
 const MAX_EVIDENCE_EVENTS = 40;
 const MAX_EVENT_TEXT = 1_800;
@@ -33,10 +35,11 @@ function formatDevices(context: DiagnosticExecutionContext): string {
   const devices = context.devices.map((device) => {
     const controls = device.controlInterfaces.length
       ? device.controlInterfaces.map((control) =>
-          `${control.name || "未命名接口"}[${control.type}, ID: ${control.id}, 地址: ${control.address || "未配置"}${control.username ? `, 账号: ${control.username}` : ""}]`,
+          `${control.name || CONTROL_KINDS[control.kind].label}[${control.kind}, ID: ${control.id}, ${describeControlSettings(control, false) || "未配置"}]`,
         ).join("；")
       : "未配置控制接口";
-    return `- ${device.name}（设备 ID: ${device.id}，类型: ${device.types.join("、")}${device.model ? `，型号: ${device.model}` : ""}）\n  ${controls}`;
+    const description = device.description ? `\n  说明: ${device.description.split("\n").join("\n    ")}` : "";
+    return `- ${device.name}（设备 ID: ${device.id}，类型: ${deviceTemplateName(device.template, context.product.name)}）${description}\n  ${controls}`;
   });
   return `场景绑定设备的当前资源配置：\n${devices.join("\n") || "无可用绑定设备"}`;
 }

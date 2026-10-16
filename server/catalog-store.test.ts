@@ -161,7 +161,7 @@ test("migrates legacy test order fields without losing the collection", async (t
   assert.equal("roleBindings" in detail, false);
 });
 
-test("migrates a legacy slash-separated device type into multiple types", async (t) => {
+test("migrates a legacy slash-separated device type into a custom device that keeps the labels", async (t) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "ai-test-catalog-device-types-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const filePath = path.join(directory, "catalog.json");
@@ -185,8 +185,10 @@ test("migrates a legacy slash-separated device type into multiple types", async 
 
   const [migratedDevice] = await new CatalogStore(filePath).listDeviceResources(product.id);
 
-  assert.deepEqual(migratedDevice.types, ["peer", "host"]);
+  assert.equal(migratedDevice.template, "custom");
+  assert.equal(migratedDevice.description, "原类型：peer、host");
   assert.equal("type" in migratedDevice, false);
+  assert.equal("types" in migratedDevice, false);
 });
 
 test("rejects cases from another product", async (t) => {
@@ -335,19 +337,18 @@ test("creates structured resources and a scenario with fixed device bindings", a
   assert.equal(context.devices.length, 2);
   assert.ok((await store.listTestScenarios(product.id)).some((item) => item.id === scenario.id));
   assert.equal(context.scenarios.find((item) => item.id === scenario.id)?.name, "VRRP 双机主备");
-  assert.equal(master.controlInterfaces[0].hasPassword, true);
-  assert.equal("password" in master.controlInterfaces[0], false);
-  assert.equal(context.devices.find((item) => item.id === master.id)?.controlInterfaces[0].password, "secret");
+  assert.deepEqual(master.controlInterfaces[0].secretsSet, ["password"]);
+  assert.equal("password" in master.controlInterfaces[0].settings, false);
+  assert.equal(context.devices.find((item) => item.id === master.id)?.controlInterfaces[0].settings.password, "secret");
 
   await store.updateDeviceResource(product.id, master.id, {
     name: master.name,
-    types: master.types,
-    model: master.model,
+    template: master.template,
     description: master.description,
-    controlInterfaces: [{ ...master.controlInterfaces[0], password: "" }],
+    controlInterfaces: [{ ...master.controlInterfaces[0], settings: { ...master.controlInterfaces[0].settings, password: "" } }],
   });
   const contextAfterUpdate = await store.getTestOrderExecutionContext(order.id);
-  assert.equal(contextAfterUpdate.devices.find((item) => item.id === master.id)?.controlInterfaces[0].password, "secret");
+  assert.equal(contextAfterUpdate.devices.find((item) => item.id === master.id)?.controlInterfaces[0].settings.password, "secret");
 
   await assert.rejects(
     store.archiveDeviceResource(product.id, master.id),
@@ -911,7 +912,7 @@ test("migrates v10 environments and roles without guessing bindings or changing 
   assert.deepEqual(diagnostic.devices.map((item) => item.id), [device.id]);
   await migratedStore.updateTestScenario(product.id, scenario.id, { ...migrated, roles: [{ ...migrated.roles[0], deviceId: device.id }] });
   const persisted = JSON.parse(await readFile(filePath, "utf8"));
-  assert.equal(persisted.version, 13);
+  assert.equal(persisted.version, 14);
   assert.equal("physicalEnvironments" in persisted, false);
   assert.equal("physicalEnvironmentId" in persisted.testOrders[0], false);
   assert.equal((await migratedStore.listTestScenarios(product.id)).find((item) => item.id === scenario.id)?.description, migrated.description);

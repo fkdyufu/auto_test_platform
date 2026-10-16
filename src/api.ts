@@ -2,6 +2,10 @@ import type { AssistantConversation, AssistantPageContext } from "../shared/assi
 import type { TestResultDetails } from "../shared/test-result";
 import type { TestCaseStep } from "../shared/test-case-steps";
 import type { PhysicalLab } from "../shared/physical-lab";
+import type { ControlKind, PublicControlInterface } from "../shared/control-interfaces";
+import type { DeviceTemplateId } from "../shared/device-templates";
+export type { ControlKind, PublicControlInterface } from "../shared/control-interfaces";
+export type { DeviceTemplateId } from "../shared/device-templates";
 export type { LabLink, LabLinkEnd, LabLinkRole, LabNode, LabPort, LabPortKind, PhysicalLab } from "../shared/physical-lab";
 export type { AssistantConversation, AssistantPageContext, AssistantProposal, AssetKind } from "../shared/assistant";
 export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
@@ -128,31 +132,25 @@ export interface TestCase {
   updatedAt: string;
 }
 
-export type ControlInterfaceType = "web" | "ssh" | "telnet" | "serial" | "api" | "other";
-
-export interface ControlInterface {
-  id: string;
-  name: string;
-  type: ControlInterfaceType;
-  address: string;
-  username: string;
-  hasPassword: boolean;
-}
-
-export interface ControlInterfaceInput extends Omit<ControlInterface, "hasPassword"> {
-  password: string;
-}
-
 export interface DeviceResource {
   id: string;
   productId: string;
   name: string;
-  types: string[];
-  model: string;
+  template: DeviceTemplateId;
+  templateName: string;
   description: string;
-  controlInterfaces: ControlInterface[];
+  controlInterfaces: PublicControlInterface[];
   createdAt: string;
   updatedAt: string;
+}
+
+/** An interface being edited. Secret settings hold only newly typed values; `secretsSet` lists the stored ones. */
+export interface ControlInterfaceInput {
+  id: string;
+  name: string;
+  kind: ControlKind;
+  settings: Record<string, string>;
+  secretsSet: string[];
 }
 
 export interface ScenarioRole {
@@ -294,8 +292,7 @@ export interface TestOrderInput {
 
 export interface DeviceResourceInput {
   name: string;
-  types: string[];
-  model: string;
+  template: DeviceTemplateId;
   description: string;
   controlInterfaces: ControlInterfaceInput[];
 }

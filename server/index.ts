@@ -24,6 +24,8 @@ import { createAssistantTools } from "./assistant-tools.js";
 import { buildAssistantPrompt } from "./assistant-context.js";
 import { resolveScenarioDevices } from "./scenario-devices.js";
 import { formatPhysicalLab } from "./physical-lab-prompt.js";
+import { CONTROL_KINDS, describeControlSettings } from "../shared/control-interfaces.js";
+import { deviceTemplateName } from "../shared/device-templates.js";
 import {
   executePiDiagnostic,
   executePiAssistant,
@@ -251,19 +253,14 @@ async function createRunRecord(
 function buildDeviceDescription(context: TestOrderExecutionContext): string {
   const { devices } = context;
   const deviceLines = devices.map((device) => {
+    // Execution prompts carry credentials so the agent can log in through web pages and consoles.
     const controls = device.controlInterfaces.length
       ? device.controlInterfaces
-          .map((item) => {
-            const credentials = item.username
-              ? `，账号 ${item.username}${item.password ? `，密码 ${item.password}` : ""}`
-              : item.password
-                ? `，密码 ${item.password}`
-                : "";
-            return `${item.name}[${item.type}，接口 ID: ${item.id}] ${item.address}${credentials}`;
-          })
+          .map((item) => `${item.name || CONTROL_KINDS[item.kind].label}[${item.kind}，接口 ID: ${item.id}] ${describeControlSettings(item, true)}`)
           .join("；")
       : "未配置控制接口";
-    return `- ${device.name}（ID: ${device.id}，类型: ${device.types.join("、")}${device.model ? `，型号: ${device.model}` : ""}）\n  控制接口: ${controls}`;
+    const description = device.description ? `\n  说明: ${device.description.split("\n").join("\n    ")}` : "";
+    return `- ${device.name}（ID: ${device.id}，类型: ${deviceTemplateName(device.template, context.productName || "")}）${description}\n  控制接口: ${controls}`;
   });
   return `\n\n场景绑定设备：\n${deviceLines.join("\n") || "未绑定设备，不提供设备控制工具"}\n\n请根据当前阶段要求使用可用的设备控制接口；未提供相应工具时，不得声称已经完成操作。`;
 }
@@ -428,6 +425,7 @@ async function executeTestOrderRun(run: RunRecord, order: TestOrder, testRun: Te
     if (scenario) {
       try {
         executionContext = {
+          productName: productContext.productName,
           devices: resolveScenarioDevices(scenario, scenarioRun, productContext.devices),
           scenarios: [scenario],
           physicalLab: testRun.physicalLabSnapshot,

@@ -15,6 +15,7 @@ import { DIAGNOSTIC_DEVICE_ACCESS_RULE } from "./diagnostic-context.js";
 import { modelRuntimePaths, type ModelSettings } from "./settings-store.js";
 import { createToolEvidence } from "./tool-evidence.js";
 import { buildExecutionPolicy, FINISH_ONLY_REQUIREMENT, type ExecutionPhase } from "./execution-policy.js";
+import { secretKeys } from "../shared/control-interfaces.js";
 
 const RUNTIME_PROVIDER_ID = "test-runner";
 const AGENT_INACTIVITY_TIMEOUT_MS = 5 * 60_000;
@@ -175,7 +176,10 @@ async function executePiAgent(options: PiAgentOptions): Promise<{ result?: Finis
   let compactionError = "";
   let beforeCompactionThinking: ModelSettings["reasoningLevel"] | undefined;
   let cancelled = false;
-  const secrets = [options.settings.apiKey, ...(options.devices || []).flatMap((device) => device.controlInterfaces.map((control) => control.password))].filter((value): value is string => Boolean(value && value.length >= 3));
+  const secrets = [
+    options.settings.apiKey,
+    ...(options.devices || []).flatMap((device) => device.controlInterfaces.flatMap((control) => secretKeys(control.kind).map((key) => control.settings[key]))),
+  ].filter((value): value is string => Boolean(value && value.length >= 3));
   const redact = (value: string) => secrets.reduce((text, secret) => text.split(secret).join("[REDACTED]"), value);
   const redactArgs = (value: unknown): unknown => {
     if (typeof value === "string") return redact(value);

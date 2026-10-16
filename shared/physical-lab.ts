@@ -1,3 +1,5 @@
+import type { ControlInterface } from "./control-interfaces.js";
+
 export type LabPortKind = "ethernet" | "serial" | "usb" | "power" | "rf" | "other";
 export type LabLinkRole = "data" | "control" | "power";
 export type LabNodeKind = "device" | "platform" | "external";
@@ -40,12 +42,7 @@ export interface PhysicalLab {
   updatedAt: string;
 }
 
-export interface LabControlInterface {
-  id: string;
-  name: string;
-  type: string;
-  address: string;
-}
+export type LabControlInterface = Pick<ControlInterface, "id" | "name" | "kind" | "settings">;
 
 export const PLATFORM_NODE_ID = "platform";
 export const DEFAULT_PLATFORM_NAME = "平台服务器";
@@ -169,7 +166,7 @@ export function resolveControlPath(lab: Pick<PhysicalLab, "nodes" | "links">, no
   let portId = node.controlPorts[control.id];
   let source: ControlPath["source"] = portId && node.ports.some((port) => port.id === portId) ? "manual" : undefined;
   if (!source) portId = "";
-  const serialName = control.type === "serial" ? serialDeviceName(control.address).toLowerCase() : "";
+  const serialName = control.kind === "serial" ? serialDeviceName(control.settings.device || "").toLowerCase() : "";
   const platform = lab.nodes.find((item) => item.kind === "platform");
   if (!source && serialName && platform) {
     const platformPort = platform.ports.find((port) => port.name.toLowerCase() === serialName);

@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import {
   Cable,
+  ChevronLeft,
   Layers3,
   Library,
   Network,
@@ -13,8 +14,6 @@ import {
 } from "lucide-react";
 import {
   api,
-  type ControlInterfaceInput,
-  type ControlInterfaceType,
   type DeviceResource,
   type DeviceResourceInput,
   type PhysicalLab,
@@ -27,23 +26,15 @@ import {
 } from "../api";
 import { AutoResizeTextarea, InlineNotice, Modal, PageHeader, type Notice } from "../components/ui";
 import { useAssistantPage } from "../components/AssistantContext";
-import { INTERFACE_LABELS } from "../control-interface-labels";
+import { CONTROL_KINDS, controlSummary } from "../../shared/control-interfaces";
+import { DeviceEditor, DeviceTypeIcon, deviceFormProblems, deviceRequest, editDeviceDialog, newDeviceDialog, type DeviceDialogState } from "../components/DeviceEditor";
 import { PhysicalLabView } from "./PhysicalLabView";
 
 type ResourceTab = "devices" | "lab" | "scenarios";
 
 type ResourceDialog =
-  | { kind: "device"; id?: string; form: DeviceResourceInput }
+  | DeviceDialogState
   | { kind: "scenario"; id?: string; form: TestScenarioInput; caseIds: string[] };
-
-const INTERFACE_ADDRESS_PLACEHOLDERS: Record<ControlInterfaceType, string> = {
-  web: "例如 http://192.168.1.1",
-  ssh: "例如 192.168.1.1:22",
-  telnet: "例如 192.168.1.1:23",
-  serial: "例如 /dev/ttyUSB0?baudRate=115200",
-  api: "例如 http://192.168.1.1/api/",
-  other: "接口地址",
-};
 
 const TAB_META: Record<ResourceTab, { label: string; action: string }> = {
   devices: { label: "设备资源", action: "新增设备" },
@@ -67,16 +58,6 @@ function newId(): string {
   bytes[8] = (bytes[8] & 0x3f) | 0x80;
   const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0"));
   return `${hex.slice(0, 4).join("")}-${hex.slice(4, 6).join("")}-${hex.slice(6, 8).join("")}-${hex.slice(8, 10).join("")}-${hex.slice(10).join("")}`;
-}
-
-function emptyDevice(): DeviceResourceInput {
-  return {
-    name: "",
-    types: [""],
-    model: "",
-    description: "",
-    controlInterfaces: [],
-  };
 }
 
 function emptyScenario(): TestScenarioInput {
@@ -132,7 +113,7 @@ export function ResourcesPage({ product }: { product: ProductSummary }) {
   useAssistantPage({ page: "resources", title: dialog ? dialog.form.name || (dialog.kind === "device" ? "新增设备" : "新增场景") : TAB_META[tab].label, assetKind: dialog?.kind || (tab === "devices" ? "device" : tab === "scenarios" ? "scenario" : undefined), assetId: dialog?.id, ...(dialog && !submitting ? { draft: { ...dialog.form, ...(dialog.kind === "scenario" && dialog.id ? { caseIds: dialog.caseIds } : {}) } } : {}) }, (draft) => {
     setDialog((current) => {
       if (!current) return current;
-      if (current.kind === "device") return { ...current, form: draft as unknown as DeviceResourceInput };
+      if (current.kind === "device") return { ...current, form: draft as unknown as DeviceResourceInput, editor: { ...current.editor, touched: true } };
       const { caseIds, ...form } = draft;
       return { ...current, form: form as unknown as TestScenarioInput, caseIds: Array.isArray(caseIds) ? caseIds as string[] : current.caseIds };
     });
@@ -149,13 +130,23 @@ export function ResourcesPage({ product }: { product: ProductSummary }) {
 
   const openCreate = () => {
     setDialogError("");
-    if (tab === "devices") setDialog({ kind: "device", form: emptyDevice() });
+    if (tab === "devices") setDialog(newDeviceDialog());
     else setDialog({ kind: "scenario", form: emptyScenario(), caseIds: [] });
   };
 
   const save = async (event: FormEvent) => {
     event.preventDefault();
     if (!dialog) return;
+    if (dialog.kind === "device") {
+      if (dialog.editor.step !== "form") return;
+      const problems = deviceFormProblems(dialog.form);
+      if (problems) {
+        // Open the first unfinished interface so its red fields are visible.
+        setDialog({ ...dialog, editor: { ...dialog.editor, showErrors: true, adding: false, selectedId: problems.incomplete[0] ?? dialog.editor.selectedId } });
+        setDialogError(problems.name && !problems.incomplete.length ? "请填写设备名称" : "请补全标红的内容");
+        return;
+      }
+    }
     if (dialog.kind === "scenario" && dialog.id) {
       const selectedIds = new Set(dialog.caseIds);
       const movedIn = testCases.filter((testCase) => selectedIds.has(testCase.id) && testCase.scenarioId !== dialog.id).length;
@@ -170,8 +161,8 @@ export function ResourcesPage({ product }: { product: ProductSummary }) {
       setSubmitting(true);
       setDialogError("");
       if (dialog.kind === "device") {
-        if (dialog.id) await api.updateDeviceResource(product.id, dialog.id, dialog.form);
-        else await api.createDeviceResource(product.id, dialog.form);
+        if (dialog.id) await api.updateDeviceResource(product.id, dialog.id, deviceRequest(dialog.form));
+        else await api.createDeviceResource(product.id, deviceRequest(dialog.form));
       } else if (dialog.id) await api.updateTestScenario(product.id, dialog.id, { ...dialog.form, caseIds: dialog.caseIds });
       else await api.createTestScenario(product.id, dialog.form);
       await reload();
@@ -239,16 +230,23 @@ export function ResourcesPage({ product }: { product: ProductSummary }) {
         {tab === "devices" ? (
           <div className="table-wrap">
             <table className="data-table">
-              <thead><tr><th>设备</th><th>类型 / 型号</th><th>控制接口</th><th>设备说明</th><th aria-label="操作" /></tr></thead>
+              <thead><tr><th>设备</th><th>类型</th><th>控制接口</th><th>说明</th><th aria-label="操作" /></tr></thead>
               <tbody>
                 {devices.map((device) => (
                   <tr key={device.id}>
-                    <td className="name-cell"><strong>{device.name}</strong><small>{device.description || "暂无说明"}</small></td>
-                    <td>{device.types.join("、")}<span className="cell-subtext">{device.model || "未配置型号"}</span></td>
-                    <td>{device.controlInterfaces.length}<span className="cell-subtext">{device.controlInterfaces.slice(0, 2).map((item) => `${INTERFACE_LABELS[item.type]} ${item.address}`).join("；") || "未配置"}</span></td>
-                    <td className="truncate-cell">{device.description || "-"}</td>
+                    <td><div className="device-name-cell"><span className="device-type-icon"><DeviceTypeIcon template={device.template} /></span><strong>{device.name}</strong></div></td>
+                    <td>{device.templateName}</td>
+                    <td>
+                      <div className="control-lines">
+                        {device.controlInterfaces.map((item) => (
+                          <div key={item.id}><span className="control-kind-tag">{CONTROL_KINDS[item.kind].label}</span><code>{controlSummary(item) || item.name}</code></div>
+                        ))}
+                        {!device.controlInterfaces.length && <span className="cell-subtext">无</span>}
+                      </div>
+                    </td>
+                    <td className="truncate-cell" title={device.description || undefined}>{device.description || "-"}</td>
                     <td><div className="row-actions">
-                      <button className="icon-action" title="编辑设备" onClick={() => setDialog({ kind: "device", id: device.id, form: { ...device, controlInterfaces: device.controlInterfaces.map((item) => ({ ...item, password: "" })) } })}><Pencil size={16} /></button>
+                      <button className="icon-action" title="编辑设备" onClick={() => { setDialogError(""); setDialog(editDeviceDialog(device)); }}><Pencil size={16} /></button>
                       <button className="icon-action danger" title="删除设备" onClick={() => void remove("device", device.id, device.name)}><Trash2 size={16} /></button>
                     </div></td>
                   </tr>
@@ -286,50 +284,44 @@ export function ResourcesPage({ product }: { product: ProductSummary }) {
       </div>}
 
       {dialog && (
-        <Modal
-          title={`${dialog.id ? "编辑" : "新增"}${dialog.kind === "device" ? "设备资源" : "测试场景"}`}
-          onClose={() => setDialog(null)}
-          onSubmit={save}
-          submitting={submitting}
-        >
-          {dialogError && <div className="form-error">{dialogError}</div>}
-          {dialog.kind === "device" ? <DeviceForm dialog={dialog} setDialog={setDialog} /> : <ScenarioForm dialog={dialog} setDialog={setDialog} devices={devices} testCases={testCases} scenarios={scenarios} />}
-        </Modal>
+        dialog.kind === "device" ? (
+          <Modal
+            title={dialog.id ? "编辑设备" : "新增设备"}
+            subtitle={dialog.editor.step === "pick" ? (dialog.id ? "更换类型" : "选择类型") : undefined}
+            className="device-modal"
+            onClose={() => setDialog(null)}
+            onSubmit={save}
+            submitting={submitting}
+            submitLabel={dialog.id ? "保存" : "创建"}
+            hideSubmit={dialog.editor.step === "pick"}
+            footerStart={dialog.editor.step === "form" && !dialog.id ? (
+              <button type="button" className="button secondary" disabled={submitting} onClick={() => setDialog({ ...dialog, editor: { ...dialog.editor, step: "pick" } })}>
+                <ChevronLeft size={16} />上一步
+              </button>
+            ) : dialog.editor.step === "pick" && dialog.id ? (
+              <button type="button" className="button secondary" onClick={() => setDialog({ ...dialog, editor: { ...dialog.editor, step: "form" } })}>
+                <ChevronLeft size={16} />返回
+              </button>
+            ) : undefined}
+          >
+            {/* A "fill in the red fields" message goes away once nothing is red any more. */}
+            {dialogError && dialog.editor.step === "form" && !(dialog.editor.showErrors && !deviceFormProblems(dialog.form)) && <div className="form-error">{dialogError}</div>}
+            <DeviceEditor productName={product.name} dialog={dialog} setDialog={setDialog} />
+          </Modal>
+        ) : (
+          <Modal
+            title={`${dialog.id ? "编辑" : "新增"}测试场景`}
+            onClose={() => setDialog(null)}
+            onSubmit={save}
+            submitting={submitting}
+          >
+            {dialogError && <div className="form-error">{dialogError}</div>}
+            <ScenarioForm dialog={dialog} setDialog={setDialog} devices={devices} testCases={testCases} scenarios={scenarios} />
+          </Modal>
+        )
       )}
     </div>
   );
-}
-
-function DeviceForm({ dialog, setDialog }: { dialog: Extract<ResourceDialog, { kind: "device" }>; setDialog: (value: ResourceDialog) => void }) {
-  const update = (value: Partial<DeviceResourceInput>) => setDialog({ ...dialog, form: { ...dialog.form, ...value } });
-  const updateControl = (id: string, value: Partial<ControlInterfaceInput>) =>
-    update({ controlInterfaces: dialog.form.controlInterfaces.map((item) => item.id === id ? { ...item, ...value } : item) });
-  return <>
-    <div className="modal-grid">
-      <label className="field"><span>设备名称</span><input autoFocus value={dialog.form.name} onChange={(event) => update({ name: event.target.value })} /></label>
-      <label className="field"><span>设备型号</span><input value={dialog.form.model} onChange={(event) => update({ model: event.target.value })} /></label>
-      <label className="field full-width"><span>设备说明</span><AutoResizeTextarea rows={2} value={dialog.form.description} onChange={(event) => update({ description: event.target.value })} /></label>
-    </div>
-    <div className="form-list-heading"><div><Server size={16} /><strong>设备类型</strong></div><button type="button" className="button secondary compact" onClick={() => update({ types: [...dialog.form.types, ""] })}><Plus size={15} />添加类型</button></div>
-    <div className="structured-list">
-      {dialog.form.types.map((type, index) => <div className="structured-row device-type-row" key={index}>
-        <label className="grow"><span>类型 {index + 1}</span><input value={type} placeholder="例如 host、peer、TAU" onChange={(event) => update({ types: dialog.form.types.map((item, itemIndex) => itemIndex === index ? event.target.value : item) })} /></label>
-        <button type="button" className="icon-action danger row-remove" title="删除类型" disabled={dialog.form.types.length === 1} onClick={() => update({ types: dialog.form.types.filter((_, itemIndex) => itemIndex !== index) })}><Trash2 size={16} /></button>
-      </div>)}
-    </div>
-    <div className="form-list-heading"><div><Server size={16} /><strong>控制接口</strong></div><button type="button" className="button secondary compact" onClick={() => update({ controlInterfaces: [...dialog.form.controlInterfaces, { id: newId(), name: "", type: "web", address: "", username: "", password: "" }] })}><Plus size={15} />添加接口</button></div>
-    <div className="structured-list">
-      {dialog.form.controlInterfaces.map((item) => <div className="structured-row control-row" key={item.id}>
-        <label><span>类型</span><select value={item.type} onChange={(event) => updateControl(item.id, { type: event.target.value as ControlInterfaceType })}>{Object.entries(INTERFACE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-        <label><span>名称</span><input value={item.name} placeholder="例如 Web 管理" onChange={(event) => updateControl(item.id, { name: event.target.value })} /></label>
-        <label className="grow"><span>接口地址</span><input value={item.address} placeholder={INTERFACE_ADDRESS_PLACEHOLDERS[item.type]} onChange={(event) => updateControl(item.id, { address: event.target.value })} /></label>
-        <label><span>账号</span><input value={item.username} placeholder="可选" autoComplete="off" onChange={(event) => updateControl(item.id, { username: event.target.value })} /></label>
-        <label><span>密码</span><input value={item.password} placeholder={dialog.id ? "留空保持不变" : "可选"} autoComplete="off" onChange={(event) => updateControl(item.id, { password: event.target.value })} /></label>
-        <button type="button" className="icon-action danger row-remove" title="删除接口" onClick={() => update({ controlInterfaces: dialog.form.controlInterfaces.filter((control) => control.id !== item.id) })}><Trash2 size={16} /></button>
-      </div>)}
-      {!dialog.form.controlInterfaces.length && <div className="structured-empty">暂未配置控制接口</div>}
-    </div>
-  </>;
 }
 
 function ScenarioForm({

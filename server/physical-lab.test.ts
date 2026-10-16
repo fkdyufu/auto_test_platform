@@ -65,13 +65,13 @@ test("lists every product device and the platform in a new lab", async (t) => {
   assert.equal(lab.updatedAt, "");
 });
 
-test("saves wiring, resolves control paths and upgrades the catalog to version 13", async (t) => {
+test("saves wiring, resolves control paths and stores the catalog as version 14", async (t) => {
   const { store, file } = await createStore(t);
   const { tau, sw, lab } = await seedLab(store);
   assert.equal(lab.links.length, 3);
   assert.equal(lab.nodes.find((node) => node.id === sw.id)?.name, "switch");
   const stored = JSON.parse(await readFile(file, "utf8")) as { version: number; physicalLabs: PhysicalLab[] };
-  assert.equal(stored.version, 13);
+  assert.equal(stored.version, 14);
   assert.equal(stored.physicalLabs[0].nodes.find((node) => node.id === tau.id)?.name, "", "device names are resolved on read, not stored");
 
   const web = resolveControlPath(lab, tau.id, tau.controlInterfaces[0]);

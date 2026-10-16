@@ -40,7 +40,7 @@ test("assistant queries relationships and pagination without crossing products o
   assert.equal(JSON.stringify(await reader.get("device", f.device.id)).includes("secret-value"), false);
   const controlResources = await f.catalog.getProductDeviceControlResources(f.product.id);
   assert.deepEqual(controlResources.map((item) => item.id), [f.device.id]);
-  assert.equal(controlResources[0].controlInterfaces[0].password, "secret-value");
+  assert.equal(controlResources[0].controlInterfaces[0].settings.password, "secret-value");
   assert.equal((await f.catalog.getProductDeviceControlResources(f.other.id)).length, 0);
   await assert.rejects(reader.get("case", foreign.id), CatalogError);
   await assert.rejects(reader.query("case", { scenarioId: "foreign-scenario" }), CatalogError);
@@ -77,7 +77,7 @@ test("generic asset operations support creation, relationship edits, and deletio
   await f.catalog.applyAssetChanges(f.product.id, preview);
   assert.deepEqual((await f.catalog.getTestOrder(f.product.id, f.order.id)).caseIds, [f.first.id]);
   assert.ok((await f.catalog.listTestCases(f.product.id)).some((item) => item.name === "新用例"));
-  assert.equal((await f.catalog.getTestOrderExecutionContext(f.order.id)).devices[0].controlInterfaces[0].password, "secret-value");
+  assert.equal((await f.catalog.getTestOrderExecutionContext(f.order.id)).devices[0].controlInterfaces[0].settings.password, "secret-value");
 });
 
 test("invalid batches, foreign assets and stale previews never partially commit", async (t) => {
@@ -147,12 +147,23 @@ test("assistant exposes only generic tools and proposes drafts without saving as
   await assert.rejects(cancelled[4].execute("call", { summary: "取消", values: { name: "不应用" } } as never, undefined, undefined, {} as never), CatalogError);
 });
 
-test("draft patches preserve interface passwords and validate controlled form shapes", () => {
-  const context = normalizeAssistantContext({ page: "resources", title: "设备", assetKind: "device", draft: { controlInterfaces: [{ id: "ssh", password: "hidden", name: "SSH" }] } });
+test("draft patches preserve interface secrets and validate controlled form shapes", () => {
+  const context = normalizeAssistantContext({ page: "resources", title: "设备", assetKind: "device", draft: { controlInterfaces: [
+    { id: "ssh", kind: "ssh", name: "SSH", settings: { host: "192.0.2.1", password: "hidden" } },
+    { id: "api", kind: "api", name: "", settings: { baseUrl: "http://192.0.2.1/", auth: "token", token: "hidden-token" } },
+  ] } });
   assert.equal(JSON.stringify(context).includes("hidden"), false);
-  const draft = { name: "设备", types: ["TAU"], controlInterfaces: [{ id: "ssh", name: "SSH", type: "ssh", address: "192.0.2.1", username: "root", password: "preserved" }] };
-  const next = applyDraftPatch("device", draft, { controlInterfaces: [{ id: "ssh", name: "SSH", type: "ssh", address: "192.0.2.2", username: "root" }] });
-  assert.equal((next.controlInterfaces as { password: string }[])[0].password, "preserved");
+  const draft = { name: "设备", template: "linux", controlInterfaces: [{ id: "ssh", name: "SSH", kind: "ssh", settings: { host: "192.0.2.1", port: "22", username: "root", password: "preserved" }, secretsSet: ["password"] }] };
+  const next = applyDraftPatch("device", draft, { controlInterfaces: [{ id: "ssh", name: "SSH", kind: "ssh", settings: { host: "192.0.2.2", username: "root" } }] });
+  const [control] = next.controlInterfaces as { settings: Record<string, string>; secretsSet: string[] }[];
+  assert.equal(control.settings.password, "preserved");
+  assert.equal(control.settings.host, "192.0.2.2");
+  assert.deepEqual(control.secretsSet, ["password"]);
+  assert.equal(applyDraftPatch("device", draft, { template: "router" }).template, "router");
+  assert.throws(() => applyDraftPatch("device", draft, { template: "firewall" }), /设备类型不正确/);
+  assert.throws(() => applyDraftPatch("device", draft, { controlInterfaces: [{ kind: "ssh", settings: { community: "public" } }] }), /不支持的字段/);
+  assert.throws(() => applyDraftPatch("device", draft, { controlInterfaces: [{ kind: "rdp", settings: {} }] }), /控制方式不正确/);
+  assert.throws(() => applyDraftPatch("device", draft, { types: ["TAU"] }), /不可修改字段/);
   assert.throws(() => applyDraftPatch("case", {}, { steps: null }));
   assert.throws(() => applyDraftPatch("scenario", {}, { roles: [{ key: "DUT" }] }));
   assert.throws(() => applyDraftPatch("order", {}, { caseIds: [1] }));

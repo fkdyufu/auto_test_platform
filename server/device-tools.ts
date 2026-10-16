@@ -3,7 +3,8 @@ import { Client as SshClient } from "ssh2";
 import { SerialPort } from "serialport";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import type { ControlInterface, ControlInterfaceType, DeviceResource } from "./catalog-store.js";
+import type { ControlInterface, ControlKind, DeviceResource } from "./catalog-store.js";
+import { CONTROL_KINDS, parseSerialFrame } from "../shared/control-interfaces.js";
 import type { ToolEvidence } from "./tool-evidence.js";
 import { TelnetSessionPool } from "./telnet-session.js";
 
@@ -79,32 +80,20 @@ function textResult(value: Record<string, unknown>) {
   };
 }
 
-export function parseNetworkAddress(
-  address: string,
-  defaultPort: number,
-  allowedProtocols: string[],
-): NetworkAddress {
-  const trimmed = address.trim();
-  if (!trimmed) throw new Error("控制接口地址为空");
-  const defaultProtocol = allowedProtocols[0].replace(/:$/, "");
-  const withProtocol = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `${defaultProtocol}://${trimmed}`;
-  let url: URL;
-  try {
-    url = new URL(withProtocol);
-  } catch {
-    throw new Error(`控制接口地址格式不正确：${address}`);
-  }
-  if (!allowedProtocols.includes(url.protocol)) {
-    throw new Error(`控制接口地址协议不正确，应为 ${allowedProtocols.join(" 或 ")}`);
-  }
-  const port = url.port ? Number(url.port) : defaultPort;
-  if (!url.hostname || !Number.isInteger(port) || port < 1 || port > 65_535) {
-    throw new Error(`控制接口地址格式不正确：${address}`);
-  }
-  return { host: url.hostname, port };
+function settingText(control: ControlInterface, key: string): string {
+  return (control.settings[key] || "").trim();
 }
 
-export interface SerialAddress {
+/** Host and port of an SSH or Telnet interface. */
+export function networkTarget(control: ControlInterface, defaultPort: number): NetworkAddress {
+  const host = settingText(control, "host");
+  if (!host) throw new Error(`${CONTROL_KINDS[control.kind].label} 控制接口未配置地址`);
+  const port = Number(settingText(control, "port") || defaultPort);
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new Error(`${CONTROL_KINDS[control.kind].label} 控制接口端口不正确`);
+  return { host, port };
+}
+
+export interface SerialOptions {
   path: string;
   baudRate: number;
   dataBits: 5 | 6 | 7 | 8;
@@ -112,38 +101,18 @@ export interface SerialAddress {
   parity: "none" | "even" | "mark" | "odd" | "space";
 }
 
-export function parseSerialAddress(address: string): SerialAddress {
-  const trimmed = address.trim();
-  if (!trimmed) throw new Error("串口地址为空");
-  let pathValue = trimmed;
-  let query = "";
-  if (trimmed.startsWith("serial://")) {
-    const url = new URL(trimmed);
-    pathValue = decodeURIComponent(url.pathname);
-    query = url.search.slice(1);
-  } else {
-    const queryIndex = trimmed.indexOf("?");
-    if (queryIndex >= 0) {
-      pathValue = trimmed.slice(0, queryIndex);
-      query = trimmed.slice(queryIndex + 1);
-    }
-  }
-  if (!pathValue) throw new Error("串口路径为空");
-  const parameters = new URLSearchParams(query);
-  const baudRate = Number(parameters.get("baudRate") || "115200");
-  const dataBits = Number(parameters.get("dataBits") || "8") as SerialAddress["dataBits"];
-  const stopBits = Number(parameters.get("stopBits") || "1") as SerialAddress["stopBits"];
-  const parity = (parameters.get("parity") || "none") as SerialAddress["parity"];
-  if (!Number.isInteger(baudRate) || baudRate <= 0) throw new Error("串口 baudRate 不正确");
-  if (![5, 6, 7, 8].includes(dataBits)) throw new Error("串口 dataBits 只能是 5、6、7 或 8");
-  if (![1, 2].includes(stopBits)) throw new Error("串口 stopBits 只能是 1 或 2");
-  if (!["none", "even", "mark", "odd", "space"].includes(parity)) throw new Error("串口 parity 不正确");
-  return { path: pathValue, baudRate, dataBits, stopBits, parity };
+export function serialOptions(control: ControlInterface): SerialOptions {
+  const path = settingText(control, "device");
+  if (!path) throw new Error("串口控制接口未配置串口设备");
+  const baudRate = Number(settingText(control, "baudRate") || "115200");
+  if (!Number.isInteger(baudRate) || baudRate <= 0) throw new Error("串口波特率不正确");
+  return { path, baudRate, ...parseSerialFrame(settingText(control, "frame") || "8N1") };
 }
 
 function sshExec(request: SshRequest, signal?: AbortSignal): Promise<Record<string, unknown>> {
-  if (!request.control.username) throw new Error("SSH 控制接口未配置账号");
-  const target = parseNetworkAddress(request.control.address, 22, ["ssh:"]);
+  const username = settingText(request.control, "username");
+  if (!username) throw new Error("SSH 控制接口未配置账号");
+  const target = networkTarget(request.control, 22);
   return new Promise((resolve, reject) => {
     const client = new SshClient();
     let settled = false;
@@ -197,8 +166,8 @@ function sshExec(request: SshRequest, signal?: AbortSignal): Promise<Record<stri
     client.connect({
       host: target.host,
       port: target.port,
-      username: request.control.username,
-      password: request.control.password || undefined,
+      username,
+      password: settingText(request.control, "password") || undefined,
       readyTimeout: request.timeoutMs,
       keepaliveInterval: 5_000,
       keepaliveCountMax: 2,
@@ -246,7 +215,7 @@ function waitFor(milliseconds: number, signal?: AbortSignal): Promise<void> {
 }
 
 async function serialExec(request: SerialRequest, signal?: AbortSignal): Promise<Record<string, unknown>> {
-  const options = parseSerialAddress(request.control.address);
+  const options = serialOptions(request.control);
   const port = new SerialPort({ ...options, autoOpen: false });
   let output = "";
   let portError: Error | undefined;
@@ -277,19 +246,18 @@ async function serialExec(request: SerialRequest, signal?: AbortSignal): Promise
 }
 
 async function httpRequest(request: HttpRequest, signal?: AbortSignal): Promise<Record<string, unknown>> {
-  const baseUrl = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(request.control.address)
-    ? request.control.address
-    : `http://${request.control.address}`);
+  const address = settingText(request.control, "baseUrl");
+  if (!address) throw new Error("API 控制接口未配置接口地址");
+  const baseUrl = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(address) ? address : `http://${address}`);
   if (baseUrl.protocol !== "http:" && baseUrl.protocol !== "https:") throw new Error("API 控制接口仅支持 HTTP/HTTPS");
   const requestUrl = new URL(request.path || "", baseUrl.href.endsWith("/") ? baseUrl : new URL(`${baseUrl.href}/`));
   if (requestUrl.origin !== baseUrl.origin) throw new Error("API 请求路径不能跳转到控制接口之外的地址");
   const headers = new Headers(request.headers.map((item): [string, string] => [item.name, item.value]));
-  if (!headers.has("Authorization") && (request.control.username || request.control.password)) {
-    if (request.control.username) {
-      headers.set("Authorization", `Basic ${Buffer.from(`${request.control.username}:${request.control.password}`).toString("base64")}`);
-    } else {
-      headers.set("Authorization", `Bearer ${request.control.password}`);
-    }
+  const auth = settingText(request.control, "auth");
+  if (!headers.has("Authorization") && auth === "basic") {
+    headers.set("Authorization", `Basic ${Buffer.from(`${settingText(request.control, "username")}:${settingText(request.control, "password")}`).toString("base64")}`);
+  } else if (!headers.has("Authorization") && auth === "token" && settingText(request.control, "token")) {
+    headers.set("Authorization", `Bearer ${settingText(request.control, "token")}`);
   }
   if (request.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   const timeoutSignal = AbortSignal.timeout(request.timeoutMs);
@@ -326,22 +294,30 @@ export class DeviceToolDriver {
   ) {
     this.adapters = adapters || {
       ssh: sshExec, serial: serialExec, http: httpRequest,
-      telnet: (request, signal) => this.telnetSessions.execute(request.sessionKey, request.control, parseNetworkAddress(request.control.address, 23, ["telnet:"]), request.command, request.timeoutMs, signal),
+      telnet: (request, signal) => this.telnetSessions.execute(
+        request.sessionKey,
+        { username: settingText(request.control, "username"), password: settingText(request.control, "password") },
+        networkTarget(request.control, 23),
+        request.command,
+        request.timeoutMs,
+        signal,
+      ),
     };
   }
 
-  resolve(deviceId: string, interfaceId: string | undefined, type: ControlInterfaceType): ResolvedControlInterface {
+  resolve(deviceId: string, interfaceId: string | undefined, kind: ControlKind): ResolvedControlInterface {
     const device = this.devices.find((item) => item.id === deviceId);
     if (!device) throw new Error(`设备不在当前 Agent 可用范围中：${deviceId}`);
-    const controls = device.controlInterfaces.filter((item) => item.type === type);
+    const label = CONTROL_KINDS[kind].label;
+    const controls = device.controlInterfaces.filter((item) => item.kind === kind);
     if (interfaceId) {
       const control = controls.find((item) => item.id === interfaceId);
-      if (!control) throw new Error(`设备“${device.name}”不存在指定的 ${type.toUpperCase()} 控制接口`);
+      if (!control) throw new Error(`设备“${device.name}”不存在指定的 ${label} 控制接口`);
       return { device, control };
     }
-    if (!controls.length) throw new Error(`设备“${device.name}”未配置 ${type.toUpperCase()} 控制接口`);
+    if (!controls.length) throw new Error(`设备“${device.name}”未配置 ${label} 控制接口`);
     if (controls.length > 1) {
-      throw new Error(`设备“${device.name}”有多个 ${type.toUpperCase()} 控制接口，请提供 interfaceId：${controls.map((item) => `${item.name}[${item.id}]`).join("、")}`);
+      throw new Error(`设备“${device.name}”有多个 ${label} 控制接口，请提供 interfaceId：${controls.map((item) => `${item.name || label}[${item.id}]`).join("、")}`);
     }
     return { device, control: controls[0] };
   }
@@ -368,7 +344,7 @@ export class DeviceToolDriver {
       command: params.command,
       timeoutMs: params.timeoutMs || DEFAULT_TIMEOUT_MS,
     }, activeSignal));
-    return textResult({ device: device.name, interface: control.name, ...result });
+    return textResult({ device: device.name, interface: control.name || CONTROL_KINDS[control.kind].label, ...result });
   }
 
   async telnet(params: { deviceId: string; interfaceId?: string; command: string; timeoutMs?: number }, signal?: AbortSignal) {
@@ -379,7 +355,7 @@ export class DeviceToolDriver {
       command: params.command,
       timeoutMs: params.timeoutMs || DEFAULT_TIMEOUT_MS,
     }, activeSignal));
-    return textResult({ device: device.name, interface: control.name, ...result });
+    return textResult({ device: device.name, interface: control.name || CONTROL_KINDS[control.kind].label, ...result });
   }
 
   async serial(
@@ -396,7 +372,7 @@ export class DeviceToolDriver {
     }, activeSignal)));
     this.serialQueue.set(key, operation.then(() => undefined, () => undefined));
     const result = await operation;
-    return textResult({ device: device.name, interface: control.name, ...result });
+    return textResult({ device: device.name, interface: control.name || CONTROL_KINDS[control.kind].label, ...result });
   }
 
   async http(
@@ -420,7 +396,7 @@ export class DeviceToolDriver {
       body: params.body,
       timeoutMs: params.timeoutMs || DEFAULT_TIMEOUT_MS,
     }, activeSignal));
-    return textResult({ device: device.name, interface: control.name, ...result });
+    return textResult({ device: device.name, interface: control.name || CONTROL_KINDS[control.kind].label, ...result });
   }
 
   async close(): Promise<void> {
@@ -463,7 +439,7 @@ export function createDeviceTools(options: DeviceToolsOptions) {
   const serialTool = defineTool({
     name: "device_serial_exec",
     label: "串口交互",
-    description: "向设备已配置的本地串口发送内容并读取响应。串口地址可用查询参数配置 baudRate、dataBits、stopBits 和 parity。",
+    description: "向设备已配置的本地串口发送内容并读取响应。串口设备、波特率和数据格式按接口配置使用。",
     parameters: Type.Object({
       ...commonParameters,
       input: Type.String({ maxLength: 20_000, description: "发送内容；留空且 appendNewline=true 可发送回车，留空且 false 仅读取" }),
@@ -475,7 +451,7 @@ export function createDeviceTools(options: DeviceToolsOptions) {
   const httpTool = defineTool({
     name: "device_http_request",
     label: "设备 API 请求",
-    description: "向设备已配置的 API 控制接口发送同源 HTTP 请求。平台自动使用接口账号密码进行 Basic 或 Bearer 认证。",
+    description: "向设备已配置的 API 控制接口发送同源 HTTP 请求。平台按接口配置自动使用账号密码（Basic）或 Token（Bearer）认证。",
     parameters: Type.Object({
       ...commonParameters,
       method: Type.Union([
@@ -496,7 +472,7 @@ export function createDeviceTools(options: DeviceToolsOptions) {
     execute: async (_id, params, signal) => driver.http(params, signal),
   });
 
-  const availableTypes = new Set(options.devices.flatMap((device) => device.controlInterfaces.map((item) => item.type)));
+  const availableTypes = new Set(options.devices.flatMap((device) => device.controlInterfaces.map((item) => item.kind)));
   const tools = [
     ...(availableTypes.has("ssh") ? [sshTool] : []),
     ...(availableTypes.has("telnet") ? [telnetTool] : []),

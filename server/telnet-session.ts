@@ -1,5 +1,8 @@
 import { Telnet } from "telnet-client";
-import type { ControlInterface } from "./catalog-store.js";
+export interface TelnetCredentials {
+  username: string;
+  password: string;
+}
 
 export const TELNET_PROMPT = /(?:^|\r?\n)(?:[^\r\n]*[#$>]|\[[^\r\n\]]+\])\s*$/;
 const CLI_ERROR = /(?:^|\n)\s*(?:Error:\s*(?:Unrecognized command|Wrong parameter|Incomplete command|Too many parameters|Ambiguous command|The command|Permission|Invalid)|%\s*(?:Invalid input|Unknown command|Incomplete command|Ambiguous command|Error))/i;
@@ -12,7 +15,7 @@ export class TelnetSessionPool {
   private readonly interrupted = new Set<string>();
   private readonly shutdown = new AbortController();
 
-  async execute(key: string, control: ControlInterface, target: { host: string; port: number }, command: string, timeoutMs: number, signal?: AbortSignal): Promise<Record<string, unknown>> {
+  async execute(key: string, credentials: TelnetCredentials, target: { host: string; port: number }, command: string, timeoutMs: number, signal?: AbortSignal): Promise<Record<string, unknown>> {
     if (this.shutdown.signal.aborted) throw new Error("Telnet 工具会话已关闭");
     let entry = this.entries.get(key);
     if (!entry) {
@@ -41,8 +44,8 @@ export class TelnetSessionPool {
         return await Promise.race([stopped, (async () => {
           if (!current.connected) {
             await current.connection.connect({
-              ...target, username: control.username || undefined, password: control.password || undefined,
-              disableLogon: !control.username, shellPrompt: TELNET_PROMPT,
+              ...target, username: credentials.username || undefined, password: credentials.password || undefined,
+              disableLogon: !credentials.username, shellPrompt: TELNET_PROMPT,
               loginPrompt: /(?:login|username)[: ]*$/i, passwordPrompt: /password[: ]*$/i,
               timeout: timeoutMs, execTimeout: timeoutMs, encoding: "utf8", stripControls: true,
               stripShellPrompt: false, echoLines: 0, ors: "\r\n",

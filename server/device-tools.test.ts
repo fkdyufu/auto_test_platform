@@ -8,8 +8,8 @@ import type { DeviceResource } from "./catalog-store.js";
 import {
   createDeviceTools,
   DeviceToolDriver,
-  parseNetworkAddress,
-  parseSerialAddress,
+  networkTarget,
+  serialOptions,
   type DeviceProtocolAdapters,
 } from "./device-tools.js";
 import { createToolEvidence } from "./tool-evidence.js";
@@ -21,14 +21,13 @@ function testDevice(): DeviceResource {
     id: "device-1",
     productId: "product-1",
     name: "TAU-1",
-    types: ["TAU"],
-    model: "WKCJ-II",
+    template: "product",
     description: "",
     controlInterfaces: [
-      { id: "ssh-1", name: "SSH", type: "ssh", address: "192.0.2.10:2222", username: "root", password: "secret" },
-      { id: "telnet-1", name: "Telnet", type: "telnet", address: "192.0.2.10", username: "root", password: "secret" },
-      { id: "serial-1", name: "Console", type: "serial", address: "/dev/ttyUSB0?baudRate=9600", username: "", password: "" },
-      { id: "api-1", name: "REST API", type: "api", address: "http://192.0.2.10/api", username: "api", password: "secret" },
+      { id: "ssh-1", name: "SSH", kind: "ssh", settings: { host: "192.0.2.10", port: "2222", username: "root", password: "secret" } },
+      { id: "telnet-1", name: "Telnet", kind: "telnet", settings: { host: "192.0.2.10", port: "23", username: "root", password: "secret" } },
+      { id: "serial-1", name: "Console", kind: "serial", settings: { device: "/dev/ttyUSB0", baudRate: "9600", frame: "8N1", username: "", password: "" } },
+      { id: "api-1", name: "REST API", kind: "api", settings: { baseUrl: "http://192.0.2.10/api", auth: "basic", username: "api", password: "secret", token: "" } },
     ],
     createdAt: timestamp,
     updatedAt: timestamp,
@@ -56,18 +55,20 @@ function mockAdapters(calls: string[]): DeviceProtocolAdapters {
   };
 }
 
-test("parses network and serial control interface addresses", () => {
-  assert.deepEqual(parseNetworkAddress("192.0.2.10:2222", 22, ["ssh:"]), { host: "192.0.2.10", port: 2222 });
-  assert.deepEqual(parseNetworkAddress("telnet://router.local", 23, ["telnet:"]), { host: "router.local", port: 23 });
-  assert.deepEqual(parseSerialAddress("/dev/ttyUSB0?baudRate=9600&dataBits=7&stopBits=2&parity=even"), {
+test("reads network and serial targets from each method's own settings", () => {
+  const [ssh, telnet, serial] = testDevice().controlInterfaces;
+  assert.deepEqual(networkTarget(ssh, 22), { host: "192.0.2.10", port: 2222 });
+  assert.deepEqual(networkTarget({ ...telnet, settings: { host: "router.local", port: "" } }, 23), { host: "router.local", port: 23 });
+  assert.deepEqual(serialOptions({ ...serial, settings: { device: "/dev/ttyUSB0", baudRate: "9600", frame: "7E2" } }), {
     path: "/dev/ttyUSB0",
     baudRate: 9600,
     dataBits: 7,
     stopBits: 2,
     parity: "even",
   });
-  assert.throws(() => parseNetworkAddress("http://192.0.2.10", 22, ["ssh:"]), /协议不正确/);
-  assert.throws(() => parseSerialAddress("/dev/ttyUSB0?dataBits=9"), /dataBits/);
+  assert.throws(() => networkTarget({ ...ssh, settings: { host: "192.0.2.10", port: "70000" } }, 22), /端口不正确/);
+  assert.throws(() => networkTarget({ ...ssh, settings: { host: "" } }, 22), /未配置地址/);
+  assert.throws(() => serialOptions({ ...serial, settings: { device: "/dev/ttyUSB0", frame: "9N1" } }), /数据格式不正确/);
 });
 
 test("resolves configured interfaces and marks evidence after device operations", async () => {
@@ -95,14 +96,12 @@ test("requires interfaceId when a device has multiple interfaces of one type", (
   device.controlInterfaces.push({
     id: "ssh-2",
     name: "Backup SSH",
-    type: "ssh",
-    address: "192.0.2.11:22",
-    username: "root",
-    password: "",
+    kind: "ssh",
+    settings: { host: "192.0.2.11", port: "22", username: "root", password: "" },
   });
   const driver = new DeviceToolDriver([device], createToolEvidence(), mockAdapters([]));
   assert.throws(() => driver.resolve(device.id, undefined, "ssh"), /多个 SSH 控制接口/);
-  assert.equal(driver.resolve(device.id, "ssh-2", "ssh").control.address, "192.0.2.11:22");
+  assert.equal(driver.resolve(device.id, "ssh-2", "ssh").control.settings.host, "192.0.2.11");
 });
 
 test("registers only tools available on the bound devices", () => {
@@ -118,10 +117,8 @@ test("registers only tools available on the bound devices", () => {
   browserOnly.controlInterfaces = [{
     id: "web-1",
     name: "Web",
-    type: "web",
-    address: "http://192.0.2.10",
-    username: "",
-    password: "",
+    kind: "web",
+    settings: { url: "http://192.0.2.10", username: "", password: "" },
   }];
   assert.deepEqual(createDeviceTools({ devices: [browserOnly], evidence: createToolEvidence() }).toolNames, []);
 });
@@ -154,10 +151,8 @@ test("performs a real same-origin API request with configured credentials", asyn
   device.controlInterfaces = [{
     id: "api-local",
     name: "Local API",
-    type: "api",
-    address: `http://127.0.0.1:${port}/api`,
-    username: "api-user",
-    password: "api-password",
+    kind: "api",
+    settings: { baseUrl: `http://127.0.0.1:${port}/api`, auth: "basic", username: "api-user", password: "api-password", token: "" },
   }];
   const evidence = createToolEvidence();
   const driver = new DeviceToolDriver([device], evidence);

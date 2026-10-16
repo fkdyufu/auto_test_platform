@@ -4,10 +4,21 @@ import { CatalogError, type CatalogStore } from "./catalog-store.js";
 import type { AssistantStore } from "./assistant-store.js";
 import type { AssetChange, AssetKind, AssistantPageContext } from "../shared/assistant.js";
 import { applyDraftPatch } from "../shared/assistant-draft.js";
+import { CONTROL_KINDS, isControlKind, secretKeys, type ControlKind } from "../shared/control-interfaces.js";
+import { DEVICE_TEMPLATES } from "../shared/device-templates.js";
+
+const controlSettingsDoc = (Object.entries(CONTROL_KINDS) as [ControlKind, typeof CONTROL_KINDS[ControlKind]][])
+  .map(([kind, definition]) => `${kind}：${definition.fields.map((field) => `${field.key}（${field.label}${field.options ? `，可选 ${field.options.map((option) => option.value).join("/")}` : ""}${field.required ? "，必填" : ""}）`).join("、")}`)
+  .join("；");
 
 export const ASSET_FIELDS: Record<AssetKind, Record<string, string>> = {
   case: { name: "用例名称，必填", scenarioId: "场景 ID，留空使用默认场景", precondition: "前置条件，可选", stepRows: "有序用例步骤数组（1 至 100 行），每项包含 step（步骤文本）和 expected（对应预期文本）；修改完整替换数组，每行步骤必填，用例至少有一个预期。优先使用此字段编辑步骤", steps: "旧接口兼容的步骤文本；编辑步骤优先使用 stepRows", expectedResult: "旧接口兼容的预期文本；编辑预期优先使用 stepRows" },
-  device: { name: "设备名称，必填且唯一", types: "设备类型字符串数组，至少一项", model: "型号", description: "描述", controlInterfaces: "接口数组：id（已有接口须保留）、name、type（web/ssh/telnet/serial/api/other）、address、username、password（省略保留已有密码）" },
+  device: {
+    name: "设备名称，必填且唯一",
+    template: `设备类型：${DEVICE_TEMPLATES.map((template) => `${template.id}（${template.name}）`).join("、")}`,
+    description: "说明，会提供给执行测试的 AI，可写厂商型号和注意事项",
+    controlInterfaces: `接口数组，每项：id（已有接口须保留）、name（可留空）、kind（控制方式）、settings（该方式的字段）。各方式字段：${controlSettingsDoc}。密码和 token 省略或留空时保留已有值`,
+  },
   scenario: { name: "场景名称，必填且唯一；默认场景不能改名", category: "功能分类，非默认场景必填", description: "场景说明", roles: "角色数组：id、key、deviceId；非默认场景至少一项，设备须属于当前产品且不能重复绑定", parameters: "参数数组：id、key、name、defaultValue", setupInstructions: "场景搭建要求，非默认场景必填", verificationInstructions: "场景验证要求，非默认场景必填", cleanupInstructions: "场景清理要求", caseIds: "关联用例 ID 数组（仅修改支持）；完整替换场景关联，移出的用例回到默认场景" },
   order: { name: "测试单名称，必填", description: "描述", caseIds: "有序用例 ID 数组，至少一项，须属于当前产品；完整替换关联。执行时按首次出现的场景分组，场景顺序及组内用例顺序均由此数组决定" },
 };
@@ -27,8 +38,11 @@ export function normalizeAssistantContext(value: unknown): AssistantPageContext 
     if (JSON.stringify(draft).length > 150_000) throw new CatalogError("当前草稿过大");
     context.draft = structuredClone(draft);
     if (Array.isArray(context.draft.controlInterfaces)) context.draft.controlInterfaces = context.draft.controlInterfaces.map((control) => {
-      const { password: _password, ...rest } = control as Record<string, unknown>;
-      return rest;
+      const item = control && typeof control === "object" ? control as Record<string, unknown> : {};
+      const settings = item.settings && typeof item.settings === "object" ? item.settings as Record<string, unknown> : {};
+      const secrets = isControlKind(item.kind) ? secretKeys(item.kind) : ["password", "token"];
+      const { password: _password, token: _token, ...rest } = item;
+      return { ...rest, settings: Object.fromEntries(Object.entries(settings).filter(([key]) => !secrets.includes(key))) };
     });
   }
   return context;
