@@ -4,6 +4,23 @@ import path from "node:path";
 import type { AssetChange, AssetDifference, AssetKind, AssetPreview } from "../shared/assistant.js";
 import type { TestResultDetails } from "../shared/test-result.js";
 import { parseStepRows, stepRowsFromLegacy, stepRowsToText, type TestCaseStep } from "../shared/test-case-steps.js";
+import {
+  DEFAULT_PLATFORM_NAME,
+  LAB_LINK_ROLES,
+  LAB_PORT_KINDS,
+  LAB_PORT_KIND_LABELS,
+  PLATFORM_NODE_ID,
+  portKindsCompatible,
+  type LabLink,
+  type LabLinkEnd,
+  type LabLinkRole,
+  type LabNode,
+  type LabPort,
+  type LabPortKind,
+  type PhysicalLab,
+} from "../shared/physical-lab.js";
+
+export type { PhysicalLab } from "../shared/physical-lab.js";
 
 export type ExecutionStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 export type TestOutcome = "passed" | "failed";
@@ -174,16 +191,20 @@ export interface TestRun {
   outcome?: TestOutcome;
   scenarioRuns: ScenarioRun[];
   caseRuns: CaseRun[];
+  /** Wiring as registered when the run was created, with device names resolved. */
+  physicalLabSnapshot?: PhysicalLab;
   createdAt: string;
   startedAt?: string;
   finishedAt?: string;
 }
 
 interface CatalogData {
-  version: 12;
+  version: 13;
   products: Product[];
   testCases: TestCase[];
   deviceResources: DeviceResource[];
+  /** One cabled lab per product. Device nodes reuse device IDs; names are resolved when read. */
+  physicalLabs: PhysicalLab[];
   testScenarios: TestScenario[];
   testOrders: TestOrder[];
   testRuns: TestRun[];
@@ -235,6 +256,7 @@ export interface TestOrderDetail extends TestOrderSummary {
 export interface TestOrderExecutionContext {
   devices: DeviceResource[];
   scenarios: TestScenario[];
+  physicalLab?: PhysicalLab;
 }
 
 export interface TestRunReportContext {
@@ -250,6 +272,7 @@ export interface DiagnosticExecutionContext extends TestOrderExecutionContext {
   caseRun: CaseRun;
   scenarioRun: ScenarioRun;
   scenario?: TestScenario;
+  physicalLabSource?: "snapshot" | "current";
 }
 
 export interface ImportedTestCaseInput {
@@ -324,6 +347,16 @@ function clone<T>(value: T): T {
   return structuredClone(value);
 }
 
+function labSnapshot(lab: PhysicalLab): PhysicalLab | undefined {
+  return lab.rules || lab.links.length || lab.nodes.some((node) => node.ports.length) ? lab : undefined;
+}
+
+/** Run lists go to the browser; the wiring snapshot is only needed by execution and diagnostics. */
+function publicRun(run: TestRun): TestRun {
+  const { physicalLabSnapshot: _snapshot, ...rest } = clone(run);
+  return rest;
+}
+
 function defaultScenarioId(productId: string): string {
   return `default-scenario-${productId}`;
 }
@@ -357,10 +390,11 @@ function defaultData(): CatalogData {
     updatedAt: timestamp,
   }));
   return {
-    version: 12,
+    version: 13,
     products,
     testCases: [],
     deviceResources: [],
+    physicalLabs: [],
     testScenarios: products.map((product) => createDefaultScenario(product, timestamp)),
     testOrders: [],
     testRuns: [],
@@ -389,7 +423,7 @@ export class CatalogStore {
     try {
       const original = await readFile(this.filePath, "utf8");
       const data = JSON.parse(original) as { version?: number };
-      if (typeof data.version === "number" && data.version >= 1 && data.version < 12) {
+      if (typeof data.version === "number" && data.version >= 1 && data.version < 13) {
         try {
           await writeFile(`${this.filePath}.v${data.version}.bak`, original, { flag: "wx", mode: 0o600 });
         } catch (error) {
@@ -407,14 +441,15 @@ export class CatalogStore {
     this.initializePromise ??= this.initialize();
     await this.initializePromise;
     const data = JSON.parse(await readFile(this.filePath, "utf8")) as CatalogData & { version: number };
-    if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].includes(data.version) || !Array.isArray(data.products) || !Array.isArray(data.testCases)) {
+    if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13].includes(data.version) || !Array.isArray(data.products) || !Array.isArray(data.testCases)) {
       throw new CatalogError("业务数据文件格式不正确", 500);
     }
     const sourceVersion = data.version;
     const legacyData = data as typeof data & { labEnvironments?: LegacyPhysicalEnvironment[]; physicalEnvironments?: LegacyPhysicalEnvironment[] };
     let physicalEnvironments = legacyData.physicalEnvironments ?? legacyData.labEnvironments ?? [];
-    data.version = 12;
+    data.version = 13;
     data.deviceResources ??= [];
+    data.physicalLabs = Array.isArray(data.physicalLabs) ? data.physicalLabs : [];
     delete legacyData.physicalEnvironments;
     delete legacyData.labEnvironments;
     data.testScenarios ??= [];
@@ -1046,8 +1081,164 @@ export class CatalogStore {
       if (data.testScenarios.some((item) => !item.archivedAt && item.roles.some((role) => role.deviceId === id))) {
         throw new CatalogError("设备正在被测试场景使用，不能删除", 409);
       }
+      const lab = data.physicalLabs.find((item) => item.productId === productId);
+      if (lab?.links.some((link) => link.a.nodeId === id || link.b.nodeId === id)) {
+        throw new CatalogError("设备在物理环境中仍有接线，请先在物理环境中断开", 409);
+      }
       device.archivedAt = new Date().toISOString();
       device.updatedAt = device.archivedAt;
+      if (lab) lab.nodes = lab.nodes.filter((node) => node.id !== id);
+    });
+  }
+
+  /** Every active product device appears as a node, with names resolved and stale references dropped. */
+  private physicalLabView(data: CatalogData, productId: string): PhysicalLab {
+    const stored = data.physicalLabs.find((item) => item.productId === productId);
+    const devices = data.deviceResources
+      .filter((device) => device.productId === productId && !device.archivedAt)
+      .sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
+    const storedNodes = new Map((stored?.nodes || []).map((node) => [node.id, node]));
+    const platform = storedNodes.get(PLATFORM_NODE_ID);
+    const nodes: LabNode[] = [
+      ...devices.map((device) => {
+        const node = storedNodes.get(device.id);
+        const ports = clone(node?.kind === "device" ? node.ports : []);
+        const portIds = new Set(ports.map((port) => port.id));
+        const controlIds = new Set(device.controlInterfaces.map((control) => control.id));
+        const controlPorts = Object.fromEntries(Object.entries(node?.kind === "device" ? node.controlPorts : {})
+          .filter(([controlId, portId]) => controlIds.has(controlId) && portIds.has(portId)));
+        return { id: device.id, kind: "device" as const, name: device.name, ports, controlPorts };
+      }),
+      {
+        id: PLATFORM_NODE_ID,
+        kind: "platform",
+        name: platform?.kind === "platform" && platform.name ? platform.name : DEFAULT_PLATFORM_NAME,
+        ports: clone(platform?.kind === "platform" ? platform.ports : []),
+        controlPorts: {},
+      },
+      ...(stored?.nodes || []).filter((node) => node.kind === "external").map(clone),
+    ];
+    const portKeys = new Set(nodes.flatMap((node) => node.ports.map((port) => `${node.id}\u0000${port.id}`)));
+    const exists = (end: LabLinkEnd) => portKeys.has(`${end.nodeId}\u0000${end.portId}`);
+    return {
+      productId,
+      rules: stored?.rules || "",
+      nodes,
+      links: (stored?.links || []).filter((link) => exists(link.a) && exists(link.b)).map(clone),
+      updatedAt: stored?.updatedAt || "",
+    };
+  }
+
+  private normalizePhysicalLab(data: CatalogData, productId: string, input: Record<string, unknown>): Omit<PhysicalLab, "updatedAt"> {
+    const devices = new Map(data.deviceResources
+      .filter((device) => device.productId === productId && !device.archivedAt)
+      .map((device) => [device.id, device]));
+    if (!Array.isArray(input.nodes)) throw new CatalogError("物理环境节点格式不正确");
+    if (input.nodes.length > 300) throw new CatalogError("物理环境节点不能超过 300 个");
+    const nodeNames = new Set([...devices.values()].map((device) => device.name.toLowerCase()));
+    const nodes = input.nodes.map((item): LabNode => {
+      const value = recordValue(item);
+      const kind = optionalText(value.kind, 20);
+      const id = optionalText(value.id, 100);
+      let name = "";
+      if (kind === "device") {
+        const device = devices.get(id);
+        if (!device) throw new CatalogError("物理环境包含不存在或不属于当前产品的设备，请刷新后重试");
+        name = device.name;
+      } else if (kind === "platform") {
+        if (id !== PLATFORM_NODE_ID) throw new CatalogError("平台节点标识不正确");
+        name = optionalText(value.name, 60) || DEFAULT_PLATFORM_NAME;
+      } else if (kind === "external") {
+        name = requiredText(value.name, "外部节点名称", 60);
+      } else {
+        throw new CatalogError("物理环境节点类型不正确");
+      }
+      if (kind !== "device") {
+        if (nodeNames.has(name.toLowerCase())) throw new CatalogError(`节点名称“${name}”与其他设备或节点重复`, 409);
+        nodeNames.add(name.toLowerCase());
+      }
+      if (!Array.isArray(value.ports)) throw new CatalogError(`“${name}”的端口格式不正确`);
+      if (value.ports.length > 500) throw new CatalogError(`“${name}”的端口不能超过 500 个`);
+      const portNames = new Set<string>();
+      const ports = value.ports.map((portItem): LabPort => {
+        const port = recordValue(portItem);
+        const portName = requiredText(port.name, `“${name}”的端口名称`, 60);
+        const portKind = optionalText(port.kind, 20) as LabPortKind;
+        if (!LAB_PORT_KINDS.includes(portKind)) throw new CatalogError(`端口“${name} ${portName}”的类型不正确`);
+        if (portNames.has(portName.toLowerCase())) throw new CatalogError(`“${name}”的端口“${portName}”重复`, 409);
+        portNames.add(portName.toLowerCase());
+        return { id: optionalText(port.id, 100) || randomUUID(), name: portName, kind: portKind, note: optionalText(port.note, 200) };
+      });
+      if (new Set(ports.map((port) => port.id)).size !== ports.length) throw new CatalogError(`“${name}”的端口 ID 重复`);
+      const portIds = new Set(ports.map((port) => port.id));
+      const controlPorts: Record<string, string> = {};
+      if (kind === "device") {
+        const controlIds = new Set(devices.get(id)!.controlInterfaces.map((control) => control.id));
+        for (const [controlId, portId] of Object.entries(recordValue(value.controlPorts))) {
+          if (typeof portId !== "string" || !portId) continue;
+          if (!controlIds.has(controlId)) throw new CatalogError(`“${name}”的控制接口已变化，请刷新后重试`, 409);
+          if (!portIds.has(portId)) throw new CatalogError(`“${name}”的控制接口绑定了不存在的端口`);
+          controlPorts[controlId] = portId;
+        }
+      }
+      return { id: kind === "external" ? id || randomUUID() : id, kind: kind as LabNode["kind"], name: kind === "device" ? "" : name, ports, controlPorts };
+    });
+    if (new Set(nodes.map((node) => node.id)).size !== nodes.length) throw new CatalogError("物理环境节点重复");
+    if (!nodes.some((node) => node.kind === "platform")) {
+      nodes.push({ id: PLATFORM_NODE_ID, kind: "platform", name: DEFAULT_PLATFORM_NAME, ports: [], controlPorts: {} });
+    }
+    const nodeById = new Map(nodes.map((node) => [node.id, node]));
+    const displayName = (node: LabNode) => node.kind === "device" ? devices.get(node.id)!.name : node.name;
+    const resolveEnd = (value: unknown) => {
+      const end = recordValue(value);
+      const node = nodeById.get(optionalText(end.nodeId, 100));
+      const port = node?.ports.find((item) => item.id === optionalText(end.portId, 100));
+      if (!node || !port) throw new CatalogError("连线引用了不存在的端口，请刷新后重试");
+      return { node, port, end: { nodeId: node.id, portId: port.id } };
+    };
+    if (!Array.isArray(input.links)) throw new CatalogError("物理环境连线格式不正确");
+    if (input.links.length > 5_000) throw new CatalogError("物理环境连线不能超过 5000 条");
+    const usedPorts = new Map<string, string>();
+    const links = input.links.map((item): LabLink => {
+      const value = recordValue(item);
+      const a = resolveEnd(value.a);
+      const b = resolveEnd(value.b);
+      const label = (side: typeof a) => `${displayName(side.node)} ${side.port.name}`;
+      if (a.node.id === b.node.id && a.port.id === b.port.id) throw new CatalogError(`端口“${label(a)}”不能连到自身`);
+      if (!portKindsCompatible(a.port.kind, b.port.kind)) {
+        throw new CatalogError(`“${label(a)}”是${LAB_PORT_KIND_LABELS[a.port.kind]}口，不能连接${LAB_PORT_KIND_LABELS[b.port.kind]}口“${label(b)}”`);
+      }
+      for (const side of [a, b]) {
+        const key = `${side.node.id}\u0000${side.port.id}`;
+        if (usedPorts.has(key)) throw new CatalogError(`端口“${label(side)}”已经连接了${usedPorts.get(key)}，一个端口只能接一根线`, 409);
+      }
+      usedPorts.set(`${a.node.id}\u0000${a.port.id}`, `“${label(b)}”`);
+      usedPorts.set(`${b.node.id}\u0000${b.port.id}`, `“${label(a)}”`);
+      const role = optionalText(value.role, 20) as LabLinkRole;
+      if (!LAB_LINK_ROLES.includes(role)) throw new CatalogError("连线用途不正确");
+      return { id: optionalText(value.id, 100) || randomUUID(), a: a.end, b: b.end, role, note: optionalText(value.note, 300) };
+    });
+    if (new Set(links.map((link) => link.id)).size !== links.length) throw new CatalogError("连线 ID 重复");
+    return { productId, rules: optionalText(input.rules, 10_000), nodes, links };
+  }
+
+  async getPhysicalLab(productId: string): Promise<PhysicalLab> {
+    await this.getProduct(productId);
+    return this.physicalLabView(await this.read(), productId);
+  }
+
+  async updatePhysicalLab(productId: string, input: Record<string, unknown>): Promise<PhysicalLab> {
+    return this.mutate((data) => {
+      if (!data.products.some((item) => item.id === productId && !item.archivedAt)) throw new CatalogError("产品不存在", 404);
+      const index = data.physicalLabs.findIndex((item) => item.productId === productId);
+      const current = index >= 0 ? data.physicalLabs[index] : undefined;
+      if (typeof input.baseUpdatedAt === "string" && input.baseUpdatedAt !== (current?.updatedAt || "")) {
+        throw new CatalogError("物理环境已在其他地方修改，请刷新后重试", 409);
+      }
+      const lab: PhysicalLab = { ...this.normalizePhysicalLab(data, productId, input), updatedAt: new Date().toISOString() };
+      if (index >= 0) data.physicalLabs[index] = lab;
+      else data.physicalLabs.push(lab);
+      return this.physicalLabView(data, productId);
     });
   }
 
@@ -1259,7 +1450,7 @@ export class CatalogStore {
       ...clone(order),
       productName: product?.name || "已删除产品",
       caseCount: order.caseIds.length,
-      latestRun: latestRun ? clone(latestRun) : undefined,
+      latestRun: latestRun ? publicRun(latestRun) : undefined,
     };
   }
 
@@ -1291,7 +1482,7 @@ export class CatalogStore {
       .filter((run) => run.testOrderId === id)
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
       .slice(0, 30)
-      .map(clone);
+      .map(publicRun);
     return {
       ...this.publicOrder(data, order),
       cases,
@@ -1324,6 +1515,7 @@ export class CatalogStore {
       scenarios: data.testScenarios
         .filter((scenario) => scenario.productId === order.productId && !scenario.archivedAt)
         .map(clone),
+      physicalLab: this.physicalLabView(data, order.productId),
     };
   }
 
@@ -1357,6 +1549,8 @@ export class CatalogStore {
       scenario,
       devices,
       scenarios: scenario ? [scenario] : [],
+      physicalLab: testRun.physicalLabSnapshot || this.physicalLabView(data, productId),
+      physicalLabSource: testRun.physicalLabSnapshot ? "snapshot" : "current",
     });
   }
 
@@ -1418,6 +1612,7 @@ export class CatalogStore {
       const executionCaseRuns = scenarioRuns.flatMap((scenarioRun) =>
         scenarioRun.caseRunIds.map((caseRunId) => caseRunById.get(caseRunId)!),
       );
+      const physicalLabSnapshot = labSnapshot(this.physicalLabView(data, order.productId));
       const run: TestRun = {
         id: runId,
         testOrderId,
@@ -1425,6 +1620,7 @@ export class CatalogStore {
         status: "queued",
         scenarioRuns,
         caseRuns: executionCaseRuns,
+        ...(physicalLabSnapshot ? { physicalLabSnapshot } : {}),
         createdAt: new Date().toISOString(),
       };
       data.testRuns.push(run);

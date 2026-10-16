@@ -1,6 +1,8 @@
 import type { AssistantConversation, AssistantPageContext } from "../shared/assistant";
 import type { TestResultDetails } from "../shared/test-result";
 import type { TestCaseStep } from "../shared/test-case-steps";
+import type { PhysicalLab } from "../shared/physical-lab";
+export type { LabLink, LabLinkEnd, LabLinkRole, LabNode, LabPort, LabPortKind, PhysicalLab } from "../shared/physical-lab";
 export type { AssistantConversation, AssistantPageContext, AssistantProposal, AssetKind } from "../shared/assistant";
 export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 export type TestOutcome = "passed" | "failed";
@@ -297,6 +299,7 @@ export interface DeviceResourceInput {
   description: string;
   controlInterfaces: ControlInterfaceInput[];
 }
+export type PhysicalLabInput = Pick<PhysicalLab, "rules" | "nodes" | "links"> & { baseUpdatedAt: string };
 export type TestScenarioInput = Omit<TestScenario, "id" | "productId" | "isDefault" | "createdAt" | "updatedAt">;
 export type TestScenarioUpdateInput = TestScenarioInput & { caseIds: string[] };
 
@@ -370,6 +373,9 @@ export const api = {
     request<DeviceResource>(`/api/products/${productId}/device-resources/${id}`, { method: "PUT", body: JSON.stringify(input) }),
   deleteDeviceResource: (productId: string, id: string) =>
     request<void>(`/api/products/${productId}/device-resources/${id}`, { method: "DELETE" }),
+  getPhysicalLab: (productId: string) => request<PhysicalLab>(`/api/products/${productId}/physical-lab`),
+  updatePhysicalLab: (productId: string, input: PhysicalLabInput) =>
+    request<PhysicalLab>(`/api/products/${productId}/physical-lab`, { method: "PUT", body: JSON.stringify(input) }),
   getTestScenarios: (productId: string) => request<TestScenario[]>(`/api/products/${productId}/test-scenarios`),
   createTestScenario: (productId: string, input: TestScenarioInput) =>
     request<TestScenario>(`/api/products/${productId}/test-scenarios`, { method: "POST", body: JSON.stringify(input) }),

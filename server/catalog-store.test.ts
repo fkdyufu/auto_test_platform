@@ -911,7 +911,7 @@ test("migrates v10 environments and roles without guessing bindings or changing 
   assert.deepEqual(diagnostic.devices.map((item) => item.id), [device.id]);
   await migratedStore.updateTestScenario(product.id, scenario.id, { ...migrated, roles: [{ ...migrated.roles[0], deviceId: device.id }] });
   const persisted = JSON.parse(await readFile(filePath, "utf8"));
-  assert.equal(persisted.version, 12);
+  assert.equal(persisted.version, 13);
   assert.equal("physicalEnvironments" in persisted, false);
   assert.equal("physicalEnvironmentId" in persisted.testOrders[0], false);
   assert.equal((await migratedStore.listTestScenarios(product.id)).find((item) => item.id === scenario.id)?.description, migrated.description);

@@ -114,6 +114,22 @@ catalogRouter.delete("/products/:productId/device-resources/:id", async (request
   }
 });
 
+catalogRouter.get("/products/:productId/physical-lab", async (request, response, next) => {
+  try {
+    response.json(await catalogStore.getPhysicalLab(request.params.productId));
+  } catch (error) {
+    next(error);
+  }
+});
+
+catalogRouter.put("/products/:productId/physical-lab", async (request, response, next) => {
+  try {
+    response.json(await catalogStore.updatePhysicalLab(request.params.productId, body(request.body)));
+  } catch (error) {
+    next(error);
+  }
+});
+
 catalogRouter.get("/products/:productId/test-scenarios", async (request, response, next) => {
   try {
     response.json(await catalogStore.listTestScenarios(request.params.productId));

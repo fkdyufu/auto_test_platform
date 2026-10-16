@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import {
+  Cable,
   Layers3,
   Library,
   Network,
@@ -16,6 +17,7 @@ import {
   type ControlInterfaceType,
   type DeviceResource,
   type DeviceResourceInput,
+  type PhysicalLab,
   type ProductSummary,
   type ScenarioParameter,
   type ScenarioRole,
@@ -25,21 +27,14 @@ import {
 } from "../api";
 import { AutoResizeTextarea, InlineNotice, Modal, PageHeader, type Notice } from "../components/ui";
 import { useAssistantPage } from "../components/AssistantContext";
+import { INTERFACE_LABELS } from "../control-interface-labels";
+import { PhysicalLabView } from "./PhysicalLabView";
 
-type ResourceTab = "devices" | "scenarios";
+type ResourceTab = "devices" | "lab" | "scenarios";
 
 type ResourceDialog =
   | { kind: "device"; id?: string; form: DeviceResourceInput }
   | { kind: "scenario"; id?: string; form: TestScenarioInput; caseIds: string[] };
-
-const INTERFACE_LABELS: Record<ControlInterfaceType, string> = {
-  web: "Web",
-  ssh: "SSH",
-  telnet: "Telnet",
-  serial: "串口",
-  api: "API",
-  other: "其他",
-};
 
 const INTERFACE_ADDRESS_PLACEHOLDERS: Record<ControlInterfaceType, string> = {
   web: "例如 http://192.168.1.1",
@@ -52,6 +47,7 @@ const INTERFACE_ADDRESS_PLACEHOLDERS: Record<ControlInterfaceType, string> = {
 
 const TAB_META: Record<ResourceTab, { label: string; action: string }> = {
   devices: { label: "设备资源", action: "新增设备" },
+  lab: { label: "物理环境", action: "" },
   scenarios: { label: "测试场景", action: "新增场景" },
 };
 
@@ -114,23 +110,26 @@ export function ResourcesPage({ product }: { product: ProductSummary }) {
   const [devices, setDevices] = useState<DeviceResource[]>([]);
   const [scenarios, setScenarios] = useState<TestScenario[]>([]);
   const [testCases, setTestCases] = useState<TestCase[]>([]);
+  const [lab, setLab] = useState<PhysicalLab | null>(null);
   const [dialog, setDialog] = useState<ResourceDialog | null>(null);
   const [dialogError, setDialogError] = useState("");
   const [notice, setNotice] = useState<Notice>(null);
   const [submitting, setSubmitting] = useState(false);
 
   const reload = async () => {
-    const [nextDevices, nextScenarios, nextTestCases] = await Promise.all([
+    const [nextDevices, nextScenarios, nextTestCases, nextLab] = await Promise.all([
       api.getDeviceResources(product.id),
       api.getTestScenarios(product.id),
       api.getTestCases(product.id),
+      api.getPhysicalLab(product.id),
     ]);
     setDevices(nextDevices);
     setScenarios(nextScenarios);
     setTestCases(nextTestCases);
+    setLab(nextLab);
   };
 
-  useAssistantPage({ page: "resources", title: dialog ? dialog.form.name || (dialog.kind === "device" ? "新增设备" : "新增场景") : TAB_META[tab].label, assetKind: dialog?.kind || (tab === "devices" ? "device" : "scenario"), assetId: dialog?.id, ...(dialog && !submitting ? { draft: { ...dialog.form, ...(dialog.kind === "scenario" && dialog.id ? { caseIds: dialog.caseIds } : {}) } } : {}) }, (draft) => {
+  useAssistantPage({ page: "resources", title: dialog ? dialog.form.name || (dialog.kind === "device" ? "新增设备" : "新增场景") : TAB_META[tab].label, assetKind: dialog?.kind || (tab === "devices" ? "device" : tab === "scenarios" ? "scenario" : undefined), assetId: dialog?.id, ...(dialog && !submitting ? { draft: { ...dialog.form, ...(dialog.kind === "scenario" && dialog.id ? { caseIds: dialog.caseIds } : {}) } } : {}) }, (draft) => {
     setDialog((current) => {
       if (!current) return current;
       if (current.kind === "device") return { ...current, form: draft as unknown as DeviceResourceInput };
@@ -142,6 +141,7 @@ export function ResourcesPage({ product }: { product: ProductSummary }) {
   useEffect(() => {
     setDialog(null);
     setNotice(null);
+    setLab(null);
     void reload().catch((error) =>
       setNotice({ kind: "error", message: error instanceof Error ? error.message : "读取资源数据失败" }),
     );
@@ -203,12 +203,12 @@ export function ResourcesPage({ product }: { product: ProductSummary }) {
       <PageHeader
         icon={<Network size={19} />}
         title="资源与场景"
-        actions={
+        actions={TAB_META[tab].action ? (
           <button className="button primary" onClick={openCreate}>
             <Plus size={17} />
             {TAB_META[tab].action}
           </button>
-        }
+        ) : undefined}
       />
 
       {notice && <InlineNotice notice={notice} onClose={() => setNotice(null)} />}
@@ -217,12 +217,25 @@ export function ResourcesPage({ product }: { product: ProductSummary }) {
         <button className={tab === "devices" ? "active" : ""} onClick={() => setTab("devices")}>
           <Server size={16} />设备资源<span>{devices.length}</span>
         </button>
+        <button className={tab === "lab" ? "active" : ""} onClick={() => setTab("lab")}>
+          <Cable size={16} />物理环境<span>{lab?.links.length ?? 0}</span>
+        </button>
         <button className={tab === "scenarios" ? "active" : ""} onClick={() => setTab("scenarios")}>
           <Workflow size={16} />测试场景<span>{scenarios.length}</span>
         </button>
       </div>
 
-      <div className="list-surface resource-list-surface">
+      {tab === "lab" ? (
+        lab ? (
+          <PhysicalLabView
+            product={product}
+            lab={lab}
+            devices={devices}
+            onLabChange={setLab}
+            onNotice={setNotice}
+          />
+        ) : <div className="lab-loading">正在读取物理环境...</div>
+      ) : <div className="list-surface resource-list-surface">
         {tab === "devices" ? (
           <div className="table-wrap">
             <table className="data-table">
@@ -270,7 +283,7 @@ export function ResourcesPage({ product }: { product: ProductSummary }) {
             </table>
           </div>
         )}
-      </div>
+      </div>}
 
       {dialog && (
         <Modal

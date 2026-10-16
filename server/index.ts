@@ -23,6 +23,7 @@ import { createAssistantRouter } from "./assistant-routes.js";
 import { createAssistantTools } from "./assistant-tools.js";
 import { buildAssistantPrompt } from "./assistant-context.js";
 import { resolveScenarioDevices } from "./scenario-devices.js";
+import { formatPhysicalLab } from "./physical-lab-prompt.js";
 import {
   executePiDiagnostic,
   executePiAssistant,
@@ -281,7 +282,8 @@ function buildScenarioDescription(
   const parameterLines = scenario.parameters.map(
     (parameter) => `- ${parameter.name}（${parameter.key}）：${scenarioRun.parameterValues[parameter.key] || "未设置"}`,
   );
-  return `测试场景：${scenario.name}${scenario.category ? `（${scenario.category}）` : ""}\n${scenario.description || "无补充说明"}\n\n固定角色绑定：\n${roleLines.join("\n") || "无设备角色"}\n角色已经由平台固定绑定，不得替换设备或重新分配角色。\n\n场景参数：\n${parameterLines.join("\n") || "无场景参数"}`;
+  const lab = formatPhysicalLab(context.physicalLab, context.devices);
+  return `测试场景：${scenario.name}${scenario.category ? `（${scenario.category}）` : ""}\n${scenario.description || "无补充说明"}\n\n固定角色绑定：\n${roleLines.join("\n") || "无设备角色"}\n角色已经由平台固定绑定，不得替换设备或重新分配角色。\n\n场景参数：\n${parameterLines.join("\n") || "无场景参数"}${lab ? `\n\n${lab}` : ""}`;
 }
 
 function buildScenarioSetupRequirement(
@@ -425,7 +427,11 @@ async function executeTestOrderRun(run: RunRecord, order: TestOrder, testRun: Te
     let modelRequestFailure: ModelRequestError | undefined;
     if (scenario) {
       try {
-        executionContext = { devices: resolveScenarioDevices(scenario, scenarioRun, productContext.devices), scenarios: [scenario] };
+        executionContext = {
+          devices: resolveScenarioDevices(scenario, scenarioRun, productContext.devices),
+          scenarios: [scenario],
+          physicalLab: testRun.physicalLabSnapshot,
+        };
       } catch (error) {
         setupFailure = error instanceof Error ? error.message : "场景设备绑定无效";
       }
