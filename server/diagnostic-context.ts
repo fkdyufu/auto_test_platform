@@ -35,7 +35,7 @@ function formatDevices(context: DiagnosticExecutionContext): string {
   const devices = context.devices.map((device) => {
     const controls = device.controlInterfaces.length
       ? device.controlInterfaces.map((control) =>
-          `${control.name || CONTROL_KINDS[control.kind].label}[${control.kind}, ID: ${control.id}, ${describeControlSettings(control, false) || "未配置"}]`,
+          `${control.name || CONTROL_KINDS[control.kind].label}[${control.kind}, ID: ${control.id}, ${describeControlSettings(control) || "未配置"}]`,
         ).join("；")
       : "未配置控制接口";
     const description = device.description ? `\n  说明: ${device.description.split("\n").join("\n    ")}` : "";

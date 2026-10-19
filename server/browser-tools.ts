@@ -24,6 +24,8 @@ interface BrowserToolsOptions {
   includeFinishTool?: boolean;
   // Step rows of the test case being executed; enables per-step checks.
   stepCount?: number;
+  /** Replaces `{{password:<interface ID>}}` in browser_fill values; throws when the page may not receive that secret. */
+  resolveSecrets?: (text: string, pageUrl: string) => string;
 }
 
 function textResult(text: string, details: Record<string, unknown> = {}) {
@@ -44,6 +46,7 @@ export class BrowserDriver {
   constructor(
     private readonly artifactsDirectory: string,
     private readonly onEvidence: () => void = () => undefined,
+    private readonly resolveSecrets: (text: string, pageUrl: string) => string = (text) => text,
   ) {}
 
   private serialize<T>(operation: () => Promise<T>): Promise<T> {
@@ -166,7 +169,8 @@ export class BrowserDriver {
   fill(target: string, value: string): Promise<string> {
     return this.serialize(async () => {
       const page = await this.ensurePage();
-      return this.operate(page, async () => (await this.locator(page, target)).fill(value, { timeout: target.startsWith("@e") ? 2_000 : 12_000 }), 200);
+      const resolved = this.resolveSecrets(value, page.url());
+      return this.operate(page, async () => (await this.locator(page, target)).fill(resolved, { timeout: target.startsWith("@e") ? 2_000 : 12_000 }), 200);
     });
   }
 
@@ -236,7 +240,7 @@ export class BrowserDriver {
 }
 
 export function createBrowserTools(options: BrowserToolsOptions) {
-  const driver = new BrowserDriver(path.join(options.artifactsDirectory, options.runId), () => options.evidence.mark());
+  const driver = new BrowserDriver(path.join(options.artifactsDirectory, options.runId), () => options.evidence.mark(), options.resolveSecrets);
   const browserTools = [
     defineTool({
       name: "browser_open",
@@ -269,7 +273,7 @@ export function createBrowserTools(options: BrowserToolsOptions) {
       description: "清空并填写输入框。target 使用最新 @eN 引用或唯一 CSS 选择器。返回后检查 validationErrors；填写成功不代表字段值已通过页面校验。",
       parameters: Type.Object({
         target: Type.String(),
-        value: Type.String(),
+        value: Type.String({ description: "填写已保存的登录密码时写 {{password:Web接口ID}}，只能在该接口自己的网站上使用" }),
       }),
       execute: async (_id, params) => textResult(await driver.fill(params.target, params.value)),
     }),

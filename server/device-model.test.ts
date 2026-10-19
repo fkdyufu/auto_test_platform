@@ -104,12 +104,12 @@ test("validates each method's fields, keeps stored secrets and clears hidden one
   assert.deepEqual({ username: switched.username, password: switched.password, token: switched.token }, { username: "", password: "", token: "t" });
 });
 
-test("describes interfaces per method, with secrets only when asked", () => {
-  const serial = { kind: "serial" as const, settings: { device: "/dev/ttyACM0", baudRate: "115200", frame: "8N1", username: "root", password: "pw" } };
+test("describes interfaces per method and only marks stored secrets as saved", () => {
+  const serial = { kind: "serial" as const, settings: { device: "/dev/ttyACM0", baudRate: "115200", frame: "8N1", username: "root", password: "pw-secret" } };
   assert.equal(controlSummary(serial), "/dev/ttyACM0 · 115200 8N1");
-  assert.equal(describeControlSettings(serial, false), "串口设备 /dev/ttyACM0，波特率 115200，数据格式 8N1，登录账号 root");
-  assert.equal(describeControlSettings(serial, true), "串口设备 /dev/ttyACM0，波特率 115200，数据格式 8N1，登录账号 root，登录密码 pw");
-  const api = { kind: "api" as const, settings: { baseUrl: "http://h/api/", auth: "token", username: "", password: "", token: "tk" } };
-  assert.equal(describeControlSettings(api, false), "接口地址 http://h/api/，认证 Token");
+  assert.equal(describeControlSettings(serial), "串口设备 /dev/ttyACM0，波特率 115200，数据格式 8N1，登录账号 root，登录密码 已保存");
+  assert.equal(describeControlSettings({ ...serial, settings: { ...serial.settings, password: "" } }), "串口设备 /dev/ttyACM0，波特率 115200，数据格式 8N1，登录账号 root");
+  const api = { kind: "api" as const, settings: { baseUrl: "http://h/api/", auth: "token", username: "", password: "", token: "tk-secret" } };
+  assert.equal(describeControlSettings(api), "接口地址 http://h/api/，认证 Token，Token 已保存");
   assert.equal(controlSummary(api), "http://h/api/ · Token");
 });

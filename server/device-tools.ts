@@ -7,6 +7,7 @@ import type { ControlInterface, ControlKind, DeviceResource } from "./catalog-st
 import { CONTROL_KINDS, parseSerialFrame } from "../shared/control-interfaces.js";
 import type { ToolEvidence } from "./tool-evidence.js";
 import { TelnetSessionPool } from "./telnet-session.js";
+import { SECRET_PLACEHOLDER_HINT, SecretPlaceholders } from "./secret-placeholders.js";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_OUTPUT_LENGTH = 32_000;
@@ -285,6 +286,7 @@ export class DeviceToolDriver {
   private readonly telnetSessions = new TelnetSessionPool();
   private readonly adapters: DeviceProtocolAdapters;
   private readonly serialQueue = new Map<string, Promise<void>>();
+  private readonly secrets: SecretPlaceholders;
   private closed = false;
 
   constructor(
@@ -292,6 +294,7 @@ export class DeviceToolDriver {
     private readonly evidence: ToolEvidence,
     adapters?: DeviceProtocolAdapters,
   ) {
+    this.secrets = new SecretPlaceholders(devices);
     this.adapters = adapters || {
       ssh: sshExec, serial: serialExec, http: httpRequest,
       telnet: (request, signal) => this.telnetSessions.execute(
@@ -339,9 +342,10 @@ export class DeviceToolDriver {
 
   async ssh(params: { deviceId: string; interfaceId?: string; command: string; timeoutMs?: number }, signal?: AbortSignal) {
     const { device, control } = this.resolve(params.deviceId, params.interfaceId, "ssh");
+    const command = this.secrets.resolve(params.command);
     const result = await this.run(signal, (activeSignal) => this.adapters.ssh({
       control,
-      command: params.command,
+      command,
       timeoutMs: params.timeoutMs || DEFAULT_TIMEOUT_MS,
     }, activeSignal));
     return textResult({ device: device.name, interface: control.name || CONTROL_KINDS[control.kind].label, ...result });
@@ -349,10 +353,11 @@ export class DeviceToolDriver {
 
   async telnet(params: { deviceId: string; interfaceId?: string; command: string; timeoutMs?: number }, signal?: AbortSignal) {
     const { device, control } = this.resolve(params.deviceId, params.interfaceId, "telnet");
+    const command = this.secrets.resolve(params.command);
     const result = await this.run(signal, (activeSignal) => this.adapters.telnet({
       control,
       sessionKey: `${device.id}:${control.id}`,
-      command: params.command,
+      command,
       timeoutMs: params.timeoutMs || DEFAULT_TIMEOUT_MS,
     }, activeSignal));
     return textResult({ device: device.name, interface: control.name || CONTROL_KINDS[control.kind].label, ...result });
@@ -363,10 +368,11 @@ export class DeviceToolDriver {
     signal?: AbortSignal,
   ) {
     const { device, control } = this.resolve(params.deviceId, params.interfaceId, "serial");
+    const input = this.secrets.resolve(params.input);
     const key = `${device.id}:${control.id}`;
     const operation = (this.serialQueue.get(key) || Promise.resolve()).then(() => this.run(signal, (activeSignal) => this.adapters.serial({
       control,
-      input: params.input,
+      input,
       waitMs: params.waitMs || 1_000,
       appendNewline: params.appendNewline !== false,
     }, activeSignal)));
@@ -388,12 +394,15 @@ export class DeviceToolDriver {
     signal?: AbortSignal,
   ) {
     const { device, control } = this.resolve(params.deviceId, params.interfaceId, "api");
+    const path = this.secrets.resolve(params.path || "");
+    const headers = (params.headers || []).map((header) => ({ name: header.name, value: this.secrets.resolve(header.value) }));
+    const body = params.body === undefined ? undefined : this.secrets.resolve(params.body);
     const result = await this.run(signal, (activeSignal) => this.adapters.http({
       control,
       method: params.method,
-      path: params.path || "",
-      headers: params.headers || [],
-      body: params.body,
+      path,
+      headers,
+      body,
       timeoutMs: params.timeoutMs || DEFAULT_TIMEOUT_MS,
     }, activeSignal));
     return textResult({ device: device.name, interface: control.name || CONTROL_KINDS[control.kind].label, ...result });
@@ -420,7 +429,7 @@ export function createDeviceTools(options: DeviceToolsOptions) {
     description: "通过设备已配置的 SSH 控制接口执行命令。地址和凭据由平台根据设备 ID 获取。",
     parameters: Type.Object({
       ...commonParameters,
-      command: Type.String({ minLength: 1, maxLength: 20_000 }),
+      command: Type.String({ minLength: 1, maxLength: 20_000, description: SECRET_PLACEHOLDER_HINT }),
       timeoutMs: Type.Optional(Type.Number({ minimum: 1_000, maximum: 120_000 })),
     }),
     execute: async (_id, params, signal) => driver.ssh(params, signal),
@@ -431,7 +440,7 @@ export function createDeviceTools(options: DeviceToolsOptions) {
     description: "通过已配置的 Telnet 接口执行 CLI 命令。当前 Agent 内保留连接和配置视图，同一接口命令串行执行；多行命令逐条等待提示符，报错后停止后续命令。输出保留提示符。连接中断不会自动重发命令，下次调用须确认并重新进入所需视图。",
     parameters: Type.Object({
       ...commonParameters,
-      command: Type.String({ minLength: 1, maxLength: 20_000 }),
+      command: Type.String({ minLength: 1, maxLength: 20_000, description: SECRET_PLACEHOLDER_HINT }),
       timeoutMs: Type.Optional(Type.Number({ minimum: 1_000, maximum: 120_000 })),
     }),
     execute: async (_id, params, signal) => driver.telnet(params, signal),
@@ -442,7 +451,7 @@ export function createDeviceTools(options: DeviceToolsOptions) {
     description: "向设备已配置的本地串口发送内容并读取响应。串口设备、波特率和数据格式按接口配置使用。",
     parameters: Type.Object({
       ...commonParameters,
-      input: Type.String({ maxLength: 20_000, description: "发送内容；留空且 appendNewline=true 可发送回车，留空且 false 仅读取" }),
+      input: Type.String({ maxLength: 20_000, description: `发送内容；留空且 appendNewline=true 可发送回车，留空且 false 仅读取。${SECRET_PLACEHOLDER_HINT}` }),
       waitMs: Type.Optional(Type.Number({ minimum: 100, maximum: 10_000 })),
       appendNewline: Type.Optional(Type.Boolean({ description: "是否自动追加 CRLF，默认 true" })),
     }),
@@ -466,7 +475,7 @@ export function createDeviceTools(options: DeviceToolsOptions) {
         name: Type.String({ minLength: 1, maxLength: 200 }),
         value: Type.String({ maxLength: 4_000 }),
       }), { maxItems: 30 })),
-      body: Type.Optional(Type.String({ maxLength: 100_000, description: "请求体；JSON 请求应传入 JSON 字符串" })),
+      body: Type.Optional(Type.String({ maxLength: 100_000, description: `请求体；JSON 请求应传入 JSON 字符串。${SECRET_PLACEHOLDER_HINT}，Token 写 {{token:接口ID}}` })),
       timeoutMs: Type.Optional(Type.Number({ minimum: 1_000, maximum: 120_000 })),
     }),
     execute: async (_id, params, signal) => driver.http(params, signal),

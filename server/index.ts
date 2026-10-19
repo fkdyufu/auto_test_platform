@@ -253,10 +253,9 @@ async function createRunRecord(
 function buildDeviceDescription(context: TestOrderExecutionContext): string {
   const { devices } = context;
   const deviceLines = devices.map((device) => {
-    // Execution prompts carry credentials so the agent can log in through web pages and consoles.
     const controls = device.controlInterfaces.length
       ? device.controlInterfaces
-          .map((item) => `${item.name || CONTROL_KINDS[item.kind].label}[${item.kind}，接口 ID: ${item.id}] ${describeControlSettings(item, true)}`)
+          .map((item) => `${item.name || CONTROL_KINDS[item.kind].label}[${item.kind}，接口 ID: ${item.id}] ${describeControlSettings(item)}`)
           .join("；")
       : "未配置控制接口";
     const description = device.description ? `\n  说明: ${device.description.split("\n").join("\n    ")}` : "";

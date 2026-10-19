@@ -156,14 +156,14 @@ export function controlSummary(control: Pick<ControlInterface, "kind" | "setting
 }
 
 /**
- * Field-by-field text for prompts. Secrets are written out only when `includeSecrets` is set: test execution needs
- * them to log in through web pages and consoles; diagnostics and the assistant do not.
+ * Field-by-field text for prompts. A stored secret is only marked as saved: the model types `{{password:<interface ID>}}`
+ * where it needs one, and the tools fill in the value.
  */
-export function describeControlSettings(control: Pick<ControlInterface, "kind" | "settings">, includeSecrets: boolean): string {
+export function describeControlSettings(control: Pick<ControlInterface, "kind" | "settings">): string {
   return CONTROL_KINDS[control.kind].fields
     .filter((field) => isFieldShown(field, control.settings) && (control.settings[field.key] ?? "").trim())
-    .filter((field) => includeSecrets || field.input !== "secret")
     .map((field) => {
+      if (field.input === "secret") return `${field.label} 已保存`;
       const raw = control.settings[field.key];
       const shown = field.options?.find((option) => option.value === raw)?.label ?? raw;
       return `${field.label} ${shown}`;
