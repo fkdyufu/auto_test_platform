@@ -137,7 +137,7 @@ test("assistant exposes only generic tools and proposes drafts without saving as
   const context = normalizeAssistantContext({ page: "cases", title: "草稿", assetKind: "case", assetId: f.first.id, draftToken: "draft-token", draft: { name: "未保存名称", steps: "未保存步骤", precondition: "", expectedResult: "结果", scenarioId: f.scenario.id } });
   await f.store.startTurn(f.product.id, conversation.id, "补充前置条件", "tools-run", context);
   const tools = createAssistantTools({ catalog: f.catalog, store: f.store, productId: f.product.id, conversationId: conversation.id, runId: "tools-run", context, isCancelled: () => false });
-  assert.deepEqual(tools.map((tool) => tool.name), ["platform_context", "platform_query", "platform_get", "platform_propose_changes", "platform_propose_draft"]);
+  assert.deepEqual(tools.map((tool) => tool.name), ["platform_context", "platform_query", "platform_get", "platform_propose_changes", "platform_propose_draft", "platform_lab", "platform_propose_lab"]);
   const tool = tools.find((item) => item.name === "platform_propose_draft")!;
   await tool.execute("call", { summary: "补充前置条件", values: { precondition: "检查环境" } } as never, undefined, undefined, {} as never);
   assert.equal((await f.store.get(f.product.id, conversation.id)).proposals[0].context?.draft?.name, "未保存名称");

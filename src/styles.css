@@ -420,6 +420,10 @@ select {
 .assistant-field-diff small { color: var(--muted); font-size: 12px; }
 .assistant-field-diff pre { max-height: 220px; margin: 4px 0 0; overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-family: inherit; font-size: 12px; line-height: 1.6; }
 .assistant-proposal-actions { justify-content: flex-end; margin-top: 10px; }
+.assistant-lab-changes { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; font-size: 12px; line-height: 1.6; }
+.assistant-lab-changes > li { border-top: 1px solid var(--border); padding: 7px 0; overflow-wrap: anywhere; }
+.assistant-lab-changes summary { cursor: pointer; }
+.assistant-lab-changes .assistant-field-diff { margin: 8px 0 4px; }
 .assistant-tools { flex-shrink: 0; border-top: 1px solid var(--border); padding: 7px 14px; background: var(--gray-50); color: var(--muted); font-size: 12px; }
 .assistant-tools > .assistant-tool { display: block; min-height: 19px; }
 .assistant-tool + .assistant-tool { margin-top: 3px; }

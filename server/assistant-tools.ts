@@ -2,10 +2,12 @@ import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { CatalogError, type CatalogStore } from "./catalog-store.js";
 import type { AssistantStore } from "./assistant-store.js";
-import type { AssetChange, AssetKind, AssistantPageContext } from "../shared/assistant.js";
+import type { AssetChange, AssetKind, AssistantPageContext, LabOperation } from "../shared/assistant.js";
 import { applyDraftPatch } from "../shared/assistant-draft.js";
 import { CONTROL_KINDS, isControlKind, secretKeys, type ControlKind } from "../shared/control-interfaces.js";
 import { DEVICE_TEMPLATES } from "../shared/device-templates.js";
+import { LAB_LINK_ROLES, LAB_PORT_KINDS } from "../shared/physical-lab.js";
+import { MAX_LAB_OPERATIONS, describeLabForAssistant } from "./lab-changes.js";
 
 const controlSettingsDoc = (Object.entries(CONTROL_KINDS) as [ControlKind, typeof CONTROL_KINDS[ControlKind]][])
   .map(([kind, definition]) => `${kind}：${definition.fields.map((field) => `${field.key}（${field.label}${field.options ? `，可选 ${field.options.map((option) => option.value).join("/")}` : ""}${field.required ? "，必填" : ""}）`).join("、")}`)
@@ -24,6 +26,35 @@ export const ASSET_FIELDS: Record<AssetKind, Record<string, string>> = {
 };
 const kindSchema = Type.Union([Type.Literal("device"), Type.Literal("scenario"), Type.Literal("case"), Type.Literal("order")]);
 const valuesSchema = Type.Record(Type.String(), Type.Unknown());
+const literals = <T extends string>(values: readonly T[]) => Type.Union(values.map((value) => Type.Literal(value)));
+const portRefSchema = Type.Object({ node: Type.String({ description: "节点名称" }), port: Type.String({ description: "端口名" }) });
+const LAB_OPERATIONS_DOC = [
+  "add_ports：node、ports（如 \"1-24, console\"，已有的跳过）、kind（默认 ethernet）、note",
+  "remove_ports：node、ports，端口上的接线一并删除",
+  "update_port：node、port，以及要改的 name、kind、note",
+  "connect：a、b（各含 node 和 port）、role（默认按端口类型：串口和 USB 为 control，电源为 power，其他为 data）、note；两端须未接线",
+  "disconnect：node、port（连线任一端）",
+  "update_link：node、port（连线任一端），以及要改的 role、note",
+  "set_control_port：node（设备）、controlInterfaceId、port（平台经此端口访问该接口；留空取消指定）",
+  "set_rules：rules（完整替换环境规则）",
+  "add_node：name（外部节点，如办公网）",
+  "rename_node：node、name（平台节点或外部节点）",
+  "remove_node：node（仅外部节点，接线一并删除）",
+].join("；");
+const labOperationSchema = Type.Object({
+  op: literals(["add_ports", "remove_ports", "update_port", "connect", "disconnect", "update_link", "set_control_port", "set_rules", "add_node", "rename_node", "remove_node"] as const),
+  node: Type.Optional(Type.String()),
+  port: Type.Optional(Type.String()),
+  ports: Type.Optional(Type.String()),
+  kind: Type.Optional(literals(LAB_PORT_KINDS)),
+  name: Type.Optional(Type.String()),
+  a: Type.Optional(portRefSchema),
+  b: Type.Optional(portRefSchema),
+  role: Type.Optional(literals(LAB_LINK_ROLES)),
+  note: Type.Optional(Type.String()),
+  controlInterfaceId: Type.Optional(Type.String()),
+  rules: Type.Optional(Type.String()),
+});
 const result = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value) }], details: {} });
 
 export function normalizeAssistantContext(value: unknown): AssistantPageContext {
@@ -116,6 +147,17 @@ export function createAssistantTools(options: { catalog: CatalogStore; store: As
       applyDraftPatch(context.assetKind, context.draft, params.values);
       const proposal = await options.store.propose(options.productId, options.conversationId, { runId: options.runId, summary: params.summary, target: "draft", context, values: params.values });
       return result({ proposalId: proposal.id, status: "pending", message: "等待用户应用到当前表单，尚未保存" });
+    } }),
+    defineTool({ name: "platform_lab", label: "读取物理环境", description: "读取当前产品物理环境：环境规则、各节点（设备、平台服务器、外部节点）的端口及每个端口所接的对端（to）和用途（role：data 业务、control 控制、power 供电）、设备控制接口所经端口。node 可只读取一个节点。", parameters: Type.Object({ node: Type.Optional(Type.String({ description: "节点名称或 ID" })) }), execute: async (_id, params) => {
+      const [lab, devices] = await Promise.all([options.catalog.getPhysicalLab(options.productId), options.catalog.listDeviceResources(options.productId)]);
+      return result(describeLabForAssistant(lab, devices, params.node));
+    } }),
+    defineTool({ name: "platform_propose_lab", label: "提交接线变更预览", description: `提出物理环境修改，不直接保存。操作按顺序执行，节点和端口用 platform_lab 返回的名称。服务端校验后生成逐条变更预览，用户确认后保存。每次最多 ${MAX_LAB_OPERATIONS} 项。没有用户确认不能声称已保存。各操作字段：${LAB_OPERATIONS_DOC}。`, parameters: Type.Object({ summary: Type.String({ minLength: 1, maxLength: 1000 }), operations: Type.Array(labOperationSchema, { minItems: 1, maxItems: MAX_LAB_OPERATIONS }) }), execute: async (_id, params, signal) => {
+      ensureActive(signal);
+      const labPreview = await options.catalog.previewPhysicalLabChanges(options.productId, params.operations as LabOperation[]);
+      ensureActive(signal);
+      const proposal = await options.store.propose(options.productId, options.conversationId, { runId: options.runId, summary: params.summary, target: "lab", labPreview });
+      return result({ proposalId: proposal.id, status: "pending", changes: labPreview.changes.map((change) => change.before === undefined || `${change.before}${change.after}`.length > 300 ? change.text : `${change.text}：${change.before} → ${change.after}`), message: "接线变更已校验，等待用户在界面确认；尚未保存" });
     } }),
   ];
 }

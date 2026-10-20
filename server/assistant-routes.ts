@@ -37,6 +37,8 @@ export function createAssistantRouter(options: {
       response.json(await options.store.resolveProposal(request.params.productId, request.params.id, request.params.proposalId, decision, async (proposal) => {
         if (proposal.target === "assets" && proposal.preview) {
           proposal.preview.differences = await options.catalog.applyAssetChanges(request.params.productId, proposal.preview);
+        } else if (proposal.target === "lab" && proposal.labPreview) {
+          proposal.labPreview.changes = await options.catalog.applyPhysicalLabChanges(request.params.productId, proposal.labPreview);
         } else if (proposal.target === "draft") {
           if (!request.body?.draftToken || request.body.draftToken !== proposal.context?.draftToken) throw new CatalogError("编辑表单已变化，请重新生成草稿修改", 409);
         } else throw new CatalogError("变更预览不完整");

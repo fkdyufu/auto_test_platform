@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { AssetChange, AssetDifference, AssetKind, AssetPreview } from "../shared/assistant.js";
+import type { AssetChange, AssetDifference, AssetKind, AssetPreview, LabChange, LabOperation, LabPreview } from "../shared/assistant.js";
+import { applyLabOperations, diffPhysicalLab } from "./lab-changes.js";
 import type { TestResultDetails } from "../shared/test-result.js";
 import { parseStepRows, stepRowsFromLegacy, stepRowsToText, type TestCaseStep } from "../shared/test-case-steps.js";
 import {
@@ -1286,7 +1287,8 @@ export class CatalogStore {
       const label = (side: typeof a) => `${displayName(side.node)} ${side.port.name}`;
       if (a.node.id === b.node.id && a.port.id === b.port.id) throw new CatalogError(`端口“${label(a)}”不能连到自身`);
       if (!portKindsCompatible(a.port.kind, b.port.kind)) {
-        throw new CatalogError(`“${label(a)}”是${LAB_PORT_KIND_LABELS[a.port.kind]}口，不能连接${LAB_PORT_KIND_LABELS[b.port.kind]}口“${label(b)}”`);
+        const kindName = (kind: LabPortKind) => LAB_PORT_KIND_LABELS[kind].endsWith("口") ? LAB_PORT_KIND_LABELS[kind] : `${LAB_PORT_KIND_LABELS[kind]}口`;
+        throw new CatalogError(`“${label(a)}”是${kindName(a.port.kind)}，不能连接${kindName(b.port.kind)}“${label(b)}”`);
       }
       for (const side of [a, b]) {
         const key = `${side.node.id}\u0000${side.port.id}`;
@@ -1319,6 +1321,40 @@ export class CatalogStore {
       if (index >= 0) data.physicalLabs[index] = lab;
       else data.physicalLabs.push(lab);
       return this.physicalLabView(data, productId);
+    });
+  }
+
+  /** Applies assistant operations to the current lab and words the result; nothing is saved. */
+  private evaluateLabChanges(data: CatalogData, productId: string, operations: LabOperation[]): { lab: Omit<PhysicalLab, "updatedAt">; changes: LabChange[] } {
+    const before = this.physicalLabView(data, productId);
+    const devices = data.deviceResources.filter((device) => device.productId === productId && !device.archivedAt);
+    const lab = this.normalizePhysicalLab(data, productId, { ...applyLabOperations(before, operations, devices) });
+    const after = this.physicalLabView({
+      ...data,
+      physicalLabs: [...data.physicalLabs.filter((item) => item.productId !== productId), { ...lab, updatedAt: before.updatedAt }],
+    }, productId);
+    const changes = diffPhysicalLab(before, after, devices);
+    if (!changes.length) throw new CatalogError("这些操作不会改变物理环境");
+    return { lab, changes };
+  }
+
+  async previewPhysicalLabChanges(productId: string, operations: LabOperation[]): Promise<LabPreview> {
+    await this.getProduct(productId);
+    const { changes } = this.evaluateLabChanges(await this.read(), productId, operations);
+    return { operations: clone(operations), changes };
+  }
+
+  /** Saves a confirmed preview only if replaying it on the current lab still gives exactly what was shown. */
+  async applyPhysicalLabChanges(productId: string, preview: LabPreview): Promise<LabChange[]> {
+    return this.mutate((data) => {
+      if (!data.products.some((item) => item.id === productId && !item.archivedAt)) throw new CatalogError("产品不存在", 404);
+      const { lab, changes } = this.evaluateLabChanges(data, productId, preview.operations);
+      if (JSON.stringify(changes) !== JSON.stringify(preview.changes)) throw new CatalogError("物理环境已变化，请让助手重新读取并生成预览", 409);
+      const index = data.physicalLabs.findIndex((item) => item.productId === productId);
+      const saved: PhysicalLab = { ...lab, updatedAt: new Date().toISOString() };
+      if (index >= 0) data.physicalLabs[index] = saved;
+      else data.physicalLabs.push(saved);
+      return changes;
     });
   }
 

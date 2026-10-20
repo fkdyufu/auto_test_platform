@@ -1,3 +1,5 @@
+import type { LabLinkRole, LabPortKind } from "./physical-lab.js";
+
 export type AssetKind = "device" | "scenario" | "case" | "order";
 export interface AssetChange {
   kind: AssetKind;
@@ -17,6 +19,37 @@ export interface AssetPreview {
   changes: AssetChange[];
   differences: AssetDifference[];
 }
+export interface LabPortRef {
+  node: string;
+  port: string;
+}
+/** One edit to the physical lab. Nodes and ports are named as the lab shows them (an ID also works). */
+export interface LabOperation {
+  op: "add_ports" | "remove_ports" | "update_port" | "connect" | "disconnect" | "update_link" | "set_control_port" | "set_rules" | "add_node" | "rename_node" | "remove_node";
+  node?: string;
+  port?: string;
+  /** Port names for add_ports/remove_ports, e.g. "1-24, console". */
+  ports?: string;
+  kind?: LabPortKind;
+  name?: string;
+  a?: LabPortRef;
+  b?: LabPortRef;
+  role?: LabLinkRole;
+  note?: string;
+  controlInterfaceId?: string;
+  rules?: string;
+}
+/** One line of a lab change preview; `before`/`after` are set for edits. */
+export interface LabChange {
+  type: "add" | "remove" | "update";
+  text: string;
+  before?: string;
+  after?: string;
+}
+export interface LabPreview {
+  operations: LabOperation[];
+  changes: LabChange[];
+}
 export interface AssistantPageContext {
   page: string;
   title: string;
@@ -29,9 +62,10 @@ export interface AssistantProposal {
   id: string;
   runId: string;
   summary: string;
-  target: "assets" | "draft";
+  target: "assets" | "draft" | "lab";
   status: "pending" | "applied" | "rejected";
   preview?: AssetPreview;
+  labPreview?: LabPreview;
   context?: AssistantPageContext;
   values?: Record<string, unknown>;
   createdAt: string;

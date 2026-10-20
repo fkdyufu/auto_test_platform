@@ -92,6 +92,7 @@ export function ResourcesPage({ product }: { product: ProductSummary }) {
   const [scenarios, setScenarios] = useState<TestScenario[]>([]);
   const [testCases, setTestCases] = useState<TestCase[]>([]);
   const [lab, setLab] = useState<PhysicalLab | null>(null);
+  const [labFocus, setLabFocus] = useState("");
   const [dialog, setDialog] = useState<ResourceDialog | null>(null);
   const [dialogError, setDialogError] = useState("");
   const [notice, setNotice] = useState<Notice>(null);
@@ -110,7 +111,7 @@ export function ResourcesPage({ product }: { product: ProductSummary }) {
     setLab(nextLab);
   };
 
-  useAssistantPage({ page: "resources", title: dialog ? dialog.form.name || (dialog.kind === "device" ? "新增设备" : "新增场景") : TAB_META[tab].label, assetKind: dialog?.kind || (tab === "devices" ? "device" : tab === "scenarios" ? "scenario" : undefined), assetId: dialog?.id, ...(dialog && !submitting ? { draft: { ...dialog.form, ...(dialog.kind === "scenario" && dialog.id ? { caseIds: dialog.caseIds } : {}) } } : {}) }, (draft) => {
+  useAssistantPage({ page: "resources", title: dialog ? dialog.form.name || (dialog.kind === "device" ? "新增设备" : "新增场景") : tab === "lab" && labFocus ? `${TAB_META.lab.label} · ${labFocus}` : TAB_META[tab].label, assetKind: dialog?.kind || (tab === "devices" ? "device" : tab === "scenarios" ? "scenario" : undefined), assetId: dialog?.id, ...(dialog && !submitting ? { draft: { ...dialog.form, ...(dialog.kind === "scenario" && dialog.id ? { caseIds: dialog.caseIds } : {}) } } : {}) }, (draft) => {
     setDialog((current) => {
       if (!current) return current;
       if (current.kind === "device") return { ...current, form: draft as unknown as DeviceResourceInput, editor: { ...current.editor, touched: true } };
@@ -224,6 +225,7 @@ export function ResourcesPage({ product }: { product: ProductSummary }) {
             devices={devices}
             onLabChange={setLab}
             onNotice={setNotice}
+            onFocusChange={setLabFocus}
           />
         ) : <div className="lab-loading">正在读取物理环境...</div>
       ) : <div className="list-surface resource-list-surface">

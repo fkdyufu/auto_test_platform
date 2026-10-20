@@ -62,7 +62,7 @@ test("pi assistant exposes platform and current-product device tools without bro
   assert.match(execution.finalText, /设备状态已读取/);
   assert.equal(requests.length, 4);
   const names = (requests[0].tools as { function: { name: string } }[]).map((tool) => tool.function.name);
-  assert.deepEqual(names, ["platform_context", "platform_query", "platform_get", "platform_propose_changes", "platform_propose_draft", "device_http_request"]);
+  assert.deepEqual(names, ["platform_context", "platform_query", "platform_get", "platform_propose_changes", "platform_propose_draft", "platform_lab", "platform_propose_lab", "device_http_request"]);
   assert.equal(names.some((name) => name.startsWith("browser_") || name === "device_telnet_exec" || name === "device_ssh_exec"), false);
   assert.equal(JSON.stringify(requests).includes("device-secret"), false);
   assert.equal(JSON.stringify(requests).includes("foreign-secret"), false);

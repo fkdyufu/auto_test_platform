@@ -70,12 +70,15 @@ export function PhysicalLabView({
   devices,
   onLabChange,
   onNotice,
+  onFocusChange,
 }: {
   product: ProductSummary;
   lab: PhysicalLab;
   devices: DeviceResource[];
   onLabChange: (lab: PhysicalLab) => void;
   onNotice: (notice: Notice) => void;
+  /** The port or node the person is looking at, for the assistant. */
+  onFocusChange?: (label: string) => void;
 }) {
   const [view, setView] = useState<LabViewMode>("panel");
   const [focusId, setFocusId] = useState("");
@@ -98,6 +101,12 @@ export function PhysicalLabView({
     setEditing(null);
     setRulesDraft(null);
   }, [product.id]);
+
+  const focusLabel = selected && findPort(lab, selected) ? endLabel(lab, selected) : view === "panel" && focusId ? lab.nodes.find((node) => node.id === focusId)?.name || "" : "";
+  useEffect(() => {
+    onFocusChange?.(focusLabel);
+  }, [focusLabel]);
+  useEffect(() => () => onFocusChange?.(""), []);
 
   const commit = async (next: LabContent) => {
     const saved = await api.updatePhysicalLab(product.id, { ...next, baseUpdatedAt: lab.updatedAt });
