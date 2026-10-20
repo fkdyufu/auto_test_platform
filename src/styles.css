@@ -487,11 +487,8 @@ body.assistant-resizing { cursor: ew-resize; user-select: none; }
 .assistant-composer small { color: var(--muted); font-size: 12px; }
 
 @media (min-width: 1200px) {
-  /* The docked panel always leaves the page at least 480px. */
-  :root { --assistant-docked-width: max(360px, min(var(--assistant-width, 480px), 100vw - var(--sidebar-width) - 512px)); }
-  .platform-assistant { width: var(--assistant-docked-width); }
-  body:has(.platform-assistant) .main-content { margin-right: calc(var(--assistant-docked-width) + 16px); }
-  body:has(.platform-assistant) .modal-backdrop { right: calc(var(--assistant-docked-width) + 16px); }
+  /* The panel floats over the page, but dialogs stay beside it so the assistant can fill their forms in view. */
+  body:has(.platform-assistant) .modal-backdrop { right: min(var(--assistant-width, 480px) + 16px, 100vw - 640px); }
 }
 
 @media (max-width: 600px) {

@@ -162,7 +162,7 @@ export function PlatformAssistant({ product, context, request, prepareDraft, onA
   }, [open, conversation?.updatedAt]);
   useEffect(() => { if (open) endRef.current?.scrollIntoView({ block: "nearest" }); }, [open, conversation?.messages.length, run?.events.length]);
   const toggle = (value: boolean) => { setOpen(value); sessionStorage.setItem("platform-assistant.open", String(value)); };
-  // The page beside the docked panel reads the same width, so it lives on the root element.
+  // Dialogs move aside by the same width, so it lives on the root element.
   useEffect(() => {
     if (!open) return;
     const root = document.documentElement;
