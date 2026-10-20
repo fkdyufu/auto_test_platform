@@ -22,6 +22,8 @@
     "playwright-core": "^1.55.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
     "serialport": "^13.0.0",
     "ssh2": "^1.17.0",
     "telnet-client": "^2.2.14",

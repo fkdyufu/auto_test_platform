@@ -339,6 +339,43 @@ select {
 .tool-output-details summary { width: fit-content; color: var(--gray-600); cursor: pointer; }
 .tool-output-details pre { max-height: 320px; margin: 7px 0 0; border-left: 2px solid var(--gray-300); padding: 8px 10px; overflow: auto; background: var(--gray-50); color: var(--gray-700); white-space: pre-wrap; overflow-wrap: anywhere; font-family: monospace; line-height: 1.6; }
 
+.markdown { line-height: 1.7; overflow-wrap: anywhere; }
+.markdown > :first-child { margin-top: 0; }
+.markdown > :last-child { margin-bottom: 0; }
+.markdown p,
+.markdown ul,
+.markdown ol,
+.markdown pre,
+.markdown blockquote,
+.markdown .markdown-table { margin: 0 0 8px; }
+/* Models often break lines without a blank line; keep those breaks. */
+.markdown p { white-space: pre-line; }
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4,
+.markdown h5,
+.markdown h6 { margin: 14px 0 6px; color: var(--gray-900); font-size: 1em; line-height: 1.5; }
+.markdown h1,
+.markdown h2 { font-size: 1.12em; }
+.markdown ul,
+.markdown ol { padding-left: 1.4em; }
+.markdown li + li { margin-top: 2px; }
+.markdown li > p { margin: 0 0 4px; }
+.markdown li > ul,
+.markdown li > ol { margin: 2px 0 0; }
+.markdown code { border-radius: 4px; padding: 1px 4px; background: var(--gray-100); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; }
+.markdown pre { border-left: 2px solid var(--gray-300); padding: 8px 10px; overflow-x: auto; background: var(--gray-50); line-height: 1.5; }
+.markdown pre code { padding: 0; background: none; white-space: pre; overflow-wrap: normal; }
+.markdown blockquote { border-left: 2px solid var(--gray-300); padding-left: 10px; color: var(--gray-600); }
+.markdown a { color: var(--primary-700); }
+.markdown hr { margin: 12px 0; border: 0; border-top: 1px solid var(--border); }
+.markdown-table { max-width: 100%; overflow-x: auto; }
+.markdown table { border-collapse: collapse; font-size: 12px; line-height: 1.5; }
+.markdown th,
+.markdown td { min-width: 4em; border: 1px solid var(--border); padding: 5px 8px; text-align: left; vertical-align: top; overflow-wrap: break-word; }
+.markdown th { background: var(--gray-50); font-weight: 600; }
+
 .assistant-launcher {
   position: fixed;
   right: 24px;
@@ -364,7 +401,7 @@ select {
   inset: 16px 16px 16px auto;
   z-index: 140;
   display: flex;
-  width: min(420px, calc(100% - 32px));
+  width: min(var(--assistant-width, 480px), calc(100% - 32px));
   min-height: 0;
   flex-direction: column;
   border: 1px solid var(--border);
@@ -374,6 +411,13 @@ select {
   overflow: hidden;
   font-size: 13px;
 }
+
+.assistant-resizer { position: absolute; top: 0; bottom: 0; left: 0; z-index: 1; width: 8px; cursor: ew-resize; outline: 0; touch-action: none; }
+.assistant-resizer::after { content: ""; position: absolute; top: 50%; left: 2px; width: 3px; height: 36px; border-radius: 2px; background: var(--gray-200); transform: translateY(-50%); }
+.assistant-resizer:hover::after,
+.assistant-resizer:focus-visible::after,
+.assistant-resizing .assistant-resizer::after { background: var(--primary-500); }
+body.assistant-resizing { cursor: ew-resize; user-select: none; }
 
 .assistant-header,
 .assistant-header > div,
@@ -400,7 +444,8 @@ select {
 .assistant-message-meta > span { font-weight: 600; }
 .assistant-message.assistant .assistant-message-meta > span { color: var(--primary-600); }
 .assistant-message-context { display: block; margin-top: 5px; color: var(--muted); font-size: 12px; }
-.assistant-message p { margin: 8px 0 0; white-space: pre-wrap; line-height: 1.7; }
+.assistant-message > p { margin: 8px 0 0; white-space: pre-wrap; line-height: 1.7; }
+.assistant-message > .markdown { margin-top: 8px; }
 .assistant-proposal { margin-top: 14px; border-top: 2px solid var(--primary-200); padding-top: 12px; }
 .assistant-proposal > strong { display: block; line-height: 1.6; font-size: 12px; }
 .assistant-proposal-status { display: block; margin: 6px 0 9px; color: var(--warning-700); font-size: 12px; }
@@ -442,12 +487,16 @@ select {
 .assistant-composer small { color: var(--muted); font-size: 12px; }
 
 @media (min-width: 1200px) {
-  body:has(.platform-assistant) .main-content { margin-right: 436px; }
-  body:has(.platform-assistant) .modal-backdrop { right: 436px; }
+  /* The docked panel always leaves the page at least 480px. */
+  :root { --assistant-docked-width: max(360px, min(var(--assistant-width, 480px), 100vw - var(--sidebar-width) - 512px)); }
+  .platform-assistant { width: var(--assistant-docked-width); }
+  body:has(.platform-assistant) .main-content { margin-right: calc(var(--assistant-docked-width) + 16px); }
+  body:has(.platform-assistant) .modal-backdrop { right: calc(var(--assistant-docked-width) + 16px); }
 }
 
 @media (max-width: 600px) {
   .platform-assistant { inset: 0; width: 100%; height: 100dvh; border: 0; border-radius: 0; }
+  .assistant-resizer { display: none; }
   .assistant-composer { padding-bottom: max(12px, env(safe-area-inset-bottom)); }
   .assistant-launcher { right: 15px; bottom: 15px; }
 }
@@ -3016,7 +3065,14 @@ select {
   color: var(--primary-800);
 }
 
-.diagnostic-message p {
+.diagnostic-message > .markdown {
+  margin-top: 7px;
+  color: var(--gray-700);
+  font-size: 12px;
+  line-height: 1.75;
+}
+
+.diagnostic-message > p {
   margin: 7px 0 0;
   color: var(--gray-700);
   font-size: 12px;
@@ -3025,7 +3081,7 @@ select {
   white-space: pre-wrap;
 }
 
-.diagnostic-message.streaming p {
+.diagnostic-message.streaming > p {
   color: var(--gray-600);
 }
 

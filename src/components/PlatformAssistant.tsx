@@ -1,7 +1,22 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { AlertCircle, Bot, Check, CircleStop, LoaderCircle, MessageSquareText, Plus, Send, Wrench, X } from "lucide-react";
 import { api, type AssistantConversation, type AssistantPageContext, type AssistantProposal, type ProductSummary, type RunEvent, type RunResponse } from "../api";
 import { buildTimelineItems } from "../run-events";
+import { Markdown } from "./Markdown";
+
+const WIDTH_KEY = "platform-assistant.width";
+const DEFAULT_WIDTH = 480;
+const MIN_WIDTH = 360;
+const MAX_WIDTH = 960;
+const clampWidth = (value: number) => Math.round(Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, value)));
+const storedWidth = () => {
+  try {
+    const value = Number(localStorage.getItem(WIDTH_KEY));
+    return value ? clampWidth(value) : DEFAULT_WIDTH;
+  } catch {
+    return DEFAULT_WIDTH;
+  }
+};
 
 const KIND_LABELS = { case: "用例", scenario: "场景", device: "设备", order: "测试单" };
 const FIELD_LABELS: Record<string, string> = { name: "名称", scenarioId: "场景", precondition: "前置条件", steps: "步骤", expectedResult: "预期结果", stepRows: "用例步骤", description: "描述", category: "功能分类", roles: "设备角色", parameters: "场景参数", setupInstructions: "搭建要求", verificationInstructions: "验证要求", cleanupInstructions: "清理要求", caseIds: "关联用例", template: "设备类型", controlInterfaces: "控制接口" };
@@ -53,6 +68,8 @@ export function PlatformAssistant({ product, context, request, prepareDraft, onA
   const [sending, setSending] = useState(false);
   const [busyProposal, setBusyProposal] = useState("");
   const [error, setError] = useState("");
+  const [width, setWidth] = useState(storedWidth);
+  const panelRef = useRef<HTMLElement | null>(null);
   const sourceRef = useRef<EventSource | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
@@ -145,6 +162,45 @@ export function PlatformAssistant({ product, context, request, prepareDraft, onA
   }, [open, conversation?.updatedAt]);
   useEffect(() => { if (open) endRef.current?.scrollIntoView({ block: "nearest" }); }, [open, conversation?.messages.length, run?.events.length]);
   const toggle = (value: boolean) => { setOpen(value); sessionStorage.setItem("platform-assistant.open", String(value)); };
+  // The page beside the docked panel reads the same width, so it lives on the root element.
+  useEffect(() => {
+    if (!open) return;
+    const root = document.documentElement;
+    root.style.setProperty("--assistant-width", `${width}px`);
+    return () => { root.style.removeProperty("--assistant-width"); };
+  }, [open, width]);
+  const saveWidth = (value: number) => {
+    const next = clampWidth(value);
+    setWidth(next);
+    try { localStorage.setItem(WIDTH_KEY, String(next)); } catch { /* the width is only a convenience */ }
+  };
+  // Dragging updates the CSS variable directly so the conversation is not re-rendered on every move.
+  const startResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const handle = event.currentTarget;
+    const startX = event.clientX;
+    const startWidth = panelRef.current?.getBoundingClientRect().width || width;
+    handle.setPointerCapture(event.pointerId);
+    document.body.classList.add("assistant-resizing");
+    const move = (moveEvent: PointerEvent) => document.documentElement.style.setProperty("--assistant-width", `${clampWidth(startWidth + startX - moveEvent.clientX)}px`);
+    const end = () => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", end);
+      handle.removeEventListener("pointercancel", end);
+      document.body.classList.remove("assistant-resizing");
+      // Keep what is shown: the page may cap the panel below the dragged width.
+      saveWidth(panelRef.current?.getBoundingClientRect().width || width);
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", end);
+    handle.addEventListener("pointercancel", end);
+  };
+  const resizeByKey = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    saveWidth(width + (event.key === "ArrowLeft" ? 32 : -32));
+  };
   // A request made before this panel mounted (e.g. for another product) is not replayed.
   const handledRequestRef = useRef(request?.id);
   useEffect(() => {
@@ -191,7 +247,8 @@ export function PlatformAssistant({ product, context, request, prepareDraft, onA
 
   return <>
     {!open && <button type="button" className="assistant-launcher" title="打开 AI 助手" aria-label="打开 AI 助手" onClick={() => toggle(true)}><MessageSquareText size={23} /></button>}
-    {open && <aside className="platform-assistant" role="complementary" aria-label="AI 助手">
+    {open && <aside ref={panelRef} className="platform-assistant" role="complementary" aria-label="AI 助手">
+      <div className="assistant-resizer" role="separator" aria-orientation="vertical" aria-label="调整助手宽度" aria-valuenow={width} aria-valuemin={MIN_WIDTH} aria-valuemax={MAX_WIDTH} tabIndex={0} title="拖动调整宽度，双击恢复" onPointerDown={startResize} onDoubleClick={() => saveWidth(DEFAULT_WIDTH)} onKeyDown={resizeByKey} />
       <header className="assistant-header"><div><Bot size={19} /><h2>AI 助手</h2></div><div>
         <button type="button" className="icon-action" title="新建对话" disabled={!product || loading || sending || !!busyProposal} onClick={() => void newConversation()}><Plus size={18} /></button>
         <button type="button" className="icon-action" title="收起助手" onClick={() => toggle(false)}><X size={18} /></button>
@@ -204,7 +261,7 @@ export function PlatformAssistant({ product, context, request, prepareDraft, onA
         {conversation?.messages.map((message) => <div key={message.id} className={`assistant-message ${message.role} ${message.error ? "error" : ""}`}>
           <div className="assistant-message-meta"><span>{message.role === "user" ? "你" : "AI 助手"}</span><time>{new Date(message.createdAt).toLocaleTimeString("zh-CN", { hour12: false })}</time></div>
           {message.context && <small className="assistant-message-context">{message.context.title}</small>}
-          <p>{message.content}</p>
+          {message.role === "assistant" && !message.error ? <Markdown text={message.content} /> : <p>{message.content}</p>}
           {message.role === "assistant" && conversation.proposals.filter((proposal) => proposal.runId === message.runId).map((proposal) => <section key={proposal.id} className="assistant-proposal">
             <strong>{proposal.summary}</strong>
             <span className={`assistant-proposal-status ${proposal.status}`}>{proposal.status === "pending" ? proposal.target === "draft" ? "待应用到表单" : "待确认保存" : proposal.status === "applied" ? proposal.target === "draft" ? "已应用到表单" : "已保存" : "已拒绝"}</span>
@@ -215,7 +272,7 @@ export function PlatformAssistant({ product, context, request, prepareDraft, onA
             </div>}
           </section>)}
         </div>)}
-        {running && <div className="assistant-message assistant"><div className="assistant-message-meta"><span>AI 助手</span><LoaderCircle className="spin" size={13} /></div><p>{streaming || "正在处理..."}</p></div>}
+        {running && <div className="assistant-message assistant"><div className="assistant-message-meta"><span>AI 助手</span><LoaderCircle className="spin" size={13} /></div>{streaming ? <Markdown text={streaming} /> : <p>正在处理...</p>}</div>}
         <div ref={endRef} />
       </div>
       {tools.length > 0 && <div className="assistant-tools">{tools.map((item) => <div className="assistant-tool" key={item.renderKey}>

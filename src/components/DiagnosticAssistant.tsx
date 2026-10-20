@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { api, type DiagnosticConversation, type RunEvent, type RunResponse } from "../api";
 import { buildTimelineItems } from "../run-events";
+import { Markdown } from "./Markdown";
 
 export interface DiagnosticTarget {
   testRunId: string;
@@ -204,13 +205,13 @@ export function DiagnosticAssistant({
                       <span>{message.role === "user" ? "你" : "诊断助手"}</span>
                       <time>{formatTime(message.createdAt)}</time>
                     </div>
-                    <p>{message.content}</p>
+                    {message.role === "assistant" && !message.error ? <Markdown text={message.content} /> : <p>{message.content}</p>}
                   </div>
                 ))}
                 {isRunning && (
                   <div className="diagnostic-message assistant streaming">
                     <div className="diagnostic-message-meta"><span>诊断助手</span><LoaderCircle className="spin" size={13} /></div>
-                    <p>{streamingText || "正在分析执行证据..."}</p>
+                    {streamingText ? <Markdown text={streamingText} /> : <p>正在分析执行证据...</p>}
                   </div>
                 )}
                 <div ref={endRef} />
