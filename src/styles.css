@@ -3872,13 +3872,6 @@ select {
   padding: 16px 18px;
 }
 
-.lab-main {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
-  gap: 16px;
-  align-items: start;
-}
-
 .lab-hint {
   margin: 0;
   color: var(--muted);
@@ -4395,6 +4388,73 @@ select {
   white-space: nowrap;
 }
 
+.lab-check-list {
+  display: grid;
+  margin: 0;
+  padding: 6px 18px 10px;
+  list-style: none;
+}
+
+.lab-check-list li {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  border-bottom: 1px solid var(--gray-150);
+  padding: 8px 0;
+}
+
+.lab-check-list li:last-child {
+  border-bottom: 0;
+}
+
+.lab-check-text {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--gray-800);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.lab-check-text::before {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warning-600);
+  content: "";
+}
+
+.lab-check-text:hover {
+  color: var(--primary-700);
+}
+
+.lab-check-reason {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.lab-check-list .button {
+  margin-left: auto;
+}
+
+.lab-edge-labels rect {
+  fill: var(--gray-0);
+  stroke: var(--gray-300);
+}
+
+.lab-edge-labels.hl rect {
+  stroke: var(--primary-600);
+}
+
 .lab-topology-empty {
   margin-bottom: 10px;
 }
@@ -4483,12 +4543,8 @@ select {
 }
 
 .lab-edge-labels text {
-  fill: var(--gray-600);
+  fill: var(--gray-700);
   font-size: 11px;
-  paint-order: stroke;
-  stroke: var(--gray-0);
-  stroke-linejoin: round;
-  stroke-width: 3px;
 }
 
 .lab-edge-labels.hl text {
@@ -4677,12 +4733,6 @@ select {
 .lab-node-modal .modal-body {
   display: grid;
   gap: 12px;
-}
-
-@media (max-width: 1000px) {
-  .lab-main {
-    grid-template-columns: minmax(0, 1fr);
-  }
 }
 
 @media (max-width: 640px) {

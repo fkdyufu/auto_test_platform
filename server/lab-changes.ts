@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { CatalogError } from "./catalog-store.js";
 import type { LabChange, LabOperation, LabPortRef } from "../shared/assistant.js";
 import { CONTROL_KINDS, controlSummary, type ControlInterface } from "../shared/control-interfaces.js";
+import { checkPhysicalLab, describeLabIssue } from "../shared/lab-checks.js";
 import {
   LAB_LINK_ROLES,
   LAB_LINK_ROLE_LABELS,
@@ -330,11 +331,13 @@ export function describeLabForAssistant(lab: PhysicalLab, devices: LabDevice[], 
       } : {}),
     };
   };
-  const full = { updatedAt: lab.updatedAt, rules: lab.rules, nodes: nodes.map(describeNode) };
+  const issues = checkPhysicalLab(lab, devices).filter((issue) => nodes.some((node) => node.id === issue.nodeId)).map(describeLabIssue);
+  const full = { updatedAt: lab.updatedAt, rules: lab.rules, ...(issues.length ? { issues } : {}), nodes: nodes.map(describeNode) };
   if (nodeRef?.trim() || JSON.stringify(full).length <= MAX_READ_SIZE) return full;
   return {
     updatedAt: lab.updatedAt,
     rules: lab.rules,
+    ...(issues.length ? { issues } : {}),
     message: "物理环境较大，以下只列出节点概要；用 node 参数逐个读取节点的端口和接线",
     nodes: lab.nodes.map((node) => ({
       id: node.id,

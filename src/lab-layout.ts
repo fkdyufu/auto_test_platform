@@ -2,6 +2,8 @@ export interface LayoutNode {
   id: string;
   label: string;
   sub: string;
+  /** Taller boxes leave room for several parallel cables. */
+  minHeight?: number;
 }
 
 export interface LayoutEdge {
@@ -28,6 +30,9 @@ const RADIUS_Y = [0, 150, 260, 330];
 const NODE_HEIGHT = 44;
 const MARGIN_X = 70;
 const MARGIN_Y = 56;
+/** Extra gap per additional parallel cable between two nodes, so staggered port labels fit. */
+const PARALLEL_GAP_X = 16;
+const PARALLEL_GAP_Y = 18;
 const PADDING = 36;
 
 function textWidth(text: string, cjk: number, latin: number): number {
@@ -53,12 +58,21 @@ export function layoutLab(nodes: LayoutNode[], edges: LayoutEdge[]): LabLayout {
   });
   const degree = (id: string) => edges.filter((edge) => edge.from !== edge.to && (edge.from === id || edge.to === id)).length;
   const hub = [...ids].sort((left, right) => degree(right) - degree(left))[0] || "";
+  const pairCounts = new Map<string, number>();
+  edges.forEach((edge) => {
+    if (edge.from === edge.to) return;
+    const key = [edge.from, edge.to].sort().join("\u0000");
+    pairCounts.set(key, (pairCounts.get(key) || 0) + 1);
+  });
+  const parallel = Math.min(4, Math.max(1, ...pairCounts.values()));
+  const marginX = MARGIN_X + PARALLEL_GAP_X * (parallel - 1);
+  const marginY = MARGIN_Y + PARALLEL_GAP_Y * (parallel - 1);
   const positions: Record<string, PlacedNode> = {};
   if (!hub) return { hub, positions, viewBox: { x: 0, y: 0, width: 200, height: 100 } };
 
   const sizes = new Map(nodes.map((node) => [node.id, {
     w: Math.max(96, 28 + Math.max(textWidth(node.label, 14, 8.5), textWidth(node.sub, 12, 7))),
-    h: NODE_HEIGHT,
+    h: Math.max(NODE_HEIGHT, node.minHeight || 0),
   }]));
   const connected = degree(hub) > 0;
   const layer = new Map<string, number>();
@@ -117,11 +131,11 @@ export function layoutLab(nodes: LayoutNode[], edges: LayoutEdge[]): LabLayout {
         for (let j = i + 1; j < placed.length; j += 1) {
           const p = positions[placed[i]];
           const q = positions[placed[j]];
-          const overlapX = (p.w + q.w) / 2 + MARGIN_X - Math.abs(p.x - q.x);
-          const overlapY = (p.h + q.h) / 2 + MARGIN_Y - Math.abs(p.y - q.y);
+          const overlapX = (p.w + q.w) / 2 + marginX - Math.abs(p.x - q.x);
+          const overlapY = (p.h + q.h) / 2 + marginY - Math.abs(p.y - q.y);
           if (overlapX <= 0 || overlapY <= 0) continue;
           moved = true;
-          const horizontal = overlapX / (p.w + q.w + MARGIN_X) < overlapY / (p.h + q.h + MARGIN_Y);
+          const horizontal = overlapX / (p.w + q.w + marginX) < overlapY / (p.h + q.h + marginY);
           const sign = horizontal ? Math.sign(q.x - p.x || 1) : Math.sign(q.y - p.y || 1);
           const push = (horizontal ? overlapX : overlapY) / 2 + 1;
           const pin = placed[i] === hub ? 0 : placed[j] === hub ? 2 : 1;

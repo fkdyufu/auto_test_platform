@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { Lock, Pencil, Plus, Trash2, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { Bot, Lock, Pencil, Plus, Trash2, X } from "lucide-react";
 import {
   api,
   type DeviceResource,
@@ -27,7 +27,9 @@ import {
   sameEnd,
 } from "../../shared/physical-lab";
 import { CONTROL_KINDS, controlSummary } from "../../shared/control-interfaces";
-import { borderPoint, labelWidth, layoutLab, type PlacedNode } from "../lab-layout";
+import { checkPhysicalLab, describeLabIssue, type LabIssue } from "../../shared/lab-checks";
+import { useAssistantAsk } from "../components/AssistantContext";
+import { labelWidth, layoutLab, type PlacedNode } from "../lab-layout";
 import { AutoResizeTextarea, Modal, type Notice } from "../components/ui";
 
 type LabContent = Pick<PhysicalLab, "rules" | "nodes" | "links">;
@@ -38,6 +40,19 @@ const ROLE_HINTS: Record<LabLinkRole, string> = {
   control: "平台经这根线控制设备，场景不得修改两端配置",
   power: "由程控电源供电，可用于断电重启",
 };
+
+const PILL_HEIGHT = 15;
+const pillWidth = (text: string) => labelWidth(text) + 8;
+
+/** Where a line from `origin` (inside the box) heading along (dx, dy) leaves the box. */
+function exitPoint(box: PlacedNode, origin: { x: number; y: number }, dx: number, dy: number): { x: number; y: number } {
+  const tx = dx ? ((Math.sign(dx) * box.w) / 2 - (origin.x - box.x)) / dx : Infinity;
+  const ty = dy ? ((Math.sign(dy) * box.h) / 2 - (origin.y - box.y)) / dy : Infinity;
+  const t = Math.max(0, Math.min(tx, ty));
+  return { x: origin.x + dx * t, y: origin.y + dy * t };
+}
+
+const span = (start: { x: number; y: number }, end: { x: number; y: number }) => Math.hypot(end.x - start.x, end.y - start.y);
 
 function newId(): string {
   if (typeof globalThis.crypto?.randomUUID === "function") return globalThis.crypto.randomUUID();
@@ -89,11 +104,23 @@ export function PhysicalLabView({
   const [nodeDialogError, setNodeDialogError] = useState("");
   const [busy, setBusy] = useState(false);
   const deviceById = useMemo(() => new Map(devices.map((device) => [device.id, device])), [devices]);
+  const issues = useMemo(() => checkPhysicalLab(lab, devices), [lab, devices]);
+  const ask = useAssistantAsk();
+  const wiringRef = useRef<HTMLElement | null>(null);
 
-  const layout = useMemo(() => layoutLab(
-    lab.nodes.map((node) => ({ id: node.id, label: node.name, sub: nodeShortSubtitle(node, deviceById.get(node.id)) })),
-    lab.links.map((link) => ({ from: link.a.nodeId, to: link.b.nodeId })),
-  ), [lab, deviceById]);
+  const layout = useMemo(() => {
+    // The most cables a node has to any single neighbour decides how tall its box needs to be.
+    const pairCounts = new Map<string, number>();
+    lab.links.forEach((link) => {
+      const key = [link.a.nodeId, link.b.nodeId].sort().join("\u0000");
+      pairCounts.set(key, (pairCounts.get(key) || 0) + 1);
+    });
+    const parallel = (nodeId: string) => Math.max(1, ...[...pairCounts].filter(([key]) => key.split("\u0000").includes(nodeId)).map(([, count]) => count));
+    return layoutLab(
+      lab.nodes.map((node) => ({ id: node.id, label: node.name, sub: nodeShortSubtitle(node, deviceById.get(node.id)), minHeight: (parallel(node.id) - 1) * 18 + 16 })),
+      lab.links.map((link) => ({ from: link.a.nodeId, to: link.b.nodeId })),
+    );
+  }, [lab, deviceById]);
   const focusNode = lab.nodes.find((node) => node.id === focusId) || lab.nodes.find((node) => node.id === layout.hub) || lab.nodes[0];
 
   useEffect(() => {
@@ -168,6 +195,25 @@ export function PhysicalLabView({
     }
   };
 
+  const showIssue = (issue: LabIssue) => {
+    setFocusId(issue.nodeId);
+    setView("panel");
+    setSelected(issue.portId ? { nodeId: issue.nodeId, portId: issue.portId } : null);
+    wiringRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  };
+
+  const applySuggestion = async (issue: LabIssue) => {
+    if (!issue.suggestion) return;
+    const { controlId, portId, portName } = issue.suggestion;
+    const next = content(lab);
+    next.nodes = next.nodes.map((node) => node.id === issue.nodeId ? { ...node, controlPorts: { ...node.controlPorts, [controlId]: portId } } : node);
+    await run(next, `已指定经 ${portName}`);
+  };
+
+  const askAssistant = () => {
+    ask?.(`物理环境检查发现以下问题，请读取物理环境后处理，能确定的直接提出修改，不能确定的先问我：\n${issues.map((issue, index) => `${index + 1}. ${describeLabIssue(issue)}`).join("\n")}`);
+  };
+
   const removeExternal = async (node: LabNode) => {
     const linkCount = lab.links.filter((link) => touches(link, node.id)).length;
     if (!window.confirm(`确定删除“${node.name}”吗？${linkCount ? `它的 ${linkCount} 条接线会一起删除。` : ""}`)) return;
@@ -179,6 +225,34 @@ export function PhysicalLabView({
 
   return (
     <div className="lab-view">
+      {issues.length > 0 && (
+        <section className="lab-card lab-checks">
+          <header className="lab-card-head">
+            <div><h2>接线检查</h2><span>{issues.length} 项待完善</span></div>
+            {ask && (
+              <button type="button" className="button secondary compact" onClick={askAssistant}>
+                <Bot size={15} />交给助手
+              </button>
+            )}
+          </header>
+          <ul className="lab-check-list">
+            {issues.map((issue) => (
+              <li key={issue.key}>
+                <button type="button" className="lab-check-text" onClick={() => showIssue(issue)}>{issue.text}</button>
+                {issue.suggestion && (
+                  <>
+                    <span className="lab-check-reason">{issue.suggestion.reason}</span>
+                    <button type="button" className="button secondary compact" disabled={busy} onClick={() => void applySuggestion(issue)}>
+                      设为 {issue.suggestion.portName}
+                    </button>
+                  </>
+                )}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <section className="lab-card">
         <header className="lab-card-head">
           <div><h2>环境规则</h2><span>所有场景的搭建、用例、清理和诊断都会带上</span></div>
@@ -217,58 +291,59 @@ export function PhysicalLabView({
         </div>
       </section>
 
-      <div className="lab-main">
-        <section className="lab-card">
-          <header className="lab-card-head">
-            <div><h2>接线登记</h2><span>{lab.nodes.length} 个节点 · {portCount} 个端口 · {lab.links.length} 条连线</span></div>
-            <div className="lab-segmented" role="tablist" aria-label="登记方式">
-              <button type="button" role="tab" aria-selected={view === "panel"} className={view === "panel" ? "active" : ""} onClick={() => setView("panel")}>端口面板</button>
-              <button type="button" role="tab" aria-selected={view === "device"} className={view === "device" ? "active" : ""} onClick={() => setView("device")}>按设备</button>
-            </div>
-          </header>
-          <div className="lab-card-body">
-            {view === "panel" && focusNode ? (
-              <PortPanel
-                lab={lab}
-                node={focusNode}
-                device={deviceById.get(focusNode.id)}
-                selected={selected}
-                busy={busy}
-                onFocus={focus}
-                onOpen={openEditor}
-                onAddExternal={() => { setNodeDialogError(""); setNodeDialog({ name: "" }); }}
-                onRename={(node) => { setNodeDialogError(""); setNodeDialog({ nodeId: node.id, name: node.name }); }}
-                onRemove={(node) => void removeExternal(node)}
-                onChange={run}
-              />
-            ) : (
-              <DeviceCards lab={lab} deviceById={deviceById} selected={selected} onFocus={focus} onOpen={openEditor} />
-            )}
+      <section className="lab-card">
+        <header className="lab-card-head">
+          <div><h2>拓扑图</h2><span>按接线自动布局；点节点查看端口，点连线编辑</span></div>
+        </header>
+        <div className="lab-card-body">
+          <Topology
+            lab={lab}
+            layout={layout}
+            deviceById={deviceById}
+            focusId={view === "panel" ? focusNode?.id : undefined}
+            selected={selected}
+            onFocus={(nodeId) => {
+              focus(nodeId);
+              wiringRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+            }}
+            onOpen={openEditor}
+          />
+          <div className="lab-legend">
+            <span><i />业务</span>
+            <span><i className="dash" />控制（场景不可修改）</span>
+            <span><i className="dot" />供电</span>
           </div>
-        </section>
+        </div>
+      </section>
 
-        <section className="lab-card">
-          <header className="lab-card-head">
-            <div><h2>拓扑图</h2><span>按接线自动布局；点节点查看端口，点连线编辑</span></div>
-          </header>
-          <div className="lab-card-body">
-            <Topology
+      <section className="lab-card" ref={wiringRef}>
+        <header className="lab-card-head">
+          <div><h2>接线登记</h2><span>{lab.nodes.length} 个节点 · {portCount} 个端口 · {lab.links.length} 条连线{lab.links.length > 0 && !issues.length ? " · 检查通过" : ""}</span></div>
+          <div className="lab-segmented" role="tablist" aria-label="登记方式">
+            <button type="button" role="tab" aria-selected={view === "panel"} className={view === "panel" ? "active" : ""} onClick={() => setView("panel")}>端口面板</button>
+            <button type="button" role="tab" aria-selected={view === "device"} className={view === "device" ? "active" : ""} onClick={() => setView("device")}>按设备</button>
+          </div>
+        </header>
+        <div className="lab-card-body">
+          {view === "panel" && focusNode ? (
+            <PortPanel
               lab={lab}
-              layout={layout}
-              deviceById={deviceById}
-              focusId={view === "panel" ? focusNode?.id : undefined}
+              node={focusNode}
+              device={deviceById.get(focusNode.id)}
               selected={selected}
+              busy={busy}
               onFocus={focus}
               onOpen={openEditor}
+              onAddExternal={() => { setNodeDialogError(""); setNodeDialog({ name: "" }); }}
+              onRename={(node) => { setNodeDialogError(""); setNodeDialog({ nodeId: node.id, name: node.name }); }}
+              onRemove={(node) => void removeExternal(node)}
+              onChange={run}
             />
-            <div className="lab-legend">
-              <span><i />业务</span>
-              <span><i className="dash" />控制（场景不可修改）</span>
-              <span><i className="dot" />供电</span>
-            </div>
-          </div>
-        </section>
-      </div>
+          ) : (
+            <DeviceCards lab={lab} deviceById={deviceById} selected={selected} onFocus={focus} onOpen={openEditor} />
+          )}
+        </div>
+      </section>
 
       {editing && (
         <LinkEditor
@@ -571,66 +646,88 @@ function Topology({
   const { positions, viewBox, hub } = layout;
   const selectedLink = selected ? findLinkAt(lab, selected) : undefined;
 
-  // Parallel cables between the same two nodes with the same role become one line labelled with every port.
-  const bundles = new Map<string, { from: string; to: string; role: LabLinkRole; links: LabLink[]; index: number }>();
+  // Every cable is its own line. Cables between the same two nodes run in parallel, each labelled with its port at
+  // both ends; when neighbouring labels would touch they are staggered along the lines.
+  const portOrder = new Map<string, number>();
+  lab.nodes.forEach((node) => node.ports.forEach((port, index) => portOrder.set(`${node.id}\u0000${port.id}`, index)));
+  const endAt = (link: LabLink, nodeId: string) => (link.a.nodeId === nodeId ? link.a : link.b);
+  const rank = (end: LabLinkEnd) => portOrder.get(`${end.nodeId}\u0000${end.portId}`) ?? 0;
+  const pairs = new Map<string, { from: string; to: string; links: LabLink[] }>();
   lab.links.forEach((link) => {
     if (link.a.nodeId === link.b.nodeId) return;
     const [from, to] = [link.a.nodeId, link.b.nodeId].sort();
-    const key = `${from}\u0000${to}\u0000${link.role}`;
-    if (!bundles.has(key)) bundles.set(key, { from, to, role: link.role, links: [], index: 0 });
-    bundles.get(key)!.links.push(link);
-  });
-  const pairCount = new Map<string, number>();
-  bundles.forEach((bundle) => {
-    const key = `${bundle.from}\u0000${bundle.to}`;
-    bundle.index = pairCount.get(key) || 0;
-    pairCount.set(key, bundle.index + 1);
+    const key = `${from}\u0000${to}`;
+    if (!pairs.has(key)) pairs.set(key, { from, to, links: [] });
+    pairs.get(key)!.links.push(link);
   });
 
   const portName = (end: LabLinkEnd) => findPort(lab, end)?.port.name || "?";
-  const edges = [...bundles.values()].flatMap((bundle) => {
-    const from = positions[bundle.from];
-    const to = positions[bundle.to];
+  const edges = [...pairs.values()].flatMap(({ from: fromId, to: toId, links }) => {
+    const from = positions[fromId];
+    const to = positions[toId];
     if (!from || !to) return [];
-    const count = pairCount.get(`${bundle.from}\u0000${bundle.to}`) || 1;
-    const offset = (bundle.index - (count - 1) / 2) * 14;
+    const sorted = [...links].sort((left, right) => rank(endAt(left, fromId)) - rank(endAt(right, fromId)));
     const length = Math.hypot(to.x - from.x, to.y - from.y) || 1;
-    const shiftX = (-(to.y - from.y) / length) * offset;
-    const shiftY = ((to.x - from.x) / length) * offset;
-    const shifted = (node: PlacedNode) => ({ ...node, x: node.x + shiftX, y: node.y + shiftY });
-    const start = borderPoint(shifted(from), to.x + shiftX, to.y + shiftY);
-    const end = borderPoint(shifted(to), from.x + shiftX, from.y + shiftY);
-    const span = Math.hypot(end.x - start.x, end.y - start.y) || 1;
-    const unitX = (end.x - start.x) / span;
-    const unitY = (end.y - start.y) / span;
-    const along = Math.max(20, Math.min(52, span * 0.26));
-    const side = offset < 0 ? -1 : 1;
-    const portsAt = (nodeId: string) => bundle.links.map((link) => portName(link.a.nodeId === nodeId ? link.a : link.b)).join(" ");
-    // Port labels sit beside the line near their own box; slide a label further along until it clears the box.
-    const labelAt = (point: { x: number; y: number }, sign: number, text: string, box: PlacedNode, labelSide = side) => {
-      const width = labelWidth(text);
-      let distance = along;
-      let x = 0;
-      let y = 0;
-      for (let step = 0; step < 40; step += 1) {
-        x = point.x + unitX * sign * distance - unitY * 9 * labelSide;
-        y = point.y + unitY * sign * distance + unitX * 9 * labelSide;
-        const clear = Math.abs(x - box.x) >= (box.w + width) / 2 + 3 || Math.abs(y - box.y) >= (box.h + 12) / 2 + 2;
-        if (clear || distance >= span / 2 - 6) break;
-        distance += 4;
-      }
-      return { x, y: y + 4, text };
+    const ux = (to.x - from.x) / length;
+    const uy = (to.y - from.y) / length;
+    const nx = -uy;
+    const ny = ux;
+    const labels = (nodeId: string) => sorted.map((link) => portName(endAt(link, nodeId)));
+    const fromTexts = labels(fromId);
+    const toTexts = labels(toId);
+    // Port labels sit just outside the box where each line leaves it. Lines leaving through a left or right side spread
+    // vertically by spacing/|ux|, through the top or bottom horizontally by spacing/|uy|; pick a spacing that keeps
+    // neighbouring labels apart, as far as the box side allows.
+    const sideOf = (box: PlacedNode, texts: string[]) => {
+      const widest = Math.max(...texts.map(pillWidth));
+      const vertical = Math.abs(ux) * box.h > Math.abs(uy) * box.w;
+      return {
+        widest,
+        needed: vertical ? (PILL_HEIGHT + 2) * Math.abs(ux) : (widest + 3) * Math.abs(uy),
+        room: vertical ? (box.h - 8) * Math.abs(ux) : (box.w - 8) * Math.abs(uy),
+      };
     };
-    const hl = Boolean(selectedLink && bundle.links.includes(selectedLink));
-    const first = bundle.links[0];
-    const target = first.a.nodeId === bundle.from ? first.a : first.b;
-    const fromLabel = labelAt(start, 1, portsAt(bundle.from), from);
-    let toLabel = labelAt(end, -1, portsAt(bundle.to), to);
-    // On a short line both labels can meet in the middle; put the second one on the other side.
-    const collide = Math.abs(fromLabel.x - toLabel.x) < (labelWidth(fromLabel.text) + labelWidth(toLabel.text)) / 2 + 4 && Math.abs(fromLabel.y - toLabel.y) < 14;
-    if (collide) toLabel = labelAt(end, -1, toLabel.text, to, -side);
-    return [{ key: `${bundle.from}-${bundle.to}-${bundle.role}`, bundle, start, end, hl, target, fromLabel, toLabel }];
+    const fromSide = sideOf(from, fromTexts);
+    const toSide = sideOf(to, toTexts);
+    const count = sorted.length;
+    const spacing = count > 1 ? Math.max(6, Math.min(Math.max(12, fromSide.needed, toSide.needed), Math.min(fromSide.room, toSide.room) / (count - 1))) : 0;
+    const along = (width: number) => Math.abs(ux) * width + Math.abs(uy) * PILL_HEIGHT;
+    // Where the side is too short, every other label moves one label further out along its line.
+    const distance = (side: typeof fromSide, index: number) => along(side.widest) / 2 + 2 + (count > 1 && spacing < side.needed && index % 2 ? along(side.widest) + 3 : 0);
+    return sorted.map((link, index) => {
+      const offset = (index - (sorted.length - 1) / 2) * spacing;
+      const start = exitPoint(from, { x: from.x + nx * offset, y: from.y + ny * offset }, ux, uy);
+      const end = exitPoint(to, { x: to.x + nx * offset, y: to.y + ny * offset }, -ux, -uy);
+      const fromDistance = distance(fromSide, index);
+      const toDistance = distance(toSide, index);
+      const open = focusId === toId ? endAt(link, toId) : endAt(link, fromId);
+      return {
+        key: link.id,
+        link,
+        start,
+        end,
+        open,
+        hl: link === selectedLink,
+        pills: [
+          { text: fromTexts[index], x: start.x + ux * fromDistance, y: start.y + uy * fromDistance, dx: ux, dy: uy, room: span(start, end) / 2 - fromDistance },
+          { text: toTexts[index], x: end.x - ux * toDistance, y: end.y - uy * toDistance, dx: -ux, dy: -uy, room: span(start, end) / 2 - toDistance },
+        ],
+      };
+    });
   });
+
+  // Labels of cables to different neighbours can still meet at a box corner; slide later ones outward along their own
+  // line, up to the middle of it, until they are clear.
+  const placedPills: { x: number; y: number; width: number }[] = [];
+  for (const pill of edges.flatMap((edge) => edge.pills)) {
+    const width = pillWidth(pill.text);
+    const overlaps = () => placedPills.some((other) => Math.abs(other.x - pill.x) < (other.width + width) / 2 + 2 && Math.abs(other.y - pill.y) < PILL_HEIGHT + 2);
+    for (let moved = 0; moved + 4 <= pill.room && overlaps(); moved += 4) {
+      pill.x += pill.dx * 4;
+      pill.y += pill.dy * 4;
+    }
+    placedPills.push({ x: pill.x, y: pill.y, width });
+  }
 
   const highlightedNodes = new Set<string>();
   if (selected) highlightedNodes.add(selected.nodeId);
@@ -653,8 +750,8 @@ function Topology({
           style={{ maxWidth: viewBox.width }}
         >
           {edges.map((edge) => (
-            <g key={edge.key} className={`lab-edge ${edge.bundle.role} ${edge.hl ? "hl" : ""}`} onClick={() => onOpen(edge.target)}>
-              <title>{edge.bundle.links.map((link) => `${endLabel(lab, link.a)} ↔ ${endLabel(lab, link.b)}${link.note ? `（${link.note}）` : ""}`).join("\n")}</title>
+            <g key={edge.key} className={`lab-edge ${edge.link.role} ${edge.hl ? "hl" : ""}`} onClick={() => onOpen(edge.open)}>
+              <title>{`${endLabel(lab, edge.link.a)} ↔ ${endLabel(lab, edge.link.b)}（${LAB_LINK_ROLE_LABELS[edge.link.role]}${edge.link.note ? `，${edge.link.note}` : ""}）`}</title>
               <line className="hit" x1={edge.start.x} y1={edge.start.y} x2={edge.end.x} y2={edge.end.y} />
               <line className="vis" x1={edge.start.x} y1={edge.start.y} x2={edge.end.x} y2={edge.end.y} />
             </g>
@@ -672,9 +769,16 @@ function Topology({
             );
           })}
           {edges.map((edge) => (
-            <g key={`${edge.key}-labels`} className={`lab-edge-labels ${edge.hl ? "hl" : ""}`} onClick={() => onOpen(edge.target)}>
-              <text x={edge.fromLabel.x} y={edge.fromLabel.y} textAnchor="middle">{edge.fromLabel.text}</text>
-              <text x={edge.toLabel.x} y={edge.toLabel.y} textAnchor="middle">{edge.toLabel.text}</text>
+            <g key={`${edge.key}-labels`} className={`lab-edge-labels ${edge.hl ? "hl" : ""}`} onClick={() => onOpen(edge.open)}>
+              {edge.pills.map((pill, index) => {
+                const width = pillWidth(pill.text);
+                return (
+                  <g key={index}>
+                    <rect x={pill.x - width / 2} y={pill.y - PILL_HEIGHT / 2} width={width} height={PILL_HEIGHT} rx={3} />
+                    <text x={pill.x} y={pill.y + 4} textAnchor="middle">{pill.text}</text>
+                  </g>
+                );
+              })}
             </g>
           ))}
         </svg>

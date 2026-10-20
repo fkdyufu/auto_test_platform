@@ -148,7 +148,7 @@ export function createAssistantTools(options: { catalog: CatalogStore; store: As
       const proposal = await options.store.propose(options.productId, options.conversationId, { runId: options.runId, summary: params.summary, target: "draft", context, values: params.values });
       return result({ proposalId: proposal.id, status: "pending", message: "等待用户应用到当前表单，尚未保存" });
     } }),
-    defineTool({ name: "platform_lab", label: "读取物理环境", description: "读取当前产品物理环境：环境规则、各节点（设备、平台服务器、外部节点）的端口及每个端口所接的对端（to）和用途（role：data 业务、control 控制、power 供电）、设备控制接口所经端口。node 可只读取一个节点。", parameters: Type.Object({ node: Type.Optional(Type.String({ description: "节点名称或 ID" })) }), execute: async (_id, params) => {
+    defineTool({ name: "platform_lab", label: "读取物理环境", description: "读取当前产品物理环境：环境规则、检查发现的问题（issues）、各节点（设备、平台服务器、外部节点）的端口及每个端口所接的对端（to）和用途（role：data 业务、control 控制、power 供电）、设备控制接口所经端口。node 可只读取一个节点。", parameters: Type.Object({ node: Type.Optional(Type.String({ description: "节点名称或 ID" })) }), execute: async (_id, params) => {
       const [lab, devices] = await Promise.all([options.catalog.getPhysicalLab(options.productId), options.catalog.listDeviceResources(options.productId)]);
       return result(describeLabForAssistant(lab, devices, params.node));
     } }),

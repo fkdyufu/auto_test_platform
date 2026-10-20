@@ -37,9 +37,10 @@ function ProposalPreview({ proposal }: { proposal: AssistantProposal }) {
   })}</div>;
 }
 
-export function PlatformAssistant({ product, context, prepareDraft, onAssetsChanged }: {
+export function PlatformAssistant({ product, context, request, prepareDraft, onAssetsChanged }: {
   product: ProductSummary | null;
   context: AssistantPageContext;
+  request?: { message: string; id: number } | null;
   prepareDraft: (token: string, values: Record<string, unknown>) => () => void;
   onAssetsChanged: () => Promise<void>;
 }) {
@@ -53,6 +54,7 @@ export function PlatformAssistant({ product, context, prepareDraft, onAssetsChan
   const [busyProposal, setBusyProposal] = useState("");
   const [error, setError] = useState("");
   const sourceRef = useRef<EventSource | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
   const mountedRef = useRef(true);
   const loadSequenceRef = useRef(0);
@@ -143,6 +145,15 @@ export function PlatformAssistant({ product, context, prepareDraft, onAssetsChan
   }, [open, conversation?.updatedAt]);
   useEffect(() => { if (open) endRef.current?.scrollIntoView({ block: "nearest" }); }, [open, conversation?.messages.length, run?.events.length]);
   const toggle = (value: boolean) => { setOpen(value); sessionStorage.setItem("platform-assistant.open", String(value)); };
+  // A request made before this panel mounted (e.g. for another product) is not replayed.
+  const handledRequestRef = useRef(request?.id);
+  useEffect(() => {
+    if (!request || request.id === handledRequestRef.current) return;
+    handledRequestRef.current = request.id;
+    toggle(true);
+    setQuestion(request.message);
+    requestAnimationFrame(() => inputRef.current?.focus());
+  }, [request?.id]);
   const send = async (event: FormEvent) => {
     event.preventDefault();
     if (!product || !conversation || !question.trim() || running || sending || busyProposal) return;
@@ -213,7 +224,7 @@ export function PlatformAssistant({ product, context, prepareDraft, onAssetsChan
       </div>)}</div>}
       {error && <div className="assistant-error" role="alert"><AlertCircle size={14} /><span>{error}</span><button type="button" className="icon-action" title="关闭提示" onClick={() => setError("")}><X size={14} /></button></div>}
       <form className="assistant-composer" onSubmit={send}>
-        <textarea aria-label="助手消息" placeholder="输入消息..." rows={3} maxLength={8000} value={question} onChange={(event) => setQuestion(event.target.value)} disabled={!conversation || sending || loading} />
+        <textarea ref={inputRef} aria-label="助手消息" placeholder="输入消息..." rows={3} maxLength={8000} value={question} onChange={(event) => setQuestion(event.target.value)} disabled={!conversation || sending || loading} />
         <div><small>{question.length} / 8000</small>{running ? <button type="button" className="button secondary compact danger" onClick={() => { if (run) void api.cancelRun(run.id).catch((reason) => setError(reason.message)); }}><CircleStop size={15} />取消</button> : <button type="submit" className="button primary compact" disabled={!conversation || !question.trim() || sending || loading || !!busyProposal}>{sending ? <LoaderCircle className="spin" size={15} /> : <Send size={15} />}发送</button>}</div>
       </form>
     </aside>}

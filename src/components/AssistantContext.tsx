@@ -12,6 +12,8 @@ interface PageRegistration {
 interface AssistantContextValue {
   productId: string;
   register: (registration: PageRegistration) => () => void;
+  /** Opens the assistant with this message in the input box for the person to review and send. */
+  ask: (message: string) => void;
 }
 const AssistantContext = createContext<AssistantContextValue | null>(null);
 
@@ -22,6 +24,8 @@ export function AssistantProvider({ product, page, children, onAssetsChanged }: 
   onAssetsChanged: () => Promise<void>;
 }) {
   const [registration, setRegistration] = useState<PageRegistration | null>(null);
+  const [request, setRequest] = useState<{ message: string; id: number } | null>(null);
+  const ask = useCallback((message: string) => setRequest((current) => ({ message, id: (current?.id || 0) + 1 })), []);
   const registrationRef = useRef<PageRegistration | null>(null);
   const register = useCallback((next: PageRegistration) => {
     registrationRef.current = next;
@@ -52,9 +56,9 @@ export function AssistantProvider({ product, page, children, onAssetsChanged }: 
   const refreshAssets = async () => {
     await Promise.all([onAssetsChanged(), getCurrent()?.refresh?.()]);
   };
-  return <AssistantContext.Provider value={{ productId: product?.id || "", register }}>
+  return <AssistantContext.Provider value={{ productId: product?.id || "", register, ask }}>
     {children}
-    <PlatformAssistant key={product?.id || "none"} product={product} context={context} prepareDraft={prepareDraft} onAssetsChanged={refreshAssets} />
+    <PlatformAssistant key={product?.id || "none"} product={product} context={context} request={request} prepareDraft={prepareDraft} onAssetsChanged={refreshAssets} />
   </AssistantContext.Provider>;
 }
 
@@ -75,4 +79,8 @@ export function useAssistantPage(context: Omit<AssistantPageContext, "draftToken
       refresh: () => callbackRef.current.refresh?.() || Promise.resolve(),
     });
   }, [encoded, productId, register]);
+}
+
+export function useAssistantAsk(): ((message: string) => void) | undefined {
+  return useContext(AssistantContext)?.ask;
 }
