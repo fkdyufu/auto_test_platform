@@ -68,8 +68,9 @@ export function applyDraftPatch(kind: AssetKind, draft: Record<string, unknown>,
       next[field] = value.map((item) => {
         if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error(`字段 ${field} 中的项目格式不正确`);
         const input = item as Record<string, unknown>;
-        const allowed = [...required, "id"];
+        const allowed = [...required, "id", ...(field === "roles" ? ["portIds"] : [])];
         if (Object.keys(input).some((key) => !allowed.includes(key)) || required.some((key) => typeof input[key] !== "string") || input.id !== undefined && typeof input.id !== "string") throw new Error(`字段 ${field} 中的项目缺少字段或类型不正确`);
+        if (input.portIds !== undefined && (!Array.isArray(input.portIds) || input.portIds.some((portId) => typeof portId !== "string"))) throw new Error("角色的 portIds 必须是端口 ID 数组");
         const id = typeof input.id === "string" && input.id ? input.id : `assistant-${Date.now()}-${Math.random().toString(36).slice(2)}`;
         return { ...input, id };
       });

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { CatalogStore, type DeviceResource, type PhysicalLab } from "./catalog-store.js";
-import { formatPhysicalLab } from "./physical-lab-prompt.js";
+import { formatPhysicalLab, formatScenarioLinks } from "./physical-lab-prompt.js";
 import { expandPortNames, resolveControlPath, serialDeviceName } from "../shared/physical-lab.js";
 
 async function createStore(t: test.TestContext): Promise<{ store: CatalogStore; file: string }> {
@@ -206,6 +206,37 @@ test("formats the wiring of bound devices for the agent", async (t) => {
   const rulesOnly = formatPhysicalLab({ ...lab, links: [] }, devices);
   assert.match(rulesOnly, /接线尚未登记/);
   assert.doesNotMatch(rulesOnly, /没有列出的连接不要假设存在|未接线的端口/);
+});
+
+test("a scenario names the ports it uses and reads their cables from the lab", async (t) => {
+  const { store } = await createStore(t);
+  const { product, tau, sw, lab } = await seedLab(store);
+  const scenario = await store.createTestScenario(product.id, {
+    name: "端口镜像",
+    category: "镜像",
+    roles: [{ key: "DUT", deviceId: tau.id, portIds: ["ge2-id", "fe1-id", "fe1-id"] }, { key: "SW", deviceId: sw.id, portIds: ["9-id", "10-id"] }],
+    setupInstructions: "配置镜像",
+    verificationInstructions: "检查镜像",
+  });
+  assert.deepEqual(scenario.roles.map((role) => role.portIds), [["ge2-id", "fe1-id"], ["9-id", "10-id"]]);
+  await assert.rejects(store.updateTestScenario(product.id, scenario.id, { ...scenario, roles: [{ key: "DUT", deviceId: tau.id, portIds: ["9-id"] }] }), /选择的端口不属于绑定的设备/);
+
+  const devices = await store.listDeviceResources(product.id);
+  const prompt = formatScenarioLinks(lab, scenario.roles, devices);
+  assert.equal(prompt, [
+    "本场景使用的链路（对端以物理环境登记为准）：",
+    "- DUT（TAU1）ge2 ↔ SW（switch）12 口（控制）",
+    "- DUT（TAU1）fe1 ↔ SW（switch）9 口（业务）",
+    "- SW（switch）10 口：未接线",
+    "TAU1、switch 只使用以上端口；其他端口本场景不使用，不要改动它们的配置。",
+  ].join("\n"), "a cable picked at both ends is listed once");
+  assert.equal(formatScenarioLinks(lab, [{ key: "DUT", deviceId: tau.id }], devices), "");
+
+  // A port removed from the device drops out of the scenario, so the scenario can still be saved.
+  await store.updateDeviceResource(product.id, sw.id, { name: "switch", template: sw.template, description: "", ports: [port("9"), port("12")], controlInterfaces: [] });
+  const [, saved] = await store.listTestScenarios(product.id);
+  assert.deepEqual(saved.roles.map((role) => role.portIds), [["ge2-id", "fe1-id"], ["9-id"]]);
+  await store.updateTestScenario(product.id, scenario.id, { ...saved });
 });
 
 test("moves the device ports a v14 lab kept onto the devices, with a backup", async (t) => {

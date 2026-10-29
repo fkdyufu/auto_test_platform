@@ -23,7 +23,7 @@ import { createAssistantRouter } from "./assistant-routes.js";
 import { createAssistantTools } from "./assistant-tools.js";
 import { buildAssistantPrompt } from "./assistant-context.js";
 import { resolveScenarioDevices } from "./scenario-devices.js";
-import { formatPhysicalLab } from "./physical-lab-prompt.js";
+import { formatPhysicalLab, formatScenarioLinks } from "./physical-lab-prompt.js";
 import { CONTROL_KINDS, describeControlSettings } from "../shared/control-interfaces.js";
 import { deviceTemplateName } from "../shared/device-templates.js";
 import {
@@ -279,7 +279,13 @@ function buildScenarioDescription(
     (parameter) => `- ${parameter.name}（${parameter.key}）：${scenarioRun.parameterValues[parameter.key] || "未设置"}`,
   );
   const lab = formatPhysicalLab(context.physicalLab, context.devices);
-  return `测试场景：${scenario.name}${scenario.category ? `（${scenario.category}）` : ""}\n${scenario.description || "无补充说明"}\n\n固定角色绑定：\n${roleLines.join("\n") || "无设备角色"}\n角色已经由平台固定绑定，不得替换设备或重新分配角色。\n\n场景参数：\n${parameterLines.join("\n") || "无场景参数"}${lab ? `\n\n${lab}` : ""}`;
+  // Picked ports belong to the device the role was bound to when the scenario was saved.
+  const links = formatScenarioLinks(context.physicalLab, scenario.roles.map((role) => ({
+    key: role.key,
+    deviceId: role.deviceId,
+    portIds: scenarioRun.roleBindings[role.key] === role.deviceId ? role.portIds : [],
+  })), context.devices);
+  return `测试场景：${scenario.name}${scenario.category ? `（${scenario.category}）` : ""}\n${scenario.description || "无补充说明"}\n\n固定角色绑定：\n${roleLines.join("\n") || "无设备角色"}\n角色已经由平台固定绑定，不得替换设备或重新分配角色。\n\n场景参数：\n${parameterLines.join("\n") || "无场景参数"}${links ? `\n\n${links}` : ""}${lab ? `\n\n${lab}` : ""}`;
 }
 
 function buildScenarioSetupRequirement(

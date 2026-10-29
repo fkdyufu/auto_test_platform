@@ -108,6 +108,8 @@ export interface ScenarioRole {
   id: string;
   key: string;
   deviceId: string;
+  /** Ports of the bound device the scenario uses; their cables are read from the lab. */
+  portIds?: string[];
 }
 
 export interface ScenarioParameter {
@@ -398,6 +400,17 @@ function withDevicePortEdits(devices: DeviceResource[], edits: DevicePortEdits, 
   });
 }
 
+/** Scenarios forget ports their devices no longer have, so a removed port never blocks saving a scenario. */
+function dropRemovedScenarioPorts(data: CatalogData): void {
+  const portIds = new Map(data.deviceResources.map((device) => [device.id, new Set((device.ports || []).map((port) => port.id))]));
+  for (const scenario of data.testScenarios) {
+    scenario.roles = scenario.roles.map(({ portIds: picked, ...role }) => {
+      const kept = (picked || []).filter((portId) => portIds.get(role.deviceId)?.has(portId));
+      return kept.length ? { ...role, portIds: kept } : role;
+    });
+  }
+}
+
 /**
  * Before catalog version 15 the lab kept its own copy of each device's ports and control ports. They move to the device
  * resources, keeping port IDs so cables stay attached; a port the device already has under the same name is reused.
@@ -575,6 +588,7 @@ export class CatalogStore {
         id: role.id,
         key: role.key,
         deviceId: typeof role.deviceId === "string" ? role.deviceId : "",
+        ...(Array.isArray(role.portIds) && role.portIds.length ? { portIds: role.portIds.filter((portId) => typeof portId === "string") } : {}),
       })),
     }));
     data.products.forEach((product) => {
@@ -1230,6 +1244,7 @@ export class CatalogStore {
       this.validateDevicePortBindings(device);
       device.updatedAt = new Date().toISOString();
       this.dropCablesOfRemovedPorts(data, device);
+      dropRemovedScenarioPorts(data);
       return this.publicDevice(data, device);
     });
   }
@@ -1465,6 +1480,7 @@ export class CatalogStore {
       if (index >= 0) data.physicalLabs[index] = saved;
       else data.physicalLabs.push(saved);
       data.deviceResources = deviceResources;
+      dropRemovedScenarioPorts(data);
       return changes;
     });
   }
@@ -1472,14 +1488,17 @@ export class CatalogStore {
   private normalizeScenarioRoles(data: CatalogData, productId: string, value: unknown, allowEmpty = false): ScenarioRole[] {
     if (!Array.isArray(value) || (!allowEmpty && !value.length)) throw new CatalogError("测试场景至少需要一个设备角色");
     if (value.length > 30) throw new CatalogError("设备角色不能超过 30 个");
-    const roles = value.map((item) => {
+    const roles = value.map((item): ScenarioRole => {
       const input = recordValue(item);
       const key = requiredText(input.key, "角色标识", 80);
       if (!/^[a-z][a-z0-9_-]*$/i.test(key)) throw new CatalogError("角色标识只能包含字母、数字、下划线和连字符");
+      const portIds = input.portIds === undefined ? [] : input.portIds;
+      if (!Array.isArray(portIds) || portIds.length > 500 || portIds.some((portId) => typeof portId !== "string" || !portId)) throw new CatalogError(`角色“${key}”的端口格式不正确`);
       return {
         id: optionalText(input.id, 100) || randomUUID(),
         key,
         deviceId: requiredText(input.deviceId, "绑定设备", 100),
+        ...(portIds.length ? { portIds: [...new Set(portIds as string[])] } : {}),
       };
     });
     if (new Set(roles.map((item) => item.key.toLowerCase())).size !== roles.length) throw new CatalogError("角色标识不能重复");
@@ -1487,6 +1506,10 @@ export class CatalogStore {
     if (new Set(roles.map((item) => item.deviceId)).size !== roles.length) throw new CatalogError("同一场景不能重复绑定设备");
     const deviceIds = new Set(data.deviceResources.filter((device) => device.productId === productId && !device.archivedAt).map((device) => device.id));
     if (roles.some((role) => !deviceIds.has(role.deviceId))) throw new CatalogError("绑定设备不属于当前产品或不存在");
+    for (const role of roles) {
+      const ports = new Set((data.deviceResources.find((device) => device.id === role.deviceId)?.ports || []).map((port) => port.id));
+      if (role.portIds?.some((portId) => !ports.has(portId))) throw new CatalogError(`角色“${role.key}”选择的端口不属于绑定的设备，请重新选择`);
+    }
     return roles;
   }
 

@@ -161,6 +161,7 @@ export interface ScenarioRole {
   id: string;
   key: string;
   deviceId: string;
+  portIds?: string[];
 }
 
 export interface ScenarioParameter {

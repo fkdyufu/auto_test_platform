@@ -22,7 +22,7 @@ export const ASSET_FIELDS: Record<AssetKind, Record<string, string>> = {
     ports: "物理端口数组，每项：id（已有端口须保留，新端口可省略）、name（同一设备内不重复）、kind（ethernet/serial/usb/power/rf/other）、specification、note；完整替换。端口之间的接线在物理环境中登记",
     controlInterfaces: `接口数组，每项：id（已有接口须保留）、name（可留空）、kind（控制方式）、portId（平台经过的设备端口 ID，可省略）、settings（该方式的字段）。各方式字段：${controlSettingsDoc}。密码和 token 省略或留空时保留已有值`,
   },
-  scenario: { name: "场景名称，必填且唯一；默认场景不能改名", category: "功能分类，非默认场景必填", description: "场景说明", roles: "角色数组：id、key、deviceId；非默认场景至少一项，设备须属于当前产品且不能重复绑定", parameters: "参数数组：id、key、name、defaultValue", setupInstructions: "场景搭建要求，非默认场景必填", verificationInstructions: "场景验证要求，非默认场景必填", cleanupInstructions: "场景清理要求", caseIds: "关联用例 ID 数组（仅修改支持）；完整替换场景关联，移出的用例回到默认场景" },
+  scenario: { name: "场景名称，必填且唯一；默认场景不能改名", category: "功能分类，非默认场景必填", description: "场景说明", roles: "角色数组：id、key、deviceId、portIds；非默认场景至少一项，设备须属于当前产品且不能重复绑定。portIds 是本场景使用的该设备端口 ID（用 platform_get 读取设备的 ports），对端由物理环境决定，不用选；某设备选了端口后，执行时其他端口不允许改动；可省略", parameters: "参数数组：id、key、name、defaultValue", setupInstructions: "场景搭建要求，非默认场景必填", verificationInstructions: "场景验证要求，非默认场景必填", cleanupInstructions: "场景清理要求", caseIds: "关联用例 ID 数组（仅修改支持）；完整替换场景关联，移出的用例回到默认场景" },
   order: { name: "测试单名称，必填", description: "描述", caseIds: "有序用例 ID 数组，至少一项，须属于当前产品；完整替换关联。执行时按首次出现的场景分组，场景顺序及组内用例顺序均由此数组决定" },
 };
 const kindSchema = Type.Union([Type.Literal("device"), Type.Literal("scenario"), Type.Literal("case"), Type.Literal("order")]);
