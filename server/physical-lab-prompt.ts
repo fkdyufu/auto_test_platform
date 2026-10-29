@@ -61,7 +61,7 @@ export function formatPhysicalLab(lab: PhysicalLab | undefined, devices: PromptD
       : "物理环境（所有场景共用）：\n本场景设备的接线尚未登记，接线以场景说明为准。",
     lab.rules && `环境规则：\n${lab.rules}`,
     linkLines.length && `本场景设备的接线：\n${linkLines.slice(0, MAX_LINES).join("\n")}${linkLines.length > MAX_LINES ? `\n（另有 ${linkLines.length - MAX_LINES} 条已省略）` : ""}`,
-    links.some(({ link }) => link.role === "control") && "控制连线是平台访问设备的通道。不得关闭这些连线两端的端口，也不得修改其 VLAN、IP 或路由，以免失去控制。",
+    links.some(({ link }) => link.role === "control") && "控制连线是平台访问设备的通道。不得关闭这些连线两端的端口，不得删除或修改控制所用的 VLAN、IP 和路由，也不得改变端口的 access/trunk 模式，以免失去控制；trunk 上可以增加业务 VLAN。",
     idleLines.length && `本场景设备未接线的端口：\n${idleLines.join("\n")}`,
     controlLines.length && `控制接口所经端口：\n${controlLines.join("\n")}`,
   ];

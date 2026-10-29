@@ -4633,52 +4633,12 @@ body.assistant-resizing { cursor: ew-resize; user-select: none; }
   font-size: 13px;
 }
 
-.lab-role-options {
-  display: grid;
-  gap: 6px;
-  margin: 0;
-  border: 0;
-  padding: 0;
-}
-
-.lab-role-options legend {
-  margin-bottom: 6px;
-  color: var(--gray-600);
-  padding: 0;
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.lab-role-options label {
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
-  align-items: start;
-  gap: 6px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 8px 10px;
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.lab-role-options label.checked {
-  border-color: var(--primary-600);
-}
-
-.lab-role-options:disabled label {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-
-.lab-role-options input {
-  margin: 3px 0 0;
-  accent-color: var(--primary-600);
-}
-
-.lab-role-options small {
-  display: block;
-  color: var(--muted);
-  font-size: 12px;
+.lab-readonly-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 8px;
+  color: var(--gray-500);
 }
 
 .lab-drawer > footer {

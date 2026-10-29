@@ -7,14 +7,13 @@ import type { TestResultDetails } from "../shared/test-result.js";
 import { parseStepRows, stepRowsFromLegacy, stepRowsToText, type TestCaseStep } from "../shared/test-case-steps.js";
 import {
   DEFAULT_PLATFORM_NAME,
-  LAB_LINK_ROLES,
   LAB_PORT_KINDS,
   LAB_PORT_KIND_LABELS,
   PLATFORM_NODE_ID,
   portKindsCompatible,
-  type LabLink,
+  withLinkRoles,
+  type LabCable,
   type LabLinkEnd,
-  type LabLinkRole,
   type LabNode,
   type LabPort,
   type LabPortKind,
@@ -206,13 +205,16 @@ export interface TestRun {
   finishedAt?: string;
 }
 
+/** The lab as saved: platform and external nodes, and cables without their role. */
+type StoredPhysicalLab = Omit<PhysicalLab, "links"> & { links: LabCable[] };
+
 interface CatalogData {
-  version: 15;
+  version: 16;
   products: Product[];
   testCases: TestCase[];
   deviceResources: DeviceResource[];
   /** One cabled lab per product. Device nodes reuse device IDs; names are resolved when read. */
-  physicalLabs: PhysicalLab[];
+  physicalLabs: StoredPhysicalLab[];
   testScenarios: TestScenario[];
   testOrders: TestOrder[];
   testRuns: TestRun[];
@@ -468,7 +470,7 @@ function defaultData(): CatalogData {
     updatedAt: timestamp,
   }));
   return {
-    version: 15,
+    version: 16,
     products,
     testCases: [],
     deviceResources: [],
@@ -501,7 +503,7 @@ export class CatalogStore {
     try {
       const original = await readFile(this.filePath, "utf8");
       const data = JSON.parse(original) as { version?: number };
-      if (typeof data.version === "number" && data.version >= 1 && data.version < 15) {
+      if (typeof data.version === "number" && data.version >= 1 && data.version < 16) {
         try {
           await writeFile(`${this.filePath}.v${data.version}.bak`, original, { flag: "wx", mode: 0o600 });
         } catch (error) {
@@ -519,13 +521,13 @@ export class CatalogStore {
     this.initializePromise ??= this.initialize();
     await this.initializePromise;
     const data = JSON.parse(await readFile(this.filePath, "utf8")) as CatalogData & { version: number };
-    if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].includes(data.version) || !Array.isArray(data.products) || !Array.isArray(data.testCases)) {
+    if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16].includes(data.version) || !Array.isArray(data.products) || !Array.isArray(data.testCases)) {
       throw new CatalogError("业务数据文件格式不正确", 500);
     }
     const sourceVersion = data.version;
     const legacyData = data as typeof data & { labEnvironments?: LegacyPhysicalEnvironment[]; physicalEnvironments?: LegacyPhysicalEnvironment[] };
     let physicalEnvironments = legacyData.physicalEnvironments ?? legacyData.labEnvironments ?? [];
-    data.version = 15;
+    data.version = 16;
     data.deviceResources ??= [];
     data.physicalLabs = Array.isArray(data.physicalLabs) ? data.physicalLabs : [];
     delete legacyData.physicalEnvironments;
@@ -640,6 +642,8 @@ export class CatalogStore {
     });
 
     moveLabPortsToDevices(data);
+    // Before catalog version 16 each cable had a role picked by hand; it is now worked out when the lab is read.
+    for (const lab of data.physicalLabs) lab.links = lab.links.map(({ id, a, b, note }) => ({ id, a, b, note: note || "" }));
     const deviceProductById = new Map(data.deviceResources.map((device) => [device.id, device.productId]));
     physicalEnvironments.forEach((physicalEnvironment) => {
       const allowedIds = new Set(
@@ -1289,11 +1293,12 @@ export class CatalogStore {
     ];
     const portKeys = new Set(nodes.flatMap((node) => node.ports.map((port) => `${node.id}\u0000${port.id}`)));
     const exists = (end: LabLinkEnd) => portKeys.has(`${end.nodeId}\u0000${end.portId}`);
+    const links = (stored?.links || []).filter((link) => exists(link.a) && exists(link.b)).map(clone);
     return {
       productId,
       rules: stored?.rules || "",
       nodes,
-      links: (stored?.links || []).filter((link) => exists(link.a) && exists(link.b)).map(clone),
+      links: withLinkRoles({ nodes, links }, new Map(devices.map((device) => [device.id, device.controlInterfaces]))),
       updatedAt: stored?.updatedAt || "",
     };
   }
@@ -1308,7 +1313,7 @@ export class CatalogStore {
     productId: string,
     input: Record<string, unknown>,
     deviceEdits = false,
-  ): { lab: Omit<PhysicalLab, "updatedAt">; devicePorts: DevicePortEdits } {
+  ): { lab: Omit<StoredPhysicalLab, "updatedAt">; devicePorts: DevicePortEdits } {
     const devices = new Map(data.deviceResources
       .filter((device) => device.productId === productId && !device.archivedAt)
       .map((device) => [device.id, device]));
@@ -1379,7 +1384,7 @@ export class CatalogStore {
     if (!Array.isArray(input.links)) throw new CatalogError("物理环境连线格式不正确");
     if (input.links.length > 5_000) throw new CatalogError("物理环境连线不能超过 5000 条");
     const usedPorts = new Map<string, string>();
-    const links = input.links.map((item): LabLink => {
+    const links = input.links.map((item): LabCable => {
       const value = recordValue(item);
       const a = resolveEnd(value.a);
       const b = resolveEnd(value.b);
@@ -1395,9 +1400,7 @@ export class CatalogStore {
       }
       usedPorts.set(`${a.node.id}\u0000${a.port.id}`, `“${label(b)}”`);
       usedPorts.set(`${b.node.id}\u0000${b.port.id}`, `“${label(a)}”`);
-      const role = optionalText(value.role, 20) as LabLinkRole;
-      if (!LAB_LINK_ROLES.includes(role)) throw new CatalogError("连线用途不正确");
-      return { id: optionalText(value.id, 100) || randomUUID(), a: a.end, b: b.end, role, note: optionalText(value.note, 300) };
+      return { id: optionalText(value.id, 100) || randomUUID(), a: a.end, b: b.end, note: optionalText(value.note, 300) };
     });
     if (new Set(links.map((link) => link.id)).size !== links.length) throw new CatalogError("连线 ID 重复");
     const devicePorts: DevicePortEdits = new Map(nodes.filter((node) => node.kind === "device").map((node) => [node.id, { ports: node.ports, controlPorts: node.controlPorts }]));
@@ -1417,7 +1420,7 @@ export class CatalogStore {
       if (typeof input.baseUpdatedAt === "string" && input.baseUpdatedAt !== (current?.updatedAt || "")) {
         throw new CatalogError("物理环境已在其他地方修改，请刷新后重试", 409);
       }
-      const lab: PhysicalLab = { ...this.normalizePhysicalLab(data, productId, input).lab, updatedAt: new Date().toISOString() };
+      const lab: StoredPhysicalLab = { ...this.normalizePhysicalLab(data, productId, input).lab, updatedAt: new Date().toISOString() };
       if (index >= 0) data.physicalLabs[index] = lab;
       else data.physicalLabs.push(lab);
       return this.physicalLabView(data, productId);
@@ -1428,7 +1431,7 @@ export class CatalogStore {
    * Applies assistant operations to the current lab and words the result; nothing is saved. Port edits on device nodes
    * come back as updated device resources.
    */
-  private evaluateLabChanges(data: CatalogData, productId: string, operations: LabOperation[]): { lab: Omit<PhysicalLab, "updatedAt">; deviceResources: DeviceResource[]; changes: LabChange[] } {
+  private evaluateLabChanges(data: CatalogData, productId: string, operations: LabOperation[]): { lab: Omit<StoredPhysicalLab, "updatedAt">; deviceResources: DeviceResource[]; changes: LabChange[] } {
     const before = this.physicalLabView(data, productId);
     const devices = data.deviceResources.filter((device) => device.productId === productId && !device.archivedAt);
     const { lab, devicePorts } = this.normalizePhysicalLab(data, productId, { ...applyLabOperations(before, operations, devices) }, true);
@@ -1456,7 +1459,7 @@ export class CatalogStore {
       const { lab, deviceResources, changes } = this.evaluateLabChanges(data, productId, preview.operations);
       if (JSON.stringify(changes) !== JSON.stringify(preview.changes)) throw new CatalogError("物理环境已变化，请让助手重新读取并生成预览", 409);
       const index = data.physicalLabs.findIndex((item) => item.productId === productId);
-      const saved: PhysicalLab = { ...lab, updatedAt: new Date().toISOString() };
+      const saved: StoredPhysicalLab = { ...lab, updatedAt: new Date().toISOString() };
       if (index >= 0) data.physicalLabs[index] = saved;
       else data.physicalLabs.push(saved);
       data.deviceResources = deviceResources;

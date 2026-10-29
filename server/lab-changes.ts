@@ -4,16 +4,15 @@ import type { LabChange, LabOperation, LabPortRef } from "../shared/assistant.js
 import { CONTROL_KINDS, controlSummary, type ControlInterface } from "../shared/control-interfaces.js";
 import { checkPhysicalLab, describeLabIssue } from "../shared/lab-checks.js";
 import {
-  LAB_LINK_ROLES,
   LAB_LINK_ROLE_LABELS,
   LAB_PORT_KINDS,
   LAB_PORT_KIND_LABELS,
-  defaultLinkRole,
   endLabel,
   expandPortNames,
   findLinkAt,
   otherEnd,
   resolveControlPath,
+  type LabCable,
   type LabLink,
   type LabLinkEnd,
   type LabNode,
@@ -21,7 +20,9 @@ import {
   type PhysicalLab,
 } from "../shared/physical-lab.js";
 
-export type LabContent = Pick<PhysicalLab, "rules" | "nodes" | "links">;
+/** What operations edit: cables carry no role, it is worked out when the lab is read. */
+export type LabContent = Pick<PhysicalLab, "rules" | "nodes"> & { links: LabCable[] };
+type LabView = Pick<PhysicalLab, "rules" | "nodes" | "links">;
 export type LabDevice = { id: string; name: string; templateName?: string; controlInterfaces: Pick<ControlInterface, "id" | "name" | "kind" | "settings">[] };
 
 export const MAX_LAB_OPERATIONS = 200;
@@ -50,7 +51,7 @@ function findEnd(lab: LabContent, ref: LabPortRef | undefined): LabLinkEnd {
   return { nodeId: node.id, portId: findNodePort(node, ref?.port).id };
 }
 
-function touches(link: LabLink, end: LabLinkEnd): boolean {
+function touches(link: LabCable, end: LabLinkEnd): boolean {
   return [link.a, link.b].some((side) => side.nodeId === end.nodeId && side.portId === end.portId);
 }
 
@@ -64,11 +65,6 @@ function text(value: unknown, label: string, maxLength: number): string {
 function portKind(value: unknown): LabPort["kind"] {
   if (!LAB_PORT_KINDS.includes(value as LabPort["kind"])) throw new CatalogError(`端口类型须为 ${LAB_PORT_KINDS.join("/")}`);
   return value as LabPort["kind"];
-}
-
-function linkRole(value: unknown): LabLink["role"] {
-  if (!LAB_LINK_ROLES.includes(value as LabLink["role"])) throw new CatalogError(`连线用途须为 ${LAB_LINK_ROLES.join("/")}`);
-  return value as LabLink["role"];
 }
 
 function applyOperation(lab: LabContent, operation: LabOperation, devices: Map<string, LabDevice>): void {
@@ -117,8 +113,7 @@ function applyOperation(lab: LabContent, operation: LabOperation, devices: Map<s
         const existing = findLinkAt(lab, end);
         if (existing) throw new CatalogError(`${endLabel(lab, end)} 已接 ${endLabel(lab, otherEnd(existing, end))}，需要先断开`);
       }
-      const kind = lab.nodes.find((node) => node.id === a.nodeId)!.ports.find((port) => port.id === a.portId)!.kind;
-      lab.links.push({ id: randomUUID(), a, b, role: operation.role === undefined ? defaultLinkRole(kind) : linkRole(operation.role), note: text(operation.note, "连线备注", 300) });
+      lab.links.push({ id: randomUUID(), a, b, note: text(operation.note, "连线备注", 300) });
       return;
     }
     case "disconnect": {
@@ -133,9 +128,8 @@ function applyOperation(lab: LabContent, operation: LabOperation, devices: Map<s
       const end = { nodeId: node.id, portId: findNodePort(node, operation.port).id };
       const link = findLinkAt(lab, end);
       if (!link) throw new CatalogError(`${endLabel(lab, end)} 没有接线`);
-      if (operation.role === undefined && operation.note === undefined) throw new CatalogError("没有要修改的连线内容");
-      if (operation.role !== undefined) link.role = linkRole(operation.role);
-      if (operation.note !== undefined) link.note = text(operation.note, "连线备注", 300);
+      if (operation.note === undefined) throw new CatalogError("没有要修改的连线内容");
+      link.note = text(operation.note, "连线备注", 300);
       return;
     }
     case "set_control_port": {
@@ -224,7 +218,7 @@ const linkText = (link: LabLink) => `${LAB_LINK_ROLE_LABELS[link.role]}${link.no
 const linkKey = (link: LabLink) => [link.a, link.b].map((end) => `${end.nodeId}\u0000${end.portId}`).sort().join("\u0001");
 
 /** What changes between two views of the same lab, worded for the person confirming it. */
-export function diffPhysicalLab(before: LabContent, after: LabContent, devices: LabDevice[]): LabChange[] {
+export function diffPhysicalLab(before: LabView, after: LabView, devices: LabDevice[]): LabChange[] {
   const changes: LabChange[] = [];
   if (before.rules !== after.rules) changes.push({ type: "update", text: "修改环境规则", before: before.rules || "（空）", after: after.rules || "（空）" });
 

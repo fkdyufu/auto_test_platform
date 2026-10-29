@@ -27,18 +27,23 @@ export interface LabLinkEnd {
   portId: string;
 }
 
-export interface LabLink {
+/** A cable as stored. What it is for is worked out when the lab is read (see `withLinkRoles`). */
+export interface LabCable {
   id: string;
   a: LabLinkEnd;
   b: LabLinkEnd;
-  role: LabLinkRole;
   note: string;
+}
+
+export interface LabLink extends LabCable {
+  role: LabLinkRole;
 }
 
 export interface PhysicalLab {
   productId: string;
   rules: string;
   nodes: LabNode[];
+  /** Each cable with its role worked out from the control methods and port kinds. */
   links: LabLink[];
   updatedAt: string;
 }
@@ -49,7 +54,6 @@ export const PLATFORM_NODE_ID = "platform";
 export const DEFAULT_PLATFORM_NAME = "平台服务器";
 
 export const LAB_PORT_KINDS: LabPortKind[] = ["ethernet", "serial", "usb", "power", "rf", "other"];
-export const LAB_LINK_ROLES: LabLinkRole[] = ["data", "control", "power"];
 
 export const LAB_PORT_KIND_LABELS: Record<LabPortKind, string> = {
   ethernet: "以太网",
@@ -106,21 +110,15 @@ export function portKindsCompatible(left: LabPortKind, right: LabPortKind): bool
   return left === right || left === "other" || right === "other";
 }
 
-export function defaultLinkRole(kind: LabPortKind): LabLinkRole {
-  if (kind === "power") return "power";
-  if (kind === "serial" || kind === "usb") return "control";
-  return "data";
-}
-
 export function sameEnd(left: LabLinkEnd, right: LabLinkEnd): boolean {
   return left.nodeId === right.nodeId && left.portId === right.portId;
 }
 
-export function findLinkAt(lab: Pick<PhysicalLab, "links">, end: LabLinkEnd): LabLink | undefined {
+export function findLinkAt<T extends LabCable>(lab: { links: T[] }, end: LabLinkEnd): T | undefined {
   return lab.links.find((link) => sameEnd(link.a, end) || sameEnd(link.b, end));
 }
 
-export function otherEnd(link: LabLink, end: LabLinkEnd): LabLinkEnd {
+export function otherEnd(link: LabCable, end: LabLinkEnd): LabLinkEnd {
   return sameEnd(link.a, end) ? link.b : link.a;
 }
 
@@ -161,7 +159,7 @@ export function controlBand(kind: LabPortKind): ControlBand | undefined {
   return undefined;
 }
 
-export function resolveControlPath(lab: Pick<PhysicalLab, "nodes" | "links">, nodeId: string, control: LabControlInterface): ControlPath {
+export function resolveControlPath(lab: { nodes: LabNode[]; links: LabCable[] }, nodeId: string, control: LabControlInterface): ControlPath {
   const node = lab.nodes.find((item) => item.id === nodeId);
   if (!node) return {};
   let portId = node.controlPorts[control.id];
@@ -187,4 +185,25 @@ export function resolveControlPath(lab: Pick<PhysicalLab, "nodes" | "links">, no
     addressMatches = platform.ports.find((item) => item.id === peer.portId)?.name.toLowerCase() === serialName;
   }
   return { portId, source, band: controlBand(port.kind), peer, addressMatches };
+}
+
+/**
+ * What each cable is for. A cable carries control when a control method goes through its port or when it plugs into the
+ * platform server: the agent must not break either. Cables between power ports carry power; everything else is data.
+ */
+export function withLinkRoles(lab: { nodes: LabNode[]; links: LabCable[] }, controls: Map<string, LabControlInterface[]>): LabLink[] {
+  const control = new Set<LabCable>();
+  for (const [nodeId, interfaces] of controls) {
+    for (const item of interfaces) {
+      const { portId } = resolveControlPath(lab, nodeId, item);
+      const link = portId ? findLinkAt(lab, { nodeId, portId }) : undefined;
+      if (link) control.add(link);
+    }
+  }
+  const platformIds = new Set(lab.nodes.filter((node) => node.kind === "platform").map((node) => node.id));
+  const power = (end: LabLinkEnd) => findPort(lab, end)?.port.kind === "power";
+  return lab.links.map((link) => ({
+    ...link,
+    role: power(link.a) || power(link.b) ? "power" : control.has(link) || platformIds.has(link.a.nodeId) || platformIds.has(link.b.nodeId) ? "control" : "data",
+  }));
 }

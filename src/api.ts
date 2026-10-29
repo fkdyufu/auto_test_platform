@@ -1,14 +1,14 @@
 import type { AssistantConversation, AssistantPageContext } from "../shared/assistant";
 import type { TestResultDetails } from "../shared/test-result";
 import type { TestCaseStep } from "../shared/test-case-steps";
-import type { PhysicalLab } from "../shared/physical-lab";
+import type { LabCable, PhysicalLab } from "../shared/physical-lab";
 import type { ControlKind, PublicControlInterface } from "../shared/control-interfaces";
 import type { DeviceTemplateId } from "../shared/device-templates";
 import type { DevicePort } from "../shared/device-ports";
 export type { DevicePort } from "../shared/device-ports";
 export type { ControlKind, PublicControlInterface } from "../shared/control-interfaces";
 export type { DeviceTemplateId } from "../shared/device-templates";
-export type { LabLink, LabLinkEnd, LabLinkRole, LabNode, LabPort, LabPortKind, PhysicalLab } from "../shared/physical-lab";
+export type { LabCable, LabLink, LabLinkEnd, LabLinkRole, LabNode, LabPort, LabPortKind, PhysicalLab } from "../shared/physical-lab";
 export type { AssistantConversation, AssistantPageContext, AssistantProposal, AssetKind } from "../shared/assistant";
 export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 export type TestOutcome = "passed" | "failed";
@@ -301,7 +301,8 @@ export interface DeviceResourceInput {
   ports?: DevicePort[];
   controlInterfaces: ControlInterfaceInput[];
 }
-export type PhysicalLabInput = Pick<PhysicalLab, "rules" | "nodes" | "links"> & { baseUpdatedAt: string };
+/** Cables are sent without their role; the server works it out. */
+export type PhysicalLabInput = Pick<PhysicalLab, "rules" | "nodes"> & { links: LabCable[]; baseUpdatedAt: string };
 export type TestScenarioInput = Omit<TestScenario, "id" | "productId" | "isDefault" | "createdAt" | "updatedAt">;
 export type TestScenarioUpdateInput = TestScenarioInput & { caseIds: string[] };
 

@@ -3,9 +3,9 @@ import { Lock, Pencil, Plus, Trash2, X } from "lucide-react";
 import {
   api,
   type DeviceResource,
+  type LabCable,
   type LabLink,
   type LabLinkEnd,
-  type LabLinkRole,
   type LabNode,
   type LabPortKind,
   type PhysicalLab,
@@ -16,7 +16,6 @@ import {
   LAB_LINK_ROLE_LABELS,
   LAB_PORT_KINDS,
   LAB_PORT_KIND_LABELS,
-  defaultLinkRole,
   endLabel,
   expandPortNames,
   findLinkAt,
@@ -31,14 +30,8 @@ import { checkPhysicalLab } from "../../shared/lab-checks";
 import { labelWidth, layoutLab, type PlacedNode } from "../lab-layout";
 import { AutoResizeTextarea, Modal, type Notice } from "../components/ui";
 
-type LabContent = Pick<PhysicalLab, "rules" | "nodes" | "links">;
+type LabContent = Pick<PhysicalLab, "rules" | "nodes"> & { links: LabCable[] };
 type LabViewMode = "panel" | "device";
-
-const ROLE_HINTS: Record<LabLinkRole, string> = {
-  data: "场景搭建时可以修改这条链路两端的配置",
-  control: "平台经这根线控制设备，场景不得修改两端配置",
-  power: "由程控电源供电，可用于断电重启",
-};
 
 const PILL_HEIGHT = 15;
 const pillWidth = (text: string) => labelWidth(text) + 8;
@@ -62,7 +55,7 @@ function content(lab: PhysicalLab): LabContent {
   return { rules: lab.rules, nodes: structuredClone(lab.nodes), links: structuredClone(lab.links) };
 }
 
-function touches(link: LabLink, nodeId: string, portId?: string): boolean {
+function touches(link: LabCable, nodeId: string, portId?: string): boolean {
   return [link.a, link.b].some((end) => end.nodeId === nodeId && (portId === undefined || end.portId === portId));
 }
 
@@ -763,7 +756,6 @@ function LinkEditor({
   const [kind, setKind] = useState<LabPortKind>(found?.port.kind || "ethernet");
   const [peerNodeId, setPeerNodeId] = useState(peer?.nodeId || "");
   const [peerPortId, setPeerPortId] = useState(peer?.portId || "");
-  const [role, setRole] = useState<LabLinkRole>(link?.role || defaultLinkRole(found?.port.kind || "ethernet"));
   const [note, setNote] = useState(link?.note || "");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -813,7 +805,7 @@ function LinkEditor({
       ports: item.ports.map((port) => port.id === end.portId ? { ...port, name: trimmed, kind } : port),
     });
     next.links = next.links.filter((item) => !touches(item, end.nodeId, end.portId));
-    if (peerNodeId && peerPortId) next.links.push({ id: link?.id || newId(), a: end, b: { nodeId: peerNodeId, portId: peerPortId }, role, note: note.trim() });
+    if (peerNodeId && peerPortId) next.links.push({ id: link?.id || newId(), a: end, b: { nodeId: peerNodeId, portId: peerPortId }, note: note.trim() });
     await apply(next);
   };
 
@@ -864,7 +856,6 @@ function LinkEditor({
                 onChange={(event) => {
                   const nextKind = event.target.value as LabPortKind;
                   setKind(nextKind);
-                  if (!link) setRole(defaultLinkRole(nextKind));
                   const stillFits = peerNode?.ports.some((port) => port.id === peerPortId && portKindsCompatible(nextKind, port.kind));
                   if (!stillFits) setPeerPortId("");
                 }}
@@ -897,17 +888,8 @@ function LinkEditor({
           </label>
           <div className="field">
             <span>线缆</span>
-            <p className="lab-readonly">{LAB_CABLE_LABELS[kind]}（按端口类型确定）</p>
+            <p className="lab-readonly">{LAB_CABLE_LABELS[kind]}{link?.role === "control" && <span className="lab-readonly-control"><Lock size={11} />控制</span>}</p>
           </div>
-          <fieldset className="lab-role-options" disabled={!peerNodeId}>
-            <legend>用途</legend>
-            {(Object.keys(LAB_LINK_ROLE_LABELS) as LabLinkRole[]).map((item) => (
-              <label key={item} className={role === item ? "checked" : ""}>
-                <input type="radio" name="lab-link-role" value={item} checked={role === item} onChange={() => setRole(item)} />
-                <span>{LAB_LINK_ROLE_LABELS[item]}<small>{ROLE_HINTS[item]}</small></span>
-              </label>
-            ))}
-          </fieldset>
           <label className="field">
             <span>备注</span>
             <input value={note} maxLength={300} disabled={!peerNodeId} placeholder="例如：trunk 放行 176、181、182" onChange={(event) => setNote(event.target.value)} />

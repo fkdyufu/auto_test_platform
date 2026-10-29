@@ -52,7 +52,7 @@ test("lab operations preview readable changes without saving, then save exactly 
     "新增 TAU1 端口 fe1、fe2、ge1（以太网）",
     "新增 TAU1 端口 console（串口）",
     "新增 平台服务器 端口 ttyACM0（串口）",
-    "连接 S5735 1 口 ↔ TAU1 fe1（业务）",
+    "连接 S5735 1 口 ↔ TAU1 fe1（控制）",
     "连接 TAU1 console ↔ 平台服务器 ttyACM0（控制）",
     "TAU1 的 Luci 接口所经端口",
     "TAU1 的 串口 接口所经端口",
@@ -93,7 +93,7 @@ test("a confirmed lab preview is refused once the lab it describes has changed",
   await f.catalog.updatePhysicalLab(f.product.id, {
     ...current,
     nodes: [...current.nodes, { id: "office", kind: "external", name: "办公网", ports: [], controlPorts: {} }],
-    links: current.links.map((link) => link.role === "control" ? { ...link, note: "有人先改了备注" } : link),
+    links: current.links.map((link) => link.b.nodeId === "platform" ? { ...link, note: "有人先改了备注" } : link),
   });
   await assert.rejects(f.catalog.applyPhysicalLabChanges(f.product.id, stale), (error: CatalogError) => error.status === 409 && /物理环境已变化/.test(error.message));
   await f.catalog.applyPhysicalLabChanges(f.product.id, unrelated);
@@ -120,7 +120,7 @@ test("lab operations explain what is wrong and which operation failed", async (t
   const removal = await preview([{ op: "remove_ports", node: "TAU1", ports: "fe1, console" }]);
   assert.deepEqual(removal.changes.map((change) => change.text), [
     "删除 TAU1 端口 fe1、console",
-    "断开 S5735 1 口 ↔ TAU1 fe1（业务）",
+    "断开 S5735 1 口 ↔ TAU1 fe1（控制）",
     "断开 TAU1 console ↔ 平台服务器 ttyACM0（控制）",
     "TAU1 的 Luci 接口所经端口",
     "TAU1 的 串口 接口所经端口",
@@ -136,7 +136,7 @@ test("the assistant reads the lab by name with cables and control paths but no s
   assert.equal(JSON.stringify(view).includes("secret"), false);
   assert.equal(view.rules, "控制面 VLAN 176，场景不得修改");
   const tau = view.nodes.find((node) => node.name === "TAU1")!;
-  assert.deepEqual(tau.ports.find((port) => port.name === "fe1"), { name: "fe1", kind: "ethernet", to: { node: "S5735", port: "1" }, role: "data" });
+  assert.deepEqual(tau.ports.find((port) => port.name === "fe1"), { name: "fe1", kind: "ethernet", to: { node: "S5735", port: "1" }, role: "control" });
   assert.deepEqual(tau.ports.find((port) => port.name === "fe2"), { name: "fe2", kind: "ethernet" });
   assert.deepEqual(tau.controlInterfaces, [
     { id: f.tau.controlInterfaces[0].id, name: "Luci", kind: "web", address: "http://192.168.176.2/", port: "fe1", band: "带内", via: "S5735 1 口" },

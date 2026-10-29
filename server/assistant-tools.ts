@@ -6,7 +6,7 @@ import type { AssetChange, AssetKind, AssistantPageContext, LabOperation } from 
 import { applyDraftPatch } from "../shared/assistant-draft.js";
 import { CONTROL_KINDS, isControlKind, secretKeys, type ControlKind } from "../shared/control-interfaces.js";
 import { DEVICE_TEMPLATES } from "../shared/device-templates.js";
-import { LAB_LINK_ROLES, LAB_PORT_KINDS } from "../shared/physical-lab.js";
+import { LAB_PORT_KINDS } from "../shared/physical-lab.js";
 import { MAX_LAB_OPERATIONS, describeLabForAssistant } from "./lab-changes.js";
 
 const controlSettingsDoc = (Object.entries(CONTROL_KINDS) as [ControlKind, typeof CONTROL_KINDS[ControlKind]][])
@@ -33,10 +33,10 @@ const LAB_OPERATIONS_DOC = [
   "add_ports：node、ports（如 \"1-24, console\"，已有的跳过）、kind（默认 ethernet）、note；设备节点的端口就是设备资源的端口，增删改会同步修改设备",
   "remove_ports：node、ports，端口上的接线一并删除",
   "update_port：node、port，以及要改的 name、kind、note",
-  "connect：a、b（各含 node 和 port）、role（默认按端口类型：串口和 USB 为 control，电源为 power，其他为 data）、note；两端须未接线",
+  "connect：a、b（各含 node 和 port）、note；两端须未接线。连线用途由平台判断：控制接口所经端口上的线和平台服务器的线为 control，电源口之间为 power，其余为 data",
   "disconnect：node、port（连线任一端）",
-  "update_link：node、port（连线任一端），以及要改的 role、note",
-  "set_control_port：node（设备）、controlInterfaceId、port（平台经此端口访问该接口；留空取消指定；写入设备资源的控制方式）",
+  "update_link：node、port（连线任一端）、note",
+  "set_control_port：node（设备）、controlInterfaceId、port（平台经此端口访问该接口；留空取消指定；写入设备资源的控制方式，该端口上的线随之成为 control）",
   "set_rules：rules（完整替换环境规则）",
   "add_node：name（外部节点，如办公网）",
   "rename_node：node、name（平台节点或外部节点）",
@@ -51,7 +51,6 @@ const labOperationSchema = Type.Object({
   name: Type.Optional(Type.String()),
   a: Type.Optional(portRefSchema),
   b: Type.Optional(portRefSchema),
-  role: Type.Optional(literals(LAB_LINK_ROLES)),
   note: Type.Optional(Type.String()),
   controlInterfaceId: Type.Optional(Type.String()),
   rules: Type.Optional(Type.String()),

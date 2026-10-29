@@ -35,9 +35,9 @@ async function seedLab(store: CatalogStore) {
     rules: "控制面 VLAN 176，场景不得修改",
     nodes,
     links: [
-      { a: { nodeId: sw.id, portId: "9-id" }, b: { nodeId: tau.id, portId: "fe1-id" }, role: "data", note: "" },
-      { a: { nodeId: sw.id, portId: "12-id" }, b: { nodeId: tau.id, portId: "ge2-id" }, role: "control", note: "" },
-      { a: { nodeId: "platform", portId: "ttyACM0-id" }, b: { nodeId: tau.id, portId: "console-id" }, role: "control", note: "USB 串口" },
+      { a: { nodeId: sw.id, portId: "9-id" }, b: { nodeId: tau.id, portId: "fe1-id" }, note: "" },
+      { a: { nodeId: sw.id, portId: "12-id" }, b: { nodeId: tau.id, portId: "ge2-id" }, note: "" },
+      { a: { nodeId: "platform", portId: "ttyACM0-id" }, b: { nodeId: tau.id, portId: "console-id" }, note: "USB 串口" },
     ],
     baseUpdatedAt: lab.updatedAt,
   });
@@ -64,14 +64,15 @@ test("lists every product device and the platform in a new lab", async (t) => {
   assert.equal(lab.updatedAt, "");
 });
 
-test("saves wiring, resolves control paths and stores the catalog as version 15", async (t) => {
+test("saves wiring, resolves control paths and stores the catalog as version 16", async (t) => {
   const { store, file } = await createStore(t);
   const { tau, sw, lab } = await seedLab(store);
   assert.equal(lab.links.length, 3);
   assert.equal(lab.nodes.find((node) => node.id === sw.id)?.name, "switch");
   const stored = JSON.parse(await readFile(file, "utf8")) as { version: number; physicalLabs: PhysicalLab[] };
-  assert.equal(stored.version, 15);
+  assert.equal(stored.version, 16);
   assert.equal(stored.physicalLabs[0].nodes.some((node) => node.kind === "device"), false, "device nodes are built from the devices on read");
+  assert.equal(stored.physicalLabs[0].links.some((link) => "role" in link), false, "a cable's role is worked out on read");
   assert.deepEqual(lab.nodes.find((node) => node.id === tau.id)?.ports.map((item) => item.name), ["fe1", "ge2", "console"]);
 
   const web = resolveControlPath(lab, tau.id, tau.controlInterfaces[0]);
@@ -85,17 +86,50 @@ test("saves wiring, resolves control paths and stores the catalog as version 15"
   assert.equal(serial.addressMatches, true);
 });
 
+test("works out which cables carry control from the control methods and the platform", async (t) => {
+  const { store } = await createStore(t);
+  const { product, tau, sw, lab } = await seedLab(store);
+  const roles = (current: PhysicalLab) => current.links.map((link) => [link.a.portId, link.role]);
+  // ge2 carries the Web method; the console cable plugs into the platform.
+  assert.deepEqual(roles(lab), [["9-id", "data"], ["12-id", "control"], ["ttyACM0-id", "control"]]);
+
+  // A role sent with a cable is ignored, and a cable between power ports carries power.
+  await store.updateDeviceResource(product.id, sw.id, { name: "switch", template: sw.template, description: "", ports: [port("9"), port("10"), port("12"), port("pwr", "power")], controlInterfaces: [] });
+  const current = await store.getPhysicalLab(product.id);
+  const saved = await store.updatePhysicalLab(product.id, {
+    rules: current.rules,
+    nodes: [...current.nodes, { id: "pdu", kind: "external", name: "PDU", ports: [{ id: "o1", name: "o1", kind: "power", note: "" }], controlPorts: {} }],
+    links: [
+      ...current.links.map((link) => ({ ...link, role: "control" })),
+      { a: { nodeId: sw.id, portId: "pwr-id" }, b: { nodeId: "pdu", portId: "o1" }, role: "data", note: "" },
+    ],
+    baseUpdatedAt: current.updatedAt,
+  });
+  assert.deepEqual(roles(saved), [["9-id", "data"], ["12-id", "control"], ["ttyACM0-id", "control"], ["pwr-id", "power"]]);
+
+  // Once the Web method no longer names ge2, its cable is an ordinary data cable.
+  const device = (await store.listDeviceResources(product.id)).find((item) => item.id === tau.id)!;
+  await store.updateDeviceResource(product.id, tau.id, {
+    name: "TAU1",
+    template: device.template,
+    description: "",
+    ports: device.ports,
+    controlInterfaces: device.controlInterfaces.map((control) => ({ ...control, portId: "" })),
+  });
+  assert.deepEqual(roles(await store.getPhysicalLab(product.id)).slice(0, 2), [["9-id", "data"], ["12-id", "data"]]);
+});
+
 test("rejects busy ports, mismatched port kinds and stale revisions", async (t) => {
   const { store } = await createStore(t);
   const { product, tau, sw, lab } = await seedLab(store);
   const base = { rules: lab.rules, nodes: lab.nodes, baseUpdatedAt: lab.updatedAt };
   await assert.rejects(store.updatePhysicalLab(product.id, {
     ...base,
-    links: [...lab.links, { a: { nodeId: sw.id, portId: "10-id" }, b: { nodeId: tau.id, portId: "fe1-id" }, role: "data", note: "" }],
+    links: [...lab.links, { a: { nodeId: sw.id, portId: "10-id" }, b: { nodeId: tau.id, portId: "fe1-id" }, note: "" }],
   }), /一个端口只能接一根线/);
   await assert.rejects(store.updatePhysicalLab(product.id, {
     ...base,
-    links: [{ a: { nodeId: sw.id, portId: "10-id" }, b: { nodeId: tau.id, portId: "console-id" }, role: "data", note: "" }],
+    links: [{ a: { nodeId: sw.id, portId: "10-id" }, b: { nodeId: tau.id, portId: "console-id" }, note: "" }],
   }), /不能连接串口/);
   await assert.rejects(store.updatePhysicalLab(product.id, {
     ...base,
@@ -213,6 +247,25 @@ test("moves the device ports a v14 lab kept onto the devices, with a backup", as
   const lab = await upgraded.getPhysicalLab(product.id);
   assert.deepEqual(lab.links.map((link) => link.b.portId), ["lab-ge1", "fe1-id"], "cables stay on their ports");
   assert.equal(JSON.parse(await readFile(`${file}.v14.bak`, "utf8")).version, 14);
+});
+
+test("a v15 cable's hand-picked role gives way to the worked-out one", async (t) => {
+  const { store, file } = await createStore(t);
+  const { product, sw } = await seedLab(store);
+  const data = JSON.parse(await readFile(file, "utf8")) as { version: number; physicalLabs: Array<{ links: Array<Record<string, unknown>> }> };
+  data.version = 15;
+  // fe1 was marked as control by hand, ge2 (which the Web method goes through) as data.
+  data.physicalLabs[0].links = data.physicalLabs[0].links.map((link) => ({ ...link, role: (link.b as { portId: string }).portId === "fe1-id" ? "control" : "data" }));
+  await writeFile(file, JSON.stringify(data));
+
+  const upgraded = new CatalogStore(file);
+  const lab = await upgraded.getPhysicalLab(product.id);
+  assert.deepEqual(lab.links.map((link) => [link.b.portId, link.role]), [["fe1-id", "data"], ["ge2-id", "control"], ["console-id", "control"]]);
+  assert.equal(JSON.parse(await readFile(`${file}.v15.bak`, "utf8")).version, 15);
+  await upgraded.updateDeviceResource(product.id, sw.id, { name: "switch", template: sw.template, description: "", ports: [port("9"), port("10"), port("12")], controlInterfaces: [] });
+  const saved = JSON.parse(await readFile(file, "utf8")) as { version: number; physicalLabs: Array<{ links: Array<Record<string, unknown>> }> };
+  assert.equal(saved.version, 16);
+  assert.equal(saved.physicalLabs[0].links.some((link) => "role" in link), false);
 });
 
 test("upgrades a v12 catalog with a backup and an empty lab list", async (t) => {

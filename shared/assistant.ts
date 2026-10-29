@@ -1,4 +1,4 @@
-import type { LabLinkRole, LabPortKind } from "./physical-lab.js";
+import type { LabPortKind } from "./physical-lab.js";
 
 export type AssetKind = "device" | "scenario" | "case" | "order";
 export interface AssetChange {
@@ -34,7 +34,6 @@ export interface LabOperation {
   name?: string;
   a?: LabPortRef;
   b?: LabPortRef;
-  role?: LabLinkRole;
   note?: string;
   controlInterfaceId?: string;
   rules?: string;
