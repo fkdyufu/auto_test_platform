@@ -67,6 +67,20 @@ test("lab operations preview readable changes without saving, then save exactly 
   assert.equal(lab.links.length, 2);
   const tauNode = lab.nodes.find((node) => node.id === f.tau.id)!;
   assert.equal(tauNode.ports.find((port) => port.id === tauNode.controlPorts[f.tau.controlInterfaces[0].id])?.name, "fe1");
+  // Device ports live on the device resource, so the confirmed changes land there.
+  const tau = (await f.catalog.listDeviceResources(f.product.id)).find((device) => device.id === f.tau.id)!;
+  assert.deepEqual(tau.ports?.map((port) => port.name), ["fe1", "fe2", "ge1", "console"]);
+  assert.equal(tau.ports?.find((port) => port.id === tau.controlInterfaces[0].portId)?.name, "fe1");
+  assert.equal(tau.controlInterfaces[1].portId, undefined, "a port found from the serial address is not written to the device");
+});
+
+test("lab operations on a device keep what only the device editor holds", async (t) => {
+  const f = await fixture(t);
+  const port = { id: "ge1-id", name: "ge1", kind: "ethernet" as const, specification: "1000M", note: "" };
+  await f.catalog.updateDeviceResource(f.product.id, f.sw.id, { name: "S5735", template: "switch", description: "", ports: [port], controlInterfaces: [] });
+  await f.catalog.applyPhysicalLabChanges(f.product.id, await f.catalog.previewPhysicalLabChanges(f.product.id, [{ op: "update_port", node: "S5735", port: "ge1", note: "上联" }]));
+  const sw = (await f.catalog.listDeviceResources(f.product.id)).find((device) => device.id === f.sw.id)!;
+  assert.deepEqual(sw.ports, [{ ...port, note: "上联" }]);
 });
 
 test("a confirmed lab preview is refused once the lab it describes has changed", async (t) => {

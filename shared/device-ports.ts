@@ -1,5 +1,9 @@
-export const DEVICE_PORT_KINDS = ["ethernet", "serial", "usb", "power", "rf", "other"] as const;
-export type DevicePortKind = (typeof DEVICE_PORT_KINDS)[number];
+import { LAB_PORT_KINDS, type LabPortKind } from "./physical-lab.js";
+
+/** Port kinds are shared with the lab, so a device port can be cabled as is. */
+export const DEVICE_PORT_KINDS = LAB_PORT_KINDS;
+export type DevicePortKind = LabPortKind;
+export const MAX_DEVICE_PORTS = 500;
 
 export interface DevicePort {
   id: string;
@@ -13,8 +17,14 @@ export const DEVICE_PORT_LABELS: Record<DevicePortKind, string> = {
   ethernet: "以太网口", serial: "串口", usb: "USB", power: "电源", rf: "射频", other: "其他",
 };
 
+/** Gives ports proposed without an ID (e.g. by the assistant) a fresh one, so they can be checked and saved. */
+export function withDevicePortIds(value: unknown, newId: () => string): unknown {
+  if (!Array.isArray(value)) return value;
+  return value.map((entry) => entry && typeof entry === "object" && !Array.isArray(entry) && !(entry as Record<string, unknown>).id ? { ...entry, id: newId() } : entry);
+}
+
 export function parseDevicePorts(value: unknown): DevicePort[] {
-  if (!Array.isArray(value) || value.length > 256) throw new Error("设备端口必须是数组，且不超过 256 个");
+  if (!Array.isArray(value) || value.length > MAX_DEVICE_PORTS) throw new Error(`设备端口必须是数组，且不超过 ${MAX_DEVICE_PORTS} 个`);
   const ports = value.map((entry): DevicePort => {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new Error("设备端口格式不正确");
     const item = entry as Record<string, unknown>;

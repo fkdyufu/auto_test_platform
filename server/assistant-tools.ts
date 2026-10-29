@@ -19,7 +19,8 @@ export const ASSET_FIELDS: Record<AssetKind, Record<string, string>> = {
     name: "设备名称，必填且唯一",
     template: `设备类型：${DEVICE_TEMPLATES.map((template) => `${template.id}（${template.name}）`).join("、")}`,
     description: "说明，会提供给执行测试的 AI，可写厂商型号和注意事项",
-    controlInterfaces: `接口数组，每项：id（已有接口须保留）、name（可留空）、kind（控制方式）、settings（该方式的字段）。各方式字段：${controlSettingsDoc}。密码和 token 省略或留空时保留已有值`,
+    ports: "物理端口数组，每项：id（已有端口须保留，新端口可省略）、name（同一设备内不重复）、kind（ethernet/serial/usb/power/rf/other）、specification、note；完整替换。端口之间的接线在物理环境中登记",
+    controlInterfaces: `接口数组，每项：id（已有接口须保留）、name（可留空）、kind（控制方式）、portId（平台经过的设备端口 ID，可省略）、settings（该方式的字段）。各方式字段：${controlSettingsDoc}。密码和 token 省略或留空时保留已有值`,
   },
   scenario: { name: "场景名称，必填且唯一；默认场景不能改名", category: "功能分类，非默认场景必填", description: "场景说明", roles: "角色数组：id、key、deviceId；非默认场景至少一项，设备须属于当前产品且不能重复绑定", parameters: "参数数组：id、key、name、defaultValue", setupInstructions: "场景搭建要求，非默认场景必填", verificationInstructions: "场景验证要求，非默认场景必填", cleanupInstructions: "场景清理要求", caseIds: "关联用例 ID 数组（仅修改支持）；完整替换场景关联，移出的用例回到默认场景" },
   order: { name: "测试单名称，必填", description: "描述", caseIds: "有序用例 ID 数组，至少一项，须属于当前产品；完整替换关联。执行时按首次出现的场景分组，场景顺序及组内用例顺序均由此数组决定" },
@@ -29,13 +30,13 @@ const valuesSchema = Type.Record(Type.String(), Type.Unknown());
 const literals = <T extends string>(values: readonly T[]) => Type.Union(values.map((value) => Type.Literal(value)));
 const portRefSchema = Type.Object({ node: Type.String({ description: "节点名称" }), port: Type.String({ description: "端口名" }) });
 const LAB_OPERATIONS_DOC = [
-  "add_ports：node、ports（如 \"1-24, console\"，已有的跳过）、kind（默认 ethernet）、note",
+  "add_ports：node、ports（如 \"1-24, console\"，已有的跳过）、kind（默认 ethernet）、note；设备节点的端口就是设备资源的端口，增删改会同步修改设备",
   "remove_ports：node、ports，端口上的接线一并删除",
   "update_port：node、port，以及要改的 name、kind、note",
   "connect：a、b（各含 node 和 port）、role（默认按端口类型：串口和 USB 为 control，电源为 power，其他为 data）、note；两端须未接线",
   "disconnect：node、port（连线任一端）",
   "update_link：node、port（连线任一端），以及要改的 role、note",
-  "set_control_port：node（设备）、controlInterfaceId、port（平台经此端口访问该接口；留空取消指定）",
+  "set_control_port：node（设备）、controlInterfaceId、port（平台经此端口访问该接口；留空取消指定；写入设备资源的控制方式）",
   "set_rules：rules（完整替换环境规则）",
   "add_node：name（外部节点，如办公网）",
   "rename_node：node、name（平台节点或外部节点）",

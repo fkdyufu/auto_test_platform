@@ -16,8 +16,9 @@ export interface LabNode {
   id: string;
   kind: LabNodeKind;
   name: string;
+  /** For device nodes, the device resource's ports: the lab stores only platform and external nodes. */
   ports: LabPort[];
-  /** Control interface ID -> port ID the platform reaches it through. */
+  /** Control interface ID -> port ID the platform reaches it through, read from each control method's port. */
   controlPorts: Record<string, string>;
 }
 

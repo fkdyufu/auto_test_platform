@@ -29,6 +29,7 @@ import { AutoResizeTextarea, InlineNotice, Modal, PageHeader, type Notice } from
 import { useAssistantPage } from "../components/AssistantContext";
 import { CONTROL_KINDS, controlSummary } from "../../shared/control-interfaces";
 import { DeviceEditor, DeviceTypeIcon, deviceFormProblems, deviceRequest, editDeviceDialog, newDeviceDialog, type DeviceDialogState } from "../components/DeviceEditor";
+import { endLabel } from "../../shared/physical-lab";
 import { PhysicalLabView } from "./PhysicalLabView";
 
 type ResourceTab = "devices" | "lab" | "scenarios";
@@ -190,6 +191,9 @@ export function ResourcesPage({ product }: { product: ProductSummary }) {
   };
 
   const deviceName = (id: string) => devices.find((item) => item.id === id)?.name || "未知设备";
+  const cablesOf = (deviceId?: string) => new Map(lab && deviceId ? lab.links.flatMap((link) => [[link.a, link.b], [link.b, link.a]])
+    .filter(([near]) => near.nodeId === deviceId)
+    .map(([near, far]) => [near.portId, endLabel(lab, far)] as const) : []);
 
   return (
     <div className="page resource-config-page">
@@ -225,6 +229,13 @@ export function ResourcesPage({ product }: { product: ProductSummary }) {
             lab={lab}
             devices={devices}
             onLabChange={setLab}
+            onReload={reload}
+            onEditDevice={(deviceId) => {
+              const device = devices.find((item) => item.id === deviceId);
+              if (!device) return;
+              setDialogError("");
+              setDialog(editDeviceDialog(device));
+            }}
             onNotice={setNotice}
             onFocusChange={setLabFocus}
           />
@@ -322,7 +333,7 @@ export function ResourcesPage({ product }: { product: ProductSummary }) {
           >
             {/* A "fill in the red fields" message goes away once nothing is red any more. */}
             {dialogError && dialog.editor.step === "form" && !(dialog.editor.showErrors && !deviceFormProblems(dialog.form)) && <div className="form-error">{dialogError}</div>}
-            <DeviceEditor productName={product.name} dialog={dialog} setDialog={setDialog} />
+            <DeviceEditor productName={product.name} dialog={dialog} cables={cablesOf(dialog.id)} setDialog={setDialog} />
           </Modal>
         ) : (
           <Modal

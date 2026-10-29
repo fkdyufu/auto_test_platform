@@ -111,10 +111,13 @@ export function DeviceTypeIcon({ template, size = 16 }: { template: DeviceTempla
 export function DeviceEditor({
   productName,
   dialog,
+  cables,
   setDialog,
 }: {
   productName: string;
   dialog: DeviceDialogState;
+  /** Port ID -> the far end of its cable in the lab. */
+  cables: Map<string, string>;
   setDialog: (value: DeviceDialogState) => void;
 }) {
   if (dialog.editor.step === "pick") {
@@ -140,16 +143,18 @@ export function DeviceEditor({
       </div>
     );
   }
-  return <DeviceForm productName={productName} dialog={dialog} setDialog={setDialog} />;
+  return <DeviceForm productName={productName} dialog={dialog} cables={cables} setDialog={setDialog} />;
 }
 
 function DeviceForm({
   productName,
   dialog,
+  cables,
   setDialog,
 }: {
   productName: string;
   dialog: DeviceDialogState;
+  cables: Map<string, string>;
   setDialog: (value: DeviceDialogState) => void;
 }) {
   const { form, editor } = dialog;
@@ -234,6 +239,7 @@ function DeviceForm({
       <DevicePortsEditor
         ports={ports}
         controls={form.controlInterfaces}
+        cables={cables}
         showErrors={editor.showErrors}
         onChange={(nextPorts, controlInterfaces) => setDialog({ ...dialog, form: { ...form, ports: nextPorts, controlInterfaces } })}
       />

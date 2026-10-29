@@ -14,24 +14,23 @@ async function createStore(t: test.TestContext): Promise<{ store: CatalogStore; 
   return { store: new CatalogStore(file), file };
 }
 
+const port = (name: string, kind = "ethernet") => ({ id: `${name}-id`, name, kind, specification: "", note: "" });
+
 async function seedLab(store: CatalogStore) {
   const [product] = await store.listProducts();
+  // Device ports, and the port each control method goes through, are registered with the device.
   const tau = await store.createDeviceResource(product.id, {
     name: "TAU1",
     types: ["DUT"],
+    ports: [port("fe1"), port("ge2"), port("console", "serial")],
     controlInterfaces: [
-      { name: "Web 管理", type: "web", address: "http://192.168.176.2/" },
-      { name: "调试串口", type: "serial", address: "/dev/ttyACM0?baudRate=115200" },
+      { id: "web-id", name: "Web 管理", kind: "web", settings: { url: "http://192.168.176.2/" }, portId: "ge2-id" },
+      { id: "serial-id", name: "调试串口", kind: "serial", settings: { device: "/dev/ttyACM0", baudRate: "115200" } },
     ],
   });
-  const sw = await store.createDeviceResource(product.id, { name: "switch", types: ["交换机"], controlInterfaces: [] });
+  const sw = await store.createDeviceResource(product.id, { name: "switch", types: ["交换机"], ports: [port("9"), port("10"), port("12")], controlInterfaces: [] });
   const lab = await store.getPhysicalLab(product.id);
-  const port = (name: string, kind = "ethernet") => ({ id: `${name}-id`, name, kind, note: "" });
-  const nodes = lab.nodes.map((node) => {
-    if (node.id === tau.id) return { ...node, ports: [port("fe1"), port("ge2"), port("console", "serial")], controlPorts: { [tau.controlInterfaces[0].id]: "ge2-id" } };
-    if (node.id === sw.id) return { ...node, ports: [port("9"), port("10"), port("12")] };
-    return { ...node, ports: [port("ttyACM0", "serial")] };
-  });
+  const nodes = lab.nodes.map((node) => node.kind === "platform" ? { ...node, ports: [port("ttyACM0", "serial")] } : node);
   const saved = await store.updatePhysicalLab(product.id, {
     rules: "控制面 VLAN 176，场景不得修改",
     nodes,
@@ -65,14 +64,15 @@ test("lists every product device and the platform in a new lab", async (t) => {
   assert.equal(lab.updatedAt, "");
 });
 
-test("saves wiring, resolves control paths and stores the catalog as version 14", async (t) => {
+test("saves wiring, resolves control paths and stores the catalog as version 15", async (t) => {
   const { store, file } = await createStore(t);
   const { tau, sw, lab } = await seedLab(store);
   assert.equal(lab.links.length, 3);
   assert.equal(lab.nodes.find((node) => node.id === sw.id)?.name, "switch");
   const stored = JSON.parse(await readFile(file, "utf8")) as { version: number; physicalLabs: PhysicalLab[] };
-  assert.equal(stored.version, 14);
-  assert.equal(stored.physicalLabs[0].nodes.find((node) => node.id === tau.id)?.name, "", "device names are resolved on read, not stored");
+  assert.equal(stored.version, 15);
+  assert.equal(stored.physicalLabs[0].nodes.some((node) => node.kind === "device"), false, "device nodes are built from the devices on read");
+  assert.deepEqual(lab.nodes.find((node) => node.id === tau.id)?.ports.map((item) => item.name), ["fe1", "ge2", "console"]);
 
   const web = resolveControlPath(lab, tau.id, tau.controlInterfaces[0]);
   assert.equal(web.source, "manual");
@@ -99,9 +99,16 @@ test("rejects busy ports, mismatched port kinds and stale revisions", async (t) 
   }), /不能连接串口/);
   await assert.rejects(store.updatePhysicalLab(product.id, {
     ...base,
-    nodes: lab.nodes.map((node) => node.id === sw.id ? { ...node, ports: [...node.ports, { id: "dup", name: "9", kind: "ethernet", note: "" }] } : node),
-  }), /端口“9”重复/);
-  await store.updatePhysicalLab(product.id, { ...base, links: lab.links });
+    nodes: lab.nodes.map((node) => node.kind === "platform" ? { ...node, ports: [...node.ports, { id: "dup", name: "ttyACM0", kind: "serial", note: "" }] } : node),
+  }), /端口“ttyACM0”重复/);
+  // The page cannot change a device's ports or control ports through the lab.
+  const saved = await store.updatePhysicalLab(product.id, {
+    ...base,
+    nodes: lab.nodes.map((node) => node.id === sw.id ? { ...node, ports: [...node.ports, port("11")] } : node.id === tau.id ? { ...node, controlPorts: {} } : node),
+    links: lab.links,
+  });
+  assert.deepEqual(saved.nodes.find((node) => node.id === sw.id)?.ports.map((item) => item.name), ["9", "10", "12"]);
+  assert.deepEqual(saved.nodes.find((node) => node.id === tau.id)?.controlPorts, { [tau.controlInterfaces[0].id]: "ge2-id" });
   await assert.rejects(store.updatePhysicalLab(product.id, { ...base, links: lab.links }), /已在其他地方修改/);
 });
 
@@ -109,19 +116,17 @@ test("keeps devices with wiring and drops the node of a deleted device", async (
   const { store } = await createStore(t);
   const { product, tau, sw, lab } = await seedLab(store);
   await assert.rejects(store.archiveDeviceResource(product.id, tau.id), /仍有接线/);
-  const loose = await store.createDeviceResource(product.id, { name: "备用", types: ["host"], controlInterfaces: [] });
-  const withLoose = await store.getPhysicalLab(product.id);
-  await store.updatePhysicalLab(product.id, {
-    rules: withLoose.rules,
-    nodes: withLoose.nodes.map((node) => node.id === loose.id ? { ...node, ports: [{ id: "p", name: "eth0", kind: "ethernet", note: "" }] } : node),
-    links: withLoose.links,
-    baseUpdatedAt: withLoose.updatedAt,
-  });
+  const loose = await store.createDeviceResource(product.id, { name: "备用", types: ["host"], ports: [port("eth0")], controlInterfaces: [] });
+  assert.ok((await store.getPhysicalLab(product.id)).nodes.some((node) => node.id === loose.id));
   await store.archiveDeviceResource(product.id, loose.id);
   const after = await store.getPhysicalLab(product.id);
   assert.equal(after.nodes.some((node) => node.id === loose.id), false);
   assert.equal(after.links.length, lab.links.length);
   assert.ok(after.nodes.some((node) => node.id === sw.id));
+
+  // Removing a cabled port in the device editor removes its cable, so it no longer holds the device.
+  await store.updateDeviceResource(product.id, sw.id, { name: "switch", template: sw.template, description: "", ports: [port("10"), port("12")], controlInterfaces: [] });
+  assert.deepEqual((await store.getPhysicalLab(product.id)).links.map((link) => link.a.portId), ["12-id", "ttyACM0-id"]);
 });
 
 test("snapshots the wiring into new runs without sending it to the browser", async (t) => {
@@ -167,6 +172,47 @@ test("formats the wiring of bound devices for the agent", async (t) => {
   const rulesOnly = formatPhysicalLab({ ...lab, links: [] }, devices);
   assert.match(rulesOnly, /接线尚未登记/);
   assert.doesNotMatch(rulesOnly, /没有列出的连接不要假设存在|未接线的端口/);
+});
+
+test("moves the device ports a v14 lab kept onto the devices, with a backup", async (t) => {
+  const { store, file } = await createStore(t);
+  const [product] = await store.listProducts();
+  const tau = await store.createDeviceResource(product.id, {
+    name: "TAU1",
+    types: ["DUT"],
+    ports: [port("fe1")],
+    controlInterfaces: [{ id: "web-id", name: "Web", kind: "web", settings: { url: "http://192.168.176.2/" } }],
+  });
+  const data = JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>;
+  data.version = 14;
+  data.physicalLabs = [{
+    productId: product.id,
+    rules: "",
+    updatedAt: "2026-10-20T00:00:00.000Z",
+    nodes: [
+      {
+        id: tau.id,
+        kind: "device",
+        name: "",
+        ports: [{ id: "lab-fe1", name: "FE1", kind: "ethernet", note: "" }, { id: "lab-ge1", name: "ge1", kind: "ethernet", note: "管理口" }],
+        controlPorts: { "web-id": "lab-ge1" },
+      },
+      { id: "platform", kind: "platform", name: "平台服务器", ports: [port("eth1"), port("eth2")], controlPorts: {} },
+    ],
+    links: [
+      { id: "l1", a: { nodeId: "platform", portId: "eth1-id" }, b: { nodeId: tau.id, portId: "lab-ge1" }, role: "control", note: "" },
+      { id: "l2", a: { nodeId: "platform", portId: "eth2-id" }, b: { nodeId: tau.id, portId: "lab-fe1" }, role: "data", note: "" },
+    ],
+  }];
+  await writeFile(file, JSON.stringify(data));
+
+  const upgraded = new CatalogStore(file);
+  const [device] = await upgraded.listDeviceResources(product.id);
+  assert.deepEqual(device.ports?.map((item) => [item.id, item.name, item.note]), [["fe1-id", "fe1", ""], ["lab-ge1", "ge1", "管理口"]], "a port the device already has is reused");
+  assert.equal(device.controlInterfaces[0].portId, "lab-ge1");
+  const lab = await upgraded.getPhysicalLab(product.id);
+  assert.deepEqual(lab.links.map((link) => link.b.portId), ["lab-ge1", "fe1-id"], "cables stay on their ports");
+  assert.equal(JSON.parse(await readFile(`${file}.v14.bak`, "utf8")).version, 14);
 });
 
 test("upgrades a v12 catalog with a backup and an empty lab list", async (t) => {

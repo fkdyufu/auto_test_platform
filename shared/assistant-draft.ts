@@ -2,6 +2,7 @@ import type { AssetKind } from "./assistant.js";
 import { parseStepRows, stepRowsFromLegacy, stepRowsToText } from "./test-case-steps.js";
 import { CONTROL_KINDS, isControlKind, secretKeys } from "./control-interfaces.js";
 import { isDeviceTemplateId } from "./device-templates.js";
+import { parseDevicePorts, withDevicePortIds } from "./device-ports.js";
 
 const textFields: Record<AssetKind, string[]> = {
   case: ["name", "scenarioId", "precondition", "steps", "expectedResult"],
@@ -50,6 +51,12 @@ export function applyDraftPatch(kind: AssetKind, draft: Record<string, unknown>,
     } else if (field === "template" && kind === "device") {
       if (!isDeviceTemplateId(value)) throw new Error("设备类型不正确");
       next.template = value;
+    } else if (field === "ports" && kind === "device") {
+      try {
+        next.ports = parseDevicePorts(withDevicePortIds(value, () => `assistant-${Date.now()}-${Math.random().toString(36).slice(2)}`));
+      } catch (error) {
+        throw new Error(`字段 ports：${error instanceof Error ? error.message : "格式不正确"}`);
+      }
     } else if (field === "controlInterfaces" && kind === "device") {
       next.controlInterfaces = draftControlInterfaces(value, Array.isArray(draft.controlInterfaces) ? draft.controlInterfaces as Record<string, unknown>[] : []);
     } else if (field === "caseIds" && ["scenario", "order"].includes(kind)) {
@@ -67,6 +74,12 @@ export function applyDraftPatch(kind: AssetKind, draft: Record<string, unknown>,
         return { ...input, id };
       });
     } else throw new Error(`不可修改字段 ${field}`);
+  }
+  if (kind === "device" && (values.ports !== undefined || values.controlInterfaces !== undefined) && Array.isArray(next.controlInterfaces)) {
+    // A method keeps its port only while the port is still in the form.
+    const portIds = new Set((Array.isArray(next.ports) ? next.ports as { id: string }[] : []).map((port) => port.id));
+    next.controlInterfaces = (next.controlInterfaces as Record<string, unknown>[]).map(({ portId, ...control }) =>
+      typeof portId === "string" && portIds.has(portId) ? { ...control, portId } : control);
   }
   if (kind === "case") {
     if (values.stepRows !== undefined) Object.assign(next, stepRowsToText(parseStepRows(next.stepRows)));

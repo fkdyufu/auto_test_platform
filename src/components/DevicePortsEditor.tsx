@@ -2,7 +2,7 @@ import { useState, type KeyboardEvent } from "react";
 import { Lock, Plus, Trash2 } from "lucide-react";
 import type { ControlInterfaceInput, DevicePort } from "../api";
 import { CONTROL_KINDS } from "../../shared/control-interfaces";
-import { DEVICE_PORT_KINDS, DEVICE_PORT_LABELS, devicePortUsage, type DevicePortKind } from "../../shared/device-ports";
+import { DEVICE_PORT_KINDS, DEVICE_PORT_LABELS, MAX_DEVICE_PORTS, devicePortUsage, type DevicePortKind } from "../../shared/device-ports";
 import { expandPortNames } from "../../shared/physical-lab";
 
 function newId(): string {
@@ -14,11 +14,14 @@ function newId(): string {
 export function DevicePortsEditor({
   ports,
   controls,
+  cables,
   showErrors,
   onChange,
 }: {
   ports: DevicePort[];
   controls: ControlInterfaceInput[];
+  /** Port ID -> the far end of its cable in the lab. */
+  cables: Map<string, string>;
   showErrors: boolean;
   onChange: (ports: DevicePort[], controls: ControlInterfaceInput[]) => void;
 }) {
@@ -35,9 +38,11 @@ export function DevicePortsEditor({
   const invalid = (port: DevicePort) => port.name.trim() ? (nameCount.get(port.name.trim().toLowerCase()) || 0) > 1 : showErrors;
 
   const update = (id: string, patch: Partial<DevicePort>) => onChange(ports.map((port) => port.id === id ? { ...port, ...patch } : port), controls);
-  const remove = (id: string) => {
+  const remove = (removed: DevicePort) => {
+    const peer = cables.get(removed.id);
+    if (peer && !window.confirm(`${removed.name} 已接 ${peer}，保存后这根线会一起删除。确定删除吗？`)) return;
     // Methods that went through the port are kept, just no longer tied to a port.
-    onChange(ports.filter((port) => port.id !== id), controls.map((control) => control.portId === id ? { ...control, portId: "" } : control));
+    onChange(ports.filter((port) => port.id !== removed.id), controls.map((control) => control.portId === removed.id ? { ...control, portId: "" } : control));
     setSelectedId(undefined);
   };
 
@@ -48,7 +53,7 @@ export function DevicePortsEditor({
     const fresh = expanded.filter((name) => !existing.has(name.toLowerCase()));
     if (!fresh.length) return setAddError("这些端口都已存在");
     if (fresh.some((name) => name.length > 80)) return setAddError("端口名不能超过 80 个字符");
-    if (ports.length + fresh.length > 256) return setAddError("一台设备最多 256 个端口");
+    if (ports.length + fresh.length > MAX_DEVICE_PORTS) return setAddError(`一台设备最多 ${MAX_DEVICE_PORTS} 个端口`);
     onChange([...ports, ...fresh.map((name) => ({ id: newId(), name, kind, specification: "", note: "" }))], controls);
     setNames("");
     setAddError("");
@@ -124,7 +129,7 @@ export function DevicePortsEditor({
               className={invalid(selected) ? "invalid" : ""}
               onChange={(event) => update(selected.id, { name: event.target.value })}
             />
-            <button type="button" className="icon-action danger" title="删除端口" onClick={() => remove(selected.id)}>
+            <button type="button" className="icon-action danger" title="删除端口" onClick={() => remove(selected)}>
               <Trash2 size={16} />
             </button>
           </div>

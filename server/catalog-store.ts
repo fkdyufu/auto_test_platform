@@ -34,7 +34,7 @@ import {
   type PublicControlInterface,
 } from "../shared/control-interfaces.js";
 import { deviceTemplateName, isDeviceTemplateId, templateFromLegacyTypes, type DeviceTemplateId } from "../shared/device-templates.js";
-import { parseDevicePorts, type DevicePort } from "../shared/device-ports.js";
+import { parseDevicePorts, withDevicePortIds, type DevicePort } from "../shared/device-ports.js";
 
 export type { PhysicalLab } from "../shared/physical-lab.js";
 export type { ControlInterface, ControlKind, PublicControlInterface } from "../shared/control-interfaces.js";
@@ -207,7 +207,7 @@ export interface TestRun {
 }
 
 interface CatalogData {
-  version: 14;
+  version: 15;
   products: Product[];
   testCases: TestCase[];
   deviceResources: DeviceResource[];
@@ -363,6 +363,68 @@ function clone<T>(value: T): T {
   return structuredClone(value);
 }
 
+/** A device as the lab shows it: its ports, and the port each control method goes through. */
+function deviceLabNode(device: DeviceResource): LabNode {
+  const ports = (device.ports || []).map(({ id, name, kind, note }) => ({ id, name, kind, note }));
+  const portIds = new Set(ports.map((port) => port.id));
+  const controlPorts = Object.fromEntries(device.controlInterfaces
+    .filter((control) => control.portId && portIds.has(control.portId))
+    .map((control) => [control.id, control.portId!]));
+  return { id: device.id, kind: "device", name: device.name, ports, controlPorts };
+}
+
+type DevicePortEdits = Map<string, Pick<LabNode, "ports" | "controlPorts">>;
+
+/** Devices with port edits made through the lab applied. A device is only replaced when something changed. */
+function withDevicePortEdits(devices: DeviceResource[], edits: DevicePortEdits, timestamp: string): DeviceResource[] {
+  return devices.map((device) => {
+    const edit = edits.get(device.id);
+    if (!edit) return device;
+    const previous = (device.ports || []).map(({ id, name, kind, specification, note }) => ({ id, name, kind, specification, note }));
+    const specifications = new Map(previous.map((port) => [port.id, port.specification]));
+    const ports = edit.ports.map(({ id, name, kind, note }) => ({ id, name, kind, specification: specifications.get(id) || "", note }));
+    const samePorts = JSON.stringify(ports) === JSON.stringify(previous);
+    if (samePorts && device.controlInterfaces.every((control) => (control.portId || "") === (edit.controlPorts[control.id] || ""))) return device;
+    return {
+      ...device,
+      ports,
+      controlInterfaces: device.controlInterfaces.map(({ portId: _portId, ...control }) => edit.controlPorts[control.id] ? { ...control, portId: edit.controlPorts[control.id] } : control),
+      updatedAt: timestamp,
+    };
+  });
+}
+
+/**
+ * Before catalog version 15 the lab kept its own copy of each device's ports and control ports. They move to the device
+ * resources, keeping port IDs so cables stay attached; a port the device already has under the same name is reused.
+ */
+function moveLabPortsToDevices(data: CatalogData): void {
+  const deviceById = new Map(data.deviceResources.map((device) => [device.id, device]));
+  for (const lab of data.physicalLabs) {
+    const renamed = new Map<string, string>();
+    const key = (nodeId: string, portId: string) => `${nodeId}\u0000${portId}`;
+    lab.nodes = lab.nodes.filter((node) => {
+      if (node.kind !== "device") return true;
+      const device = deviceById.get(node.id);
+      if (!device) return false;
+      device.ports ??= [];
+      for (const port of node.ports || []) {
+        const existing = device.ports.find((item) => item.id === port.id) || device.ports.find((item) => item.name.toLowerCase() === port.name.toLowerCase());
+        if (existing) renamed.set(key(node.id, port.id), existing.id);
+        else device.ports.push({ id: port.id, name: port.name, kind: port.kind, specification: "", note: port.note || "" });
+      }
+      for (const [controlId, labPortId] of Object.entries(node.controlPorts || {})) {
+        const control = device.controlInterfaces.find((item) => item.id === controlId);
+        const portId = renamed.get(key(node.id, labPortId)) || labPortId;
+        if (control && !control.portId && device.ports.some((port) => port.id === portId)) control.portId = portId;
+      }
+      return false;
+    });
+    const move = (end: LabLinkEnd) => ({ nodeId: end.nodeId, portId: renamed.get(key(end.nodeId, end.portId)) || end.portId });
+    lab.links = lab.links.map((link) => ({ ...link, a: move(link.a), b: move(link.b) }));
+  }
+}
+
 function labSnapshot(lab: PhysicalLab): PhysicalLab | undefined {
   return lab.rules || lab.links.length || lab.nodes.some((node) => node.ports.length) ? lab : undefined;
 }
@@ -406,7 +468,7 @@ function defaultData(): CatalogData {
     updatedAt: timestamp,
   }));
   return {
-    version: 14,
+    version: 15,
     products,
     testCases: [],
     deviceResources: [],
@@ -439,7 +501,7 @@ export class CatalogStore {
     try {
       const original = await readFile(this.filePath, "utf8");
       const data = JSON.parse(original) as { version?: number };
-      if (typeof data.version === "number" && data.version >= 1 && data.version < 14) {
+      if (typeof data.version === "number" && data.version >= 1 && data.version < 15) {
         try {
           await writeFile(`${this.filePath}.v${data.version}.bak`, original, { flag: "wx", mode: 0o600 });
         } catch (error) {
@@ -457,13 +519,13 @@ export class CatalogStore {
     this.initializePromise ??= this.initialize();
     await this.initializePromise;
     const data = JSON.parse(await readFile(this.filePath, "utf8")) as CatalogData & { version: number };
-    if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14].includes(data.version) || !Array.isArray(data.products) || !Array.isArray(data.testCases)) {
+    if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].includes(data.version) || !Array.isArray(data.products) || !Array.isArray(data.testCases)) {
       throw new CatalogError("业务数据文件格式不正确", 500);
     }
     const sourceVersion = data.version;
     const legacyData = data as typeof data & { labEnvironments?: LegacyPhysicalEnvironment[]; physicalEnvironments?: LegacyPhysicalEnvironment[] };
     let physicalEnvironments = legacyData.physicalEnvironments ?? legacyData.labEnvironments ?? [];
-    data.version = 14;
+    data.version = 15;
     data.deviceResources ??= [];
     data.physicalLabs = Array.isArray(data.physicalLabs) ? data.physicalLabs : [];
     delete legacyData.physicalEnvironments;
@@ -577,6 +639,7 @@ export class CatalogStore {
       };
     });
 
+    moveLabPortsToDevices(data);
     const deviceProductById = new Map(data.deviceResources.map((device) => [device.id, device.productId]));
     physicalEnvironments.forEach((physicalEnvironment) => {
       const allowedIds = new Set(
@@ -703,7 +766,7 @@ export class CatalogStore {
     await working.getProduct(productId);
     const fields: Record<AssetKind, string[]> = {
       case: ["name", "scenarioId", "precondition", "steps", "expectedResult", "stepRows"],
-      device: ["name", "template", "description", "controlInterfaces"],
+      device: ["name", "template", "description", "ports", "controlInterfaces"],
       scenario: ["name", "category", "description", "roles", "parameters", "setupInstructions", "verificationInstructions", "cleanupInstructions", "caseIds"],
       order: ["name", "description", "caseIds"],
     };
@@ -1160,12 +1223,24 @@ export class CatalogStore {
       device.controlInterfaces = this.normalizeControlInterfaces(input.controlInterfaces ?? [], device.controlInterfaces);
       this.validateDevicePortBindings(device);
       device.updatedAt = new Date().toISOString();
+      this.dropCablesOfRemovedPorts(data, device);
       return this.publicDevice(data, device);
     });
   }
 
+  /** A port removed from a device takes its cable with it, as removing the port in the lab would. */
+  private dropCablesOfRemovedPorts(data: CatalogData, device: DeviceResource): void {
+    const lab = data.physicalLabs.find((item) => item.productId === device.productId);
+    if (!lab) return;
+    const portIds = new Set((device.ports || []).map((port) => port.id));
+    const links = lab.links.filter((link) => [link.a, link.b].every((end) => end.nodeId !== device.id || portIds.has(end.portId)));
+    if (links.length === lab.links.length) return;
+    lab.links = links;
+    lab.updatedAt = device.updatedAt;
+  }
+
   private normalizeDevicePorts(value: unknown): DevicePort[] {
-    try { return parseDevicePorts(value); }
+    try { return parseDevicePorts(withDevicePortIds(value, randomUUID)); }
     catch (error) { throw new CatalogError(error instanceof Error ? error.message : "设备端口格式不正确"); }
   }
 
@@ -1193,7 +1268,7 @@ export class CatalogStore {
     });
   }
 
-  /** Every active product device appears as a node, with names resolved and stale references dropped. */
+  /** Every active product device appears as a node with its ports, names resolved and stale references dropped. */
   private physicalLabView(data: CatalogData, productId: string): PhysicalLab {
     const stored = data.physicalLabs.find((item) => item.productId === productId);
     const devices = data.deviceResources
@@ -1202,15 +1277,7 @@ export class CatalogStore {
     const storedNodes = new Map((stored?.nodes || []).map((node) => [node.id, node]));
     const platform = storedNodes.get(PLATFORM_NODE_ID);
     const nodes: LabNode[] = [
-      ...devices.map((device) => {
-        const node = storedNodes.get(device.id);
-        const ports = clone(node?.kind === "device" ? node.ports : []);
-        const portIds = new Set(ports.map((port) => port.id));
-        const controlIds = new Set(device.controlInterfaces.map((control) => control.id));
-        const controlPorts = Object.fromEntries(Object.entries(node?.kind === "device" ? node.controlPorts : {})
-          .filter(([controlId, portId]) => controlIds.has(controlId) && portIds.has(portId)));
-        return { id: device.id, kind: "device" as const, name: device.name, ports, controlPorts };
-      }),
+      ...devices.map(deviceLabNode),
       {
         id: PLATFORM_NODE_ID,
         kind: "platform",
@@ -1231,7 +1298,17 @@ export class CatalogStore {
     };
   }
 
-  private normalizePhysicalLab(data: CatalogData, productId: string, input: Record<string, unknown>): Omit<PhysicalLab, "updatedAt"> {
+  /**
+   * Checks a lab sent by the page or produced by assistant operations. Device ports belong to the device resources: the
+   * page cannot change them, so they are read from the devices; assistant operations can, and their edits come back in
+   * `devicePorts` for the caller to save. The returned lab holds only platform and external nodes.
+   */
+  private normalizePhysicalLab(
+    data: CatalogData,
+    productId: string,
+    input: Record<string, unknown>,
+    deviceEdits = false,
+  ): { lab: Omit<PhysicalLab, "updatedAt">; devicePorts: DevicePortEdits } {
     const devices = new Map(data.deviceResources
       .filter((device) => device.productId === productId && !device.archivedAt)
       .map((device) => [device.id, device]));
@@ -1246,6 +1323,7 @@ export class CatalogStore {
       if (kind === "device") {
         const device = devices.get(id);
         if (!device) throw new CatalogError("物理环境包含不存在或不属于当前产品的设备，请刷新后重试");
+        if (!deviceEdits) return deviceLabNode(device);
         name = device.name;
       } else if (kind === "platform") {
         if (id !== PLATFORM_NODE_ID) throw new CatalogError("平台节点标识不正确");
@@ -1264,12 +1342,12 @@ export class CatalogStore {
       const portNames = new Set<string>();
       const ports = value.ports.map((portItem): LabPort => {
         const port = recordValue(portItem);
-        const portName = requiredText(port.name, `“${name}”的端口名称`, 60);
+        const portName = requiredText(port.name, `“${name}”的端口名称`, 80);
         const portKind = optionalText(port.kind, 20) as LabPortKind;
         if (!LAB_PORT_KINDS.includes(portKind)) throw new CatalogError(`端口“${name} ${portName}”的类型不正确`);
         if (portNames.has(portName.toLowerCase())) throw new CatalogError(`“${name}”的端口“${portName}”重复`, 409);
         portNames.add(portName.toLowerCase());
-        return { id: optionalText(port.id, 100) || randomUUID(), name: portName, kind: portKind, note: optionalText(port.note, 200) };
+        return { id: optionalText(port.id, 100) || randomUUID(), name: portName, kind: portKind, note: optionalText(port.note, 1_000) };
       });
       if (new Set(ports.map((port) => port.id)).size !== ports.length) throw new CatalogError(`“${name}”的端口 ID 重复`);
       const portIds = new Set(ports.map((port) => port.id));
@@ -1322,7 +1400,8 @@ export class CatalogStore {
       return { id: optionalText(value.id, 100) || randomUUID(), a: a.end, b: b.end, role, note: optionalText(value.note, 300) };
     });
     if (new Set(links.map((link) => link.id)).size !== links.length) throw new CatalogError("连线 ID 重复");
-    return { productId, rules: optionalText(input.rules, 10_000), nodes, links };
+    const devicePorts: DevicePortEdits = new Map(nodes.filter((node) => node.kind === "device").map((node) => [node.id, { ports: node.ports, controlPorts: node.controlPorts }]));
+    return { lab: { productId, rules: optionalText(input.rules, 10_000), nodes: nodes.filter((node) => node.kind !== "device"), links }, devicePorts };
   }
 
   async getPhysicalLab(productId: string): Promise<PhysicalLab> {
@@ -1338,25 +1417,30 @@ export class CatalogStore {
       if (typeof input.baseUpdatedAt === "string" && input.baseUpdatedAt !== (current?.updatedAt || "")) {
         throw new CatalogError("物理环境已在其他地方修改，请刷新后重试", 409);
       }
-      const lab: PhysicalLab = { ...this.normalizePhysicalLab(data, productId, input), updatedAt: new Date().toISOString() };
+      const lab: PhysicalLab = { ...this.normalizePhysicalLab(data, productId, input).lab, updatedAt: new Date().toISOString() };
       if (index >= 0) data.physicalLabs[index] = lab;
       else data.physicalLabs.push(lab);
       return this.physicalLabView(data, productId);
     });
   }
 
-  /** Applies assistant operations to the current lab and words the result; nothing is saved. */
-  private evaluateLabChanges(data: CatalogData, productId: string, operations: LabOperation[]): { lab: Omit<PhysicalLab, "updatedAt">; changes: LabChange[] } {
+  /**
+   * Applies assistant operations to the current lab and words the result; nothing is saved. Port edits on device nodes
+   * come back as updated device resources.
+   */
+  private evaluateLabChanges(data: CatalogData, productId: string, operations: LabOperation[]): { lab: Omit<PhysicalLab, "updatedAt">; deviceResources: DeviceResource[]; changes: LabChange[] } {
     const before = this.physicalLabView(data, productId);
     const devices = data.deviceResources.filter((device) => device.productId === productId && !device.archivedAt);
-    const lab = this.normalizePhysicalLab(data, productId, { ...applyLabOperations(before, operations, devices) });
+    const { lab, devicePorts } = this.normalizePhysicalLab(data, productId, { ...applyLabOperations(before, operations, devices) }, true);
+    const deviceResources = withDevicePortEdits(data.deviceResources, devicePorts, new Date().toISOString());
     const after = this.physicalLabView({
       ...data,
+      deviceResources,
       physicalLabs: [...data.physicalLabs.filter((item) => item.productId !== productId), { ...lab, updatedAt: before.updatedAt }],
     }, productId);
     const changes = diffPhysicalLab(before, after, devices);
     if (!changes.length) throw new CatalogError("这些操作不会改变物理环境");
-    return { lab, changes };
+    return { lab, deviceResources, changes };
   }
 
   async previewPhysicalLabChanges(productId: string, operations: LabOperation[]): Promise<LabPreview> {
@@ -1369,12 +1453,13 @@ export class CatalogStore {
   async applyPhysicalLabChanges(productId: string, preview: LabPreview): Promise<LabChange[]> {
     return this.mutate((data) => {
       if (!data.products.some((item) => item.id === productId && !item.archivedAt)) throw new CatalogError("产品不存在", 404);
-      const { lab, changes } = this.evaluateLabChanges(data, productId, preview.operations);
+      const { lab, deviceResources, changes } = this.evaluateLabChanges(data, productId, preview.operations);
       if (JSON.stringify(changes) !== JSON.stringify(preview.changes)) throw new CatalogError("物理环境已变化，请让助手重新读取并生成预览", 409);
       const index = data.physicalLabs.findIndex((item) => item.productId === productId);
       const saved: PhysicalLab = { ...lab, updatedAt: new Date().toISOString() };
       if (index >= 0) data.physicalLabs[index] = saved;
       else data.physicalLabs.push(saved);
+      data.deviceResources = deviceResources;
       return changes;
     });
   }

@@ -164,6 +164,17 @@ test("draft patches preserve interface secrets and validate controlled form shap
   assert.throws(() => applyDraftPatch("device", draft, { controlInterfaces: [{ kind: "ssh", settings: { community: "public" } }] }), /不支持的字段/);
   assert.throws(() => applyDraftPatch("device", draft, { controlInterfaces: [{ kind: "rdp", settings: {} }] }), /控制方式不正确/);
   assert.throws(() => applyDraftPatch("device", draft, { types: ["TAU"] }), /不可修改字段/);
+  // The open device form sends its ports; proposed ports get IDs, and a method loses a port that is no longer there.
+  assert.deepEqual(normalizeAssistantContext({ page: "resources", title: "设备", assetKind: "device", draft: { ...draft, ports: [] } }).draft?.ports, []);
+  const withPorts = applyDraftPatch("device", { ...draft, ports: [] }, { ports: [{ name: "eth0", kind: "ethernet" }, { name: "console", kind: "serial" }] });
+  const ports = withPorts.ports as { id: string; name: string }[];
+  assert.deepEqual(ports.map((port) => port.name), ["eth0", "console"]);
+  assert.ok(ports.every((port) => port.id));
+  const bound = applyDraftPatch("device", withPorts, { controlInterfaces: [{ ...draft.controlInterfaces[0], portId: ports[0].id }] });
+  assert.equal((bound.controlInterfaces as { portId?: string }[])[0].portId, ports[0].id);
+  const unplugged = applyDraftPatch("device", bound, { ports: [ports[1]] });
+  assert.equal((unplugged.controlInterfaces as { portId?: string }[])[0].portId, undefined);
+  assert.throws(() => applyDraftPatch("device", draft, { ports: [{ name: "eth0", kind: "fiber" }] }), /字段 ports：端口“eth0”的类型不正确/);
   assert.throws(() => applyDraftPatch("case", {}, { steps: null }));
   assert.throws(() => applyDraftPatch("scenario", {}, { roles: [{ key: "DUT" }] }));
   assert.throws(() => applyDraftPatch("order", {}, { caseIds: [1] }));

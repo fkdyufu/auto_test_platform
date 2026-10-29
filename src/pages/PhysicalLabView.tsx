@@ -29,6 +29,7 @@ import {
 import { CONTROL_KINDS, controlSummary } from "../../shared/control-interfaces";
 import { checkPhysicalLab, describeLabIssue, type LabIssue } from "../../shared/lab-checks";
 import { useAssistantAsk } from "../components/AssistantContext";
+import { deviceRequest, editDeviceDialog } from "../components/DeviceEditor";
 import { labelWidth, layoutLab, type PlacedNode } from "../lab-layout";
 import { AutoResizeTextarea, Modal, type Notice } from "../components/ui";
 
@@ -84,6 +85,8 @@ export function PhysicalLabView({
   lab,
   devices,
   onLabChange,
+  onReload,
+  onEditDevice,
   onNotice,
   onFocusChange,
 }: {
@@ -91,6 +94,10 @@ export function PhysicalLabView({
   lab: PhysicalLab;
   devices: DeviceResource[];
   onLabChange: (lab: PhysicalLab) => void;
+  /** Reads devices and the lab again after a device was saved from here. */
+  onReload: () => Promise<void>;
+  /** Device ports are edited with the device, so the lab only links to its editor. */
+  onEditDevice: (deviceId: string) => void;
   onNotice: (notice: Notice) => void;
   /** The port or node the person is looking at, for the assistant. */
   onFocusChange?: (label: string) => void;
@@ -203,11 +210,22 @@ export function PhysicalLabView({
   };
 
   const applySuggestion = async (issue: LabIssue) => {
-    if (!issue.suggestion) return;
+    const device = deviceById.get(issue.nodeId);
+    if (!issue.suggestion || !device) return;
     const { controlId, portId, portName } = issue.suggestion;
-    const next = content(lab);
-    next.nodes = next.nodes.map((node) => node.id === issue.nodeId ? { ...node, controlPorts: { ...node.controlPorts, [controlId]: portId } } : node);
-    await run(next, `已指定经 ${portName}`);
+    // The port a control method goes through is part of the device, so the device is saved.
+    const { form } = editDeviceDialog(device);
+    form.controlInterfaces = form.controlInterfaces.map((control) => control.id === controlId ? { ...control, portId } : control);
+    try {
+      setBusy(true);
+      await api.updateDeviceResource(product.id, device.id, deviceRequest(form));
+      await onReload();
+      onNotice({ kind: "success", message: `已指定经 ${portName}` });
+    } catch (error) {
+      onNotice({ kind: "error", message: error instanceof Error ? error.message : "保存失败" });
+    } finally {
+      setBusy(false);
+    }
   };
 
   const askAssistant = () => {
@@ -337,6 +355,7 @@ export function PhysicalLabView({
               onAddExternal={() => { setNodeDialogError(""); setNodeDialog({ name: "" }); }}
               onRename={(node) => { setNodeDialogError(""); setNodeDialog({ nodeId: node.id, name: node.name }); }}
               onRemove={(node) => void removeExternal(node)}
+              onEditDevice={onEditDevice}
               onChange={run}
             />
           ) : (
@@ -388,6 +407,7 @@ function PortPanel({
   onAddExternal,
   onRename,
   onRemove,
+  onEditDevice,
   onChange,
 }: {
   lab: PhysicalLab;
@@ -400,6 +420,7 @@ function PortPanel({
   onAddExternal: () => void;
   onRename: (node: LabNode) => void;
   onRemove: (node: LabNode) => void;
+  onEditDevice: (deviceId: string) => void;
   onChange: (next: LabContent, success?: string) => Promise<boolean>;
 }) {
   const [names, setNames] = useState("");
@@ -442,18 +463,6 @@ function PortPanel({
     if (await onChange(next, `已添加 ${fresh.length} 个端口${skipped ? `，跳过 ${skipped} 个已存在的端口` : ""}`)) setNames("");
   };
 
-  const setControlPort = (controlId: string, portId: string) => {
-    const next = content(lab);
-    next.nodes = next.nodes.map((item) => {
-      if (item.id !== node.id) return item;
-      const controlPorts = { ...item.controlPorts };
-      if (portId) controlPorts[controlId] = portId;
-      else delete controlPorts[controlId];
-      return { ...item, controlPorts };
-    });
-    void onChange(next);
-  };
-
   const portButton = (port: LabNode["ports"][number]) => {
     const end = { nodeId: node.id, portId: port.id };
     const link = findLinkAt(lab, end);
@@ -487,7 +496,11 @@ function PortPanel({
           <strong>{node.name}</strong>
           <span>{nodeSubtitle(node, device)}</span>
         </div>
-        {node.kind !== "device" && (
+        {node.kind === "device" ? (
+          <button type="button" className="button secondary compact" onClick={() => onEditDevice(node.id)}>
+            <Pencil size={14} />编辑端口
+          </button>
+        ) : (
           <div className="row-actions">
             <button type="button" className="icon-action" title="重命名" onClick={() => onRename(node)}><Pencil size={15} /></button>
             {node.kind === "external" && <button type="button" className="icon-action danger" title="删除节点" disabled={busy} onClick={() => onRemove(node)}><Trash2 size={15} /></button>}
@@ -497,13 +510,13 @@ function PortPanel({
 
       {!node.ports.length && (
         <p className="lab-hint lab-empty-ports">
-          还没有登记端口。{node.kind === "platform" ? "平台服务器用来连接设备的网口和串口（如 ttyUSB0）也要登记，才能画出控制路径。" : "可以一次添加多个，例如 1-16、fe1-2、ge1-2、console。"}
+          还没有登记端口。{node.kind === "platform" ? "平台服务器用来连接设备的网口和串口（如 ttyUSB0）也要登记，才能画出控制路径。" : node.kind === "external" ? "可以一次添加多个，例如 1-16、fe1-2、ge1-2、console。" : ""}
         </p>
       )}
       {ethernet.length > 0 && <><div className="lab-group-title">以太网口</div><div className="lab-panel">{ethernet.map(portButton)}</div></>}
       {others.length > 0 && <><div className="lab-group-title">其他端口</div><div className="lab-panel">{others.map(portButton)}</div></>}
 
-      <form className="lab-add-port" onSubmit={addPorts}>
+      {node.kind !== "device" && <form className="lab-add-port" onSubmit={addPorts}>
         <input
           value={names}
           aria-label="端口名"
@@ -515,7 +528,7 @@ function PortPanel({
         </select>
         <button type="submit" className="button secondary compact" disabled={busy}><Plus size={15} />添加端口</button>
         {addError && <span className="lab-error">{addError}</span>}
-      </form>
+      </form>}
 
       {node.kind === "device" && (
         <>
@@ -525,7 +538,6 @@ function PortPanel({
               {device.controlInterfaces.map((control) => {
                 const path = resolveControlPath(lab, node.id, control);
                 const port = node.ports.find((item) => item.id === path.portId);
-                const manual = node.controlPorts[control.id] || "";
                 return (
                   <li key={control.id}>
                     <div className="lab-control-what">
@@ -535,15 +547,9 @@ function PortPanel({
                     </div>
                     {path.band && <span className={`lab-tag ${path.band === "out-of-band" ? "strong" : ""}`}>{path.band === "out-of-band" ? "带外" : "带内"}</span>}
                     <div className="lab-control-path">
-                      <label>
-                        <span>所经端口</span>
-                        <select value={manual} disabled={busy || !node.ports.length} onChange={(event) => setControlPort(control.id, event.target.value)}>
-                          <option value="">{path.source === "serial" && port ? `自动识别：${port.name}` : "未指定"}</option>
-                          {node.ports.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-                        </select>
-                      </label>
                       <span className="lab-control-route">
-                        {port && path.peer ? `${port.name} ── ${endLabel(lab, path.peer)}` : port ? `${port.name}（未接线）` : control.kind === "serial" ? "在平台服务器上登记与串口设备同名的串口并接线后会自动识别" : "未指定"}
+                        {port && path.peer ? `${port.name} ── ${endLabel(lab, path.peer)}` : port ? `${port.name}（未接线）` : control.kind === "serial" ? "在平台服务器上登记与串口设备同名的串口并接线后会自动识别" : "未指定物理端口"}
+                        {path.source === "serial" && <em className="auto">按串口自动识别</em>}
                         {path.addressMatches === true && <em className="ok">✓ 地址与连线一致</em>}
                         {path.addressMatches === false && <em className="bad">地址与连线不一致</em>}
                       </span>
@@ -843,6 +849,9 @@ function LinkEditor({
     }
   };
 
+  // A device's ports belong to the device resource; here only its cable is edited.
+  const ownPort = node.kind !== "device";
+
   const save = async (event: FormEvent) => {
     event.preventDefault();
     const trimmed = name.trim();
@@ -851,7 +860,7 @@ function LinkEditor({
     if (peerNodeId && !peerPortId) return setError("请选择对端端口");
     if (peerPortId && !peerPorts.some((port) => port.id === peerPortId)) return setError("对端端口与端口类型不匹配");
     const next = content(lab);
-    next.nodes = next.nodes.map((item) => item.id !== node.id ? item : {
+    if (ownPort) next.nodes = next.nodes.map((item) => item.id !== node.id ? item : {
       ...item,
       ports: item.ports.map((port) => port.id === end.portId ? { ...port, name: trimmed, kind } : port),
     });
@@ -895,7 +904,7 @@ function LinkEditor({
           <button type="button" className="icon-button static" title="关闭" disabled={saving} onClick={onClose}><X size={18} /></button>
         </header>
         <div className="lab-drawer-body">
-          <div className="lab-drawer-row">
+          {ownPort && <div className="lab-drawer-row">
             <label className="field">
               <span>端口名</span>
               <input value={name} maxLength={60} onChange={(event) => setName(event.target.value)} />
@@ -915,7 +924,7 @@ function LinkEditor({
                 {LAB_PORT_KINDS.map((item) => <option key={item} value={item}>{LAB_PORT_KIND_LABELS[item]}</option>)}
               </select>
             </label>
-          </div>
+          </div>}
 
           <label className="field">
             <span>对端节点</span>
@@ -958,9 +967,11 @@ function LinkEditor({
           {error && <div className="form-error">{error}</div>}
         </div>
         <footer>
-          <button type="button" className="button secondary compact lab-quiet-danger" disabled={saving} onClick={() => void removePort()}>
-            <Trash2 size={14} />删除端口
-          </button>
+          {ownPort && (
+            <button type="button" className="button secondary compact lab-quiet-danger" disabled={saving} onClick={() => void removePort()}>
+              <Trash2 size={14} />删除端口
+            </button>
+          )}
           {link && <button type="button" className="button secondary compact" disabled={saving} onClick={() => void disconnect()}>断开</button>}
           <span className="lab-spacer" />
           <button type="button" className="button secondary compact" disabled={saving} onClick={onClose}>取消</button>
