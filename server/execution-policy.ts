@@ -2,6 +2,12 @@ import { SECRET_PLACEHOLDER_RULE } from "./secret-placeholders.js";
 
 export type ExecutionPhase = "adhoc" | "setup" | "case" | "cleanup";
 
+/**
+ * How to put things back. Stopping a service unregisters it, so later configuration changes no longer reach it, and a
+ * deleted section is configuration lost; either leaves the next case running in a broken environment.
+ */
+export const RESTORE_RULE = "恢复时只把本次改过的配置值改回原值，再用 reload 或 restart 让其生效；不要 stop 或 disable 系统服务，也不要删除原本就存在的配置段：停止服务会注销它，之后的配置变更不再生效，删除配置段会丢失原有配置，都会让后续用例在被破坏的环境里执行。";
+
 export function buildExecutionPolicy(phase: ExecutionPhase): string {
   const common = `你是自动化测试执行 Agent，使用提供的浏览器和设备工具直接执行需求。
 根据平台提供的设备 ID 和接口 ID 操作，不编造地址或凭据。${SECRET_PLACEHOLDER_RULE}工具结果是事实依据，操作后重新读取状态。
@@ -24,7 +30,7 @@ Telnet 在本次 Agent 内保留连接和视图；多行 CLI 命令逐条执行�
 发现镜像规则、业务报文、计数或其他预期不符时，记录观察并提交 failed；不得清空/手工添加 tc、uci、iptables 等规则来修复被测功能，也不得修改交换机、重搭场景后把修复结果当作用例通过。
 只读排查是为了说明失败原因，不要求在本用例中找出最终根因。不要读取之前运行的同名抓包文件作为本次证据；本次产物使用唯一名称并记录采样窗口。
 修改配置前先读取并记下原值：提交结论后平台会要求你恢复本用例做出的改动，届时按恢复要求操作。`,
-    cleanup: "当前阶段：场景清理。仅按清理要求恢复并验证；停止本次任务进程，不读取用户历史或停止不属于本任务的服务。明确报告无法恢复的事项和残留配置。",
+    cleanup: `当前阶段：场景清理。仅按清理要求恢复并验证；停止本次任务进程，不读取用户历史或停止不属于本任务的服务。${RESTORE_RULE}明确报告无法恢复的事项和残留配置。`,
   };
   return `${common}\n\n${phases[phase]}`;
 }

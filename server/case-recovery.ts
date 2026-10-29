@@ -1,10 +1,11 @@
 import { Type } from "typebox";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import type { CaseRecovery } from "../shared/test-result.js";
+import { RESTORE_RULE } from "./execution-policy.js";
 
 export const RECOVERY_SUMMARY_MAX_LENGTH = 300;
 
-export const CASE_RECOVERY_REQUIREMENT = `测试结论已经提交，不能再修改。现在恢复本用例执行期间做出的改动，让后续用例从场景搭建后的状态开始：
+export const CASE_RECOVERY_REQUIREMENT = `测试结论已经提交，不能再修改。现在恢复本用例执行期间做出的改动，让后续用例从场景搭建后的状态开始。${RESTORE_RULE}
 1. 撤销本用例修改过的设备和页面配置，包括为满足前置条件所做的准备，恢复为修改前的值；
 2. 停止本用例启动并记录了 PID 的流量、抓包等进程；
 3. 恢复后读回确认。
