@@ -2,8 +2,6 @@ import { useEffect, useState, type FormEvent } from "react";
 import {
   Cable,
   ChevronLeft,
-  Layers3,
-  Library,
   Lock,
   Network,
   Pencil,
@@ -19,8 +17,6 @@ import {
   type DeviceResourceInput,
   type PhysicalLab,
   type ProductSummary,
-  type ScenarioParameter,
-  type ScenarioRole,
   type TestCase,
   type TestScenario,
   type TestScenarioInput,
@@ -31,7 +27,7 @@ import { CONTROL_KINDS, controlSummary } from "../../shared/control-interfaces";
 import { DeviceEditor, DeviceTypeIcon, deviceFormProblems, deviceRequest, editDeviceDialog, newDeviceDialog, type DeviceDialogState } from "../components/DeviceEditor";
 import { endLabel } from "../../shared/physical-lab";
 import { PhysicalLabView } from "./PhysicalLabView";
-import { ScenarioRolePorts, uncabledScenarioPorts } from "../components/ScenarioRolePorts";
+import { ScenarioTopologyEditor, scenarioTopologyProblems } from "../components/ScenarioTopologyEditor";
 
 type ResourceTab = "devices" | "lab" | "scenarios";
 
@@ -68,7 +64,8 @@ function emptyScenario(): TestScenarioInput {
     name: "",
     category: "",
     description: "",
-    roles: [{ id: newId(), key: "", deviceId: "" }],
+    roles: [{ id: newId(), key: "R1", deviceId: "" }],
+    segments: [],
     parameters: [],
     setupInstructions: "",
     verificationInstructions: "",
@@ -82,6 +79,7 @@ function scenarioInput(scenario: TestScenario): TestScenarioInput {
     category: scenario.category,
     description: scenario.description,
     roles: structuredClone(scenario.roles),
+    segments: structuredClone(scenario.segments || []),
     parameters: structuredClone(scenario.parameters),
     setupInstructions: scenario.setupInstructions,
     verificationInstructions: scenario.verificationInstructions,
@@ -195,11 +193,10 @@ export function ResourcesPage({ product }: { product: ProductSummary }) {
   const cablesOf = (deviceId?: string) => new Map(lab && deviceId ? lab.links.flatMap((link) => [[link.a, link.b], [link.b, link.a]])
     .filter(([near]) => near.nodeId === deviceId)
     .map(([near, far]) => [near.portId, endLabel(lab, far)] as const) : []);
-  const scenarioPortWarning = (scenario: TestScenario) => scenario.roles
-    .map((role) => [role.key, uncabledScenarioPorts(lab, role, devices.find((device) => device.id === role.deviceId))] as const)
-    .filter(([, ports]) => ports.length)
-    .map(([key, ports]) => `${key} 的 ${ports.join("、")} 未接线`)
-    .join("；");
+  const scenarioWarning = (scenario: TestScenario) => {
+    const problems = scenarioTopologyProblems(scenario, devices, lab);
+    return problems.length ? `拓扑有 ${problems.length} 个问题，执行前需要处理：${problems[0].text}` : "";
+  };
 
   return (
     <div className="page resource-config-page">
@@ -294,7 +291,7 @@ export function ResourcesPage({ product }: { product: ProductSummary }) {
               <tbody>
                 {scenarios.map((scenario) => (
                   <tr key={scenario.id}>
-                    <td className="name-cell"><strong>{scenario.name}{scenarioPortWarning(scenario) && <i className="port-warning-dot" title={scenarioPortWarning(scenario)} />}</strong>{scenario.isDefault && <small>系统默认</small>}</td>
+                    <td className="name-cell"><strong>{scenario.name}{scenarioWarning(scenario) && <i className="port-warning-dot" title={scenarioWarning(scenario)} />}</strong>{scenario.isDefault && <small>系统默认</small>}</td>
                     <td><span className="category-label">{scenario.category}</span></td>
                     <td>{scenario.roles.length}<span className="cell-subtext">{scenario.roles.map((role) => `${role.key} → ${role.deviceId ? deviceName(role.deviceId) : "待绑定"}`).join("、")}</span></td>
                     <td>{scenario.parameters.length}</td>
@@ -343,6 +340,7 @@ export function ResourcesPage({ product }: { product: ProductSummary }) {
         ) : (
           <Modal
             title={`${dialog.id ? "编辑" : "新增"}测试场景`}
+            className="scenario-modal"
             onClose={() => setDialog(null)}
             onSubmit={save}
             submitting={submitting}
@@ -373,8 +371,6 @@ function ScenarioForm({
 }) {
   const [caseQuery, setCaseQuery] = useState("");
   const update = (value: Partial<TestScenarioInput>) => setDialog({ ...dialog, form: { ...dialog.form, ...value } });
-  const updateRole = (id: string, value: Partial<ScenarioRole>) => update({ roles: dialog.form.roles.map((item) => item.id === id ? { ...item, ...value } : item) });
-  const updateParameter = (id: string, value: Partial<ScenarioParameter>) => update({ parameters: dialog.form.parameters.map((item) => item.id === id ? { ...item, ...value } : item) });
   const normalizedQuery = caseQuery.trim().toLowerCase();
   const visibleCases = normalizedQuery
     ? testCases.filter((testCase) => testCase.name.toLowerCase().includes(normalizedQuery)
@@ -406,47 +402,14 @@ function ScenarioForm({
       <label className="field"><span>功能分类</span><input disabled={isDefault} value={dialog.form.category} placeholder="例如 VRRP、OSPF" onChange={(event) => update({ category: event.target.value })} /></label>
       <label className="field full-width"><span>场景说明</span><AutoResizeTextarea rows={2} value={dialog.form.description} onChange={(event) => update({ description: event.target.value })} /></label>
     </div>
-    <div className="form-list-heading"><div><Server size={16} /><strong>设备角色</strong></div><button type="button" className="button secondary compact" onClick={() => update({ roles: [...dialog.form.roles, { id: newId(), key: "", deviceId: "" }] })}><Plus size={15} />添加角色</button></div>
-    <div className="structured-list">
-      {dialog.form.roles.map((item) => <div className="structured-row role-row" key={item.id}>
-        <label><span>角色标识</span><input required value={item.key} placeholder="DUT" onChange={(event) => updateRole(item.id, { key: event.target.value })} /></label>
-        <label><span>绑定设备</span><select required value={item.deviceId} onChange={(event) => updateRole(item.id, { deviceId: event.target.value, portIds: [] })}>
-          <option value="">请选择设备</option>
-          {item.deviceId && !devices.some((device) => device.id === item.deviceId) && <option value={item.deviceId} disabled>设备已删除或不可用</option>}
-          {devices.map((device) => <option key={device.id} value={device.id} disabled={dialog.form.roles.some((role) => role.id !== item.id && role.deviceId === device.id)}>{device.name}</option>)}
-        </select></label>
-        <button type="button" className="icon-action danger row-remove" title="删除角色" onClick={() => update({ roles: dialog.form.roles.filter((role) => role.id !== item.id) })}><Trash2 size={16} /></button>
-        {devices.find((device) => device.id === item.deviceId) && (
-          <ScenarioRolePorts
-            role={item}
-            roles={dialog.form.roles}
-            device={devices.find((device) => device.id === item.deviceId)!}
-            lab={lab}
-            onChange={(portIds) => updateRole(item.id, { portIds })}
-          />
-        )}
-      </div>)}
-    </div>
-    <div className="form-list-heading"><div><Layers3 size={16} /><strong>场景参数</strong></div><button type="button" className="button secondary compact" onClick={() => update({ parameters: [...dialog.form.parameters, { id: newId(), key: "", name: "", defaultValue: "" }] })}><Plus size={15} />添加参数</button></div>
-    <div className="structured-list">
-      {dialog.form.parameters.map((item) => <div className="structured-row parameter-row" key={item.id}>
-        <label><span>参数标识</span><input value={item.key} placeholder="virtual_ip" onChange={(event) => updateParameter(item.id, { key: event.target.value })} /></label>
-        <label><span>参数名称</span><input value={item.name} placeholder="虚拟 IP" onChange={(event) => updateParameter(item.id, { name: event.target.value })} /></label>
-        <label className="grow"><span>默认值</span><input value={item.defaultValue} onChange={(event) => updateParameter(item.id, { defaultValue: event.target.value })} /></label>
-        <button type="button" className="icon-action danger row-remove" title="删除参数" onClick={() => update({ parameters: dialog.form.parameters.filter((parameter) => parameter.id !== item.id) })}><Trash2 size={16} /></button>
-      </div>)}
-      {!dialog.form.parameters.length && <div className="structured-empty">暂无场景参数</div>}
-    </div>
-    {!isDefault && <div className="modal-grid instruction-grid">
-      <label className="field full-width"><span>场景搭建要求</span><AutoResizeTextarea rows={4} value={dialog.form.setupInstructions} onChange={(event) => update({ setupInstructions: event.target.value })} /></label>
-      <label className="field full-width"><span>场景验证要求</span><AutoResizeTextarea rows={3} value={dialog.form.verificationInstructions} onChange={(event) => update({ verificationInstructions: event.target.value })} /></label>
-      <label className="field full-width"><span>场景清理要求</span><AutoResizeTextarea rows={3} value={dialog.form.cleanupInstructions} onChange={(event) => update({ cleanupInstructions: event.target.value })} /></label>
-    </div>}
-    {dialog.id && <>
-      <div className="form-list-heading scenario-case-heading">
-        <div><Library size={16} /><strong>关联用例</strong></div>
-        <small>已选择 {dialog.caseIds.length} / {testCases.length}</small>
-      </div>
+    <ScenarioTopologyEditor
+      form={dialog.form}
+      onChange={update}
+      isDefault={isDefault}
+      devices={devices}
+      lab={lab}
+      cases={dialog.id ? <>
+      <div className="scenario-case-count">已选择 {dialog.caseIds.length} / {testCases.length}</div>
       <div className="scenario-case-controls">
         <label className="field">
           <span>筛选用例</span>
@@ -474,6 +437,7 @@ function ScenarioForm({
         ))}
         {!visibleCases.length && <div className="list-empty">没有匹配的测试用例</div>}
       </div>
-    </>}
+      </> : undefined}
+    />
   </>;
 }

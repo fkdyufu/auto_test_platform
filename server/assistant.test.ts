@@ -180,12 +180,16 @@ test("draft patches preserve interface secrets and validate controlled form shap
   assert.throws(() => applyDraftPatch("order", {}, { caseIds: [1] }));
 });
 
-test("scenario draft roles can carry the ports the scenario uses", () => {
-  const draft = { name: "镜像", roles: [{ id: "r1", key: "DUT", deviceId: "tau" }] };
-  const next = applyDraftPatch("scenario", draft, { roles: [{ id: "r1", key: "DUT", deviceId: "tau", portIds: ["fe1-id", "ge1-id"] }] });
-  assert.deepEqual((next.roles as Array<Record<string, unknown>>)[0].portIds, ["fe1-id", "ge1-id"]);
-  assert.throws(() => applyDraftPatch("scenario", draft, { roles: [{ key: "DUT", deviceId: "tau", portIds: "fe1-id" }] }), /portIds 必须是端口 ID 数组/);
-  assert.throws(() => applyDraftPatch("scenario", draft, { parameters: [{ key: "vip", name: "虚拟 IP", defaultValue: "", portIds: [] }] }), /缺少字段或类型不正确/);
+test("scenario drafts take a logical topology, with ids for new segments and interfaces", () => {
+  const draft = { name: "镜像", roles: [{ id: "r1", key: "TAU", deviceId: "tau" }], segments: [] };
+  const next = applyDraftPatch("scenario", draft, { segments: [{ name: "镜像", interfaces: [{ roleId: "r1", name: "fe2", portId: "fe2-id" }] }] });
+  const [segment] = next.segments as Array<{ id: string; vlan: string; interfaces: Array<Record<string, string>> }>;
+  assert.ok(segment.id);
+  assert.equal(segment.vlan, "");
+  assert.deepEqual({ ...segment.interfaces[0], id: "" }, { id: "", roleId: "r1", name: "fe2", address: "", portId: "fe2-id" });
+  assert.throws(() => applyDraftPatch("scenario", draft, { segments: [{ name: "镜像", interfaces: [{ roleId: "r1", name: "fe2", port: "FE2" }] }] }), /网段接口包含未知字段 port/);
+  assert.throws(() => applyDraftPatch("scenario", draft, { segments: [{ name: "镜像" }] }), /interfaces 必须是数组/);
+  assert.throws(() => applyDraftPatch("scenario", draft, { roles: [{ key: "TAU", deviceId: "tau", portIds: [] }] }), /缺少字段或类型不正确/);
 });
 
 test("assistant updates paired rows in both saved cases and unsaved drafts", async (t) => {

@@ -13,6 +13,7 @@ const devices: DeviceResource[] = ["dut", "src", "unused"].map((id) => ({
 const scenario: TestScenario = {
   id: "scene", productId: "product", isDefault: false, name: "场景", category: "基础", description: "",
   roles: [{ id: "r1", key: "DUT", deviceId: "dut" }, { id: "r2", key: "src", deviceId: "src" }],
+  segments: [],
   parameters: [], setupInstructions: "配置", verificationInstructions: "检查", cleanupInstructions: "", createdAt: "", updatedAt: "",
 };
 const run: ScenarioRun = {

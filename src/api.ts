@@ -5,6 +5,7 @@ import type { LabCable, PhysicalLab } from "../shared/physical-lab";
 import type { ControlKind, PublicControlInterface } from "../shared/control-interfaces";
 import type { DeviceTemplateId } from "../shared/device-templates";
 import type { DevicePort } from "../shared/device-ports";
+import type { ScenarioSegment } from "../shared/scenario-topology";
 export type { DevicePort } from "../shared/device-ports";
 export type { ControlKind, PublicControlInterface } from "../shared/control-interfaces";
 export type { DeviceTemplateId } from "../shared/device-templates";
@@ -161,8 +162,9 @@ export interface ScenarioRole {
   id: string;
   key: string;
   deviceId: string;
-  portIds?: string[];
 }
+
+export type { ScenarioInterface, ScenarioSegment } from "../shared/scenario-topology";
 
 export interface ScenarioParameter {
   id: string;
@@ -179,6 +181,7 @@ export interface TestScenario {
   category: string;
   description: string;
   roles: ScenarioRole[];
+  segments: ScenarioSegment[];
   parameters: ScenarioParameter[];
   setupInstructions: string;
   verificationInstructions: string;

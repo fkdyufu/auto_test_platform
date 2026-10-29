@@ -34,6 +34,7 @@ import {
 } from "../shared/control-interfaces.js";
 import { deviceTemplateName, isDeviceTemplateId, templateFromLegacyTypes, type DeviceTemplateId } from "../shared/device-templates.js";
 import { parseDevicePorts, withDevicePortIds, type DevicePort } from "../shared/device-ports.js";
+import { analyzeScenarioTopology, ipv4ToNumber, isVlanId, parseSubnet, topologyProblems, type ScenarioSegment } from "../shared/scenario-topology.js";
 
 export type { PhysicalLab } from "../shared/physical-lab.js";
 export type { ControlInterface, ControlKind, PublicControlInterface } from "../shared/control-interfaces.js";
@@ -108,8 +109,6 @@ export interface ScenarioRole {
   id: string;
   key: string;
   deviceId: string;
-  /** Ports of the bound device the scenario uses; their cables are read from the lab. */
-  portIds?: string[];
 }
 
 export interface ScenarioParameter {
@@ -127,6 +126,8 @@ export interface TestScenario {
   category: string;
   description: string;
   roles: ScenarioRole[];
+  /** The logical topology: which role interfaces share a layer-2 segment, their addresses and device ports. */
+  segments: ScenarioSegment[];
   parameters: ScenarioParameter[];
   setupInstructions: string;
   verificationInstructions: string;
@@ -213,7 +214,7 @@ export interface TestRun {
 type StoredPhysicalLab = Omit<PhysicalLab, "links"> & { links: LabCable[] };
 
 interface CatalogData {
-  version: 16;
+  version: 17;
   products: Product[];
   testCases: TestCase[];
   deviceResources: DeviceResource[];
@@ -273,6 +274,8 @@ export interface TestOrderExecutionContext {
   devices: DeviceResource[];
   scenarios: TestScenario[];
   physicalLab?: PhysicalLab;
+  /** Every device of the product, for tracing a scenario's segments through switches that are not roles. */
+  labDevices?: DeviceResource[];
 }
 
 export interface TestRunReportContext {
@@ -400,14 +403,16 @@ function withDevicePortEdits(devices: DeviceResource[], edits: DevicePortEdits, 
   });
 }
 
-/** Scenarios forget ports their devices no longer have, so a removed port never blocks saving a scenario. */
+/** Scenario interfaces let go of ports their devices no longer have, so a removed port never blocks saving a scenario. */
 function dropRemovedScenarioPorts(data: CatalogData): void {
   const portIds = new Map(data.deviceResources.map((device) => [device.id, new Set((device.ports || []).map((port) => port.id))]));
   for (const scenario of data.testScenarios) {
-    scenario.roles = scenario.roles.map(({ portIds: picked, ...role }) => {
-      const kept = (picked || []).filter((portId) => portIds.get(role.deviceId)?.has(portId));
-      return kept.length ? { ...role, portIds: kept } : role;
-    });
+    const deviceOf = new Map(scenario.roles.map((role) => [role.id, role.deviceId]));
+    for (const segment of scenario.segments) {
+      for (const item of segment.interfaces) {
+        if (item.portId && !portIds.get(deviceOf.get(item.roleId) || "")?.has(item.portId)) item.portId = "";
+      }
+    }
   }
 }
 
@@ -452,6 +457,18 @@ function publicRun(run: TestRun): TestRun {
   return rest;
 }
 
+/**
+ * A scenario without a topology is described by its texts alone, so preparation and checks are required. With one,
+ * the platform sets up and checks the segments, and the texts hold only what it cannot work out.
+ */
+function scenarioTexts(input: Record<string, unknown>, hasTopology: boolean): Pick<TestScenario, "setupInstructions" | "verificationInstructions" | "cleanupInstructions"> {
+  return {
+    setupInstructions: hasTopology ? optionalText(input.setupInstructions, 20_000) : requiredText(input.setupInstructions, "场景准备", 20_000),
+    verificationInstructions: hasTopology ? optionalText(input.verificationInstructions, 10_000) : requiredText(input.verificationInstructions, "场景检查", 10_000),
+    cleanupInstructions: optionalText(input.cleanupInstructions, 10_000),
+  };
+}
+
 function defaultScenarioId(productId: string): string {
   return `default-scenario-${productId}`;
 }
@@ -465,6 +482,7 @@ function createDefaultScenario(product: Product, timestamp = new Date().toISOStr
     category: "默认",
     description: "不执行额外的场景搭建，直接使用绑定设备的当前配置执行用例。",
     roles: [],
+    segments: [],
     parameters: [],
     setupInstructions: "",
     verificationInstructions: "确认用例所需设备及其控制接口可用。",
@@ -485,7 +503,7 @@ function defaultData(): CatalogData {
     updatedAt: timestamp,
   }));
   return {
-    version: 16,
+    version: 17,
     products,
     testCases: [],
     deviceResources: [],
@@ -518,7 +536,7 @@ export class CatalogStore {
     try {
       const original = await readFile(this.filePath, "utf8");
       const data = JSON.parse(original) as { version?: number };
-      if (typeof data.version === "number" && data.version >= 1 && data.version < 16) {
+      if (typeof data.version === "number" && data.version >= 1 && data.version < 17) {
         try {
           await writeFile(`${this.filePath}.v${data.version}.bak`, original, { flag: "wx", mode: 0o600 });
         } catch (error) {
@@ -536,13 +554,13 @@ export class CatalogStore {
     this.initializePromise ??= this.initialize();
     await this.initializePromise;
     const data = JSON.parse(await readFile(this.filePath, "utf8")) as CatalogData & { version: number };
-    if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16].includes(data.version) || !Array.isArray(data.products) || !Array.isArray(data.testCases)) {
+    if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17].includes(data.version) || !Array.isArray(data.products) || !Array.isArray(data.testCases)) {
       throw new CatalogError("业务数据文件格式不正确", 500);
     }
     const sourceVersion = data.version;
     const legacyData = data as typeof data & { labEnvironments?: LegacyPhysicalEnvironment[]; physicalEnvironments?: LegacyPhysicalEnvironment[] };
     let physicalEnvironments = legacyData.physicalEnvironments ?? legacyData.labEnvironments ?? [];
-    data.version = 16;
+    data.version = 17;
     data.deviceResources ??= [];
     data.physicalLabs = Array.isArray(data.physicalLabs) ? data.physicalLabs : [];
     delete legacyData.physicalEnvironments;
@@ -588,8 +606,9 @@ export class CatalogStore {
         id: role.id,
         key: role.key,
         deviceId: typeof role.deviceId === "string" ? role.deviceId : "",
-        ...(Array.isArray(role.portIds) && role.portIds.length ? { portIds: role.portIds.filter((portId) => typeof portId === "string") } : {}),
       })),
+      // Before catalog version 17 a scenario had no logical topology, only text.
+      segments: Array.isArray(scenario.segments) ? scenario.segments : [],
     }));
     data.products.forEach((product) => {
       if (!data.testScenarios.some((scenario) => scenario.productId === product.id && scenario.isDefault)) {
@@ -787,7 +806,7 @@ export class CatalogStore {
     const fields: Record<AssetKind, string[]> = {
       case: ["name", "scenarioId", "precondition", "steps", "expectedResult", "stepRows"],
       device: ["name", "template", "description", "ports", "controlInterfaces"],
-      scenario: ["name", "category", "description", "roles", "parameters", "setupInstructions", "verificationInstructions", "cleanupInstructions", "caseIds"],
+      scenario: ["name", "category", "description", "roles", "segments", "parameters", "setupInstructions", "verificationInstructions", "cleanupInstructions", "caseIds"],
       order: ["name", "description", "caseIds"],
     };
     for (const change of changes) {
@@ -1492,13 +1511,10 @@ export class CatalogStore {
       const input = recordValue(item);
       const key = requiredText(input.key, "角色标识", 80);
       if (!/^[a-z][a-z0-9_-]*$/i.test(key)) throw new CatalogError("角色标识只能包含字母、数字、下划线和连字符");
-      const portIds = input.portIds === undefined ? [] : input.portIds;
-      if (!Array.isArray(portIds) || portIds.length > 500 || portIds.some((portId) => typeof portId !== "string" || !portId)) throw new CatalogError(`角色“${key}”的端口格式不正确`);
       return {
         id: optionalText(input.id, 100) || randomUUID(),
         key,
         deviceId: requiredText(input.deviceId, "绑定设备", 100),
-        ...(portIds.length ? { portIds: [...new Set(portIds as string[])] } : {}),
       };
     });
     if (new Set(roles.map((item) => item.key.toLowerCase())).size !== roles.length) throw new CatalogError("角色标识不能重复");
@@ -1506,11 +1522,46 @@ export class CatalogStore {
     if (new Set(roles.map((item) => item.deviceId)).size !== roles.length) throw new CatalogError("同一场景不能重复绑定设备");
     const deviceIds = new Set(data.deviceResources.filter((device) => device.productId === productId && !device.archivedAt).map((device) => device.id));
     if (roles.some((role) => !deviceIds.has(role.deviceId))) throw new CatalogError("绑定设备不属于当前产品或不存在");
-    for (const role of roles) {
-      const ports = new Set((data.deviceResources.find((device) => device.id === role.deviceId)?.ports || []).map((port) => port.id));
-      if (role.portIds?.some((portId) => !ports.has(portId))) throw new CatalogError(`角色“${role.key}”选择的端口不属于绑定的设备，请重新选择`);
-    }
     return roles;
+  }
+
+  /**
+   * Checks the shape of the logical topology: names, VLANs, address formats and that each interface belongs to a role
+   * and maps to a port of that role's device. Whether the wiring can carry it is checked when a run is created.
+   */
+  private normalizeScenarioSegments(data: CatalogData, value: unknown, roles: ScenarioRole[]): ScenarioSegment[] {
+    if (value === undefined) return [];
+    if (!Array.isArray(value) || value.length > 50) throw new CatalogError("网段格式不正确，且不能超过 50 个");
+    const roleById = new Map(roles.map((role) => [role.id, role]));
+    const segmentNames = new Set<string>();
+    const segments = value.map((item): ScenarioSegment => {
+      const input = recordValue(item);
+      const name = requiredText(input.name, "网段名称", 40);
+      if (segmentNames.has(name.toLowerCase())) throw new CatalogError(`网段名称“${name}”重复`);
+      segmentNames.add(name.toLowerCase());
+      const vlan = optionalText(input.vlan, 10);
+      if (vlan && !isVlanId(vlan)) throw new CatalogError(`网段“${name}”的 VLAN 须为 1–4094`);
+      const subnet = optionalText(input.subnet, 40);
+      if (subnet && !parseSubnet(subnet)) throw new CatalogError(`网段“${name}”的地址范围格式应为 192.168.181.0/24`);
+      if (!Array.isArray(input.interfaces) || input.interfaces.length > 50) throw new CatalogError(`网段“${name}”的接口格式不正确，且不能超过 50 个`);
+      const interfaces = input.interfaces.map((entry) => {
+        const value = recordValue(entry);
+        const role = roleById.get(optionalText(value.roleId, 100));
+        if (!role) throw new CatalogError(`网段“${name}”中有接口没有对应的角色`);
+        const interfaceName = requiredText(value.name, `网段“${name}”的接口名`, 40);
+        const address = optionalText(value.address, 40);
+        if (address && ipv4ToNumber(address) === undefined) throw new CatalogError(`${role.key} ${interfaceName} 的地址格式不正确`);
+        const portId = optionalText(value.portId, 100);
+        const device = data.deviceResources.find((candidate) => candidate.id === role.deviceId);
+        if (portId && !device?.ports?.some((port) => port.id === portId)) throw new CatalogError(`${role.key} ${interfaceName} 选择的端口不属于绑定的设备，请重新选择`);
+        return { id: optionalText(value.id, 100) || randomUUID(), roleId: role.id, name: interfaceName, address, portId };
+      });
+      return { id: optionalText(input.id, 100) || randomUUID(), name, vlan, subnet, interfaces };
+    });
+    if (new Set(segments.flatMap((segment) => [segment.id, ...segment.interfaces.map((item) => item.id)])).size !== segments.reduce((count, segment) => count + 1 + segment.interfaces.length, 0)) {
+      throw new CatalogError("网段或接口 ID 重复");
+    }
+    return segments;
   }
 
   private normalizeScenarioParameters(value: unknown): ScenarioParameter[] {
@@ -1562,6 +1613,8 @@ export class CatalogStore {
       const name = requiredText(input.name, "场景名称", 160);
       uniqueName(data.testScenarios.filter((item) => item.productId === productId), name, "场景名称");
       const timestamp = new Date().toISOString();
+      const roles = this.normalizeScenarioRoles(data, productId, input.roles);
+      const segments = this.normalizeScenarioSegments(data, input.segments, roles);
       const scenario: TestScenario = {
         id: randomUUID(),
         productId,
@@ -1569,11 +1622,10 @@ export class CatalogStore {
         name,
         category: requiredText(input.category, "功能分类", 120),
         description: optionalText(input.description, 4_000),
-        roles: this.normalizeScenarioRoles(data, productId, input.roles),
+        roles,
+        segments,
         parameters: this.normalizeScenarioParameters(input.parameters ?? []),
-        setupInstructions: requiredText(input.setupInstructions, "场景搭建要求", 20_000),
-        verificationInstructions: requiredText(input.verificationInstructions, "场景验证要求", 10_000),
-        cleanupInstructions: optionalText(input.cleanupInstructions, 10_000),
+        ...scenarioTexts(input, segments.length > 0),
         createdAt: timestamp,
         updatedAt: timestamp,
       };
@@ -1594,10 +1646,14 @@ export class CatalogStore {
       scenario.category = scenario.isDefault ? scenario.category : requiredText(input.category, "功能分类", 120);
       scenario.description = optionalText(input.description, 4_000);
       scenario.roles = this.normalizeScenarioRoles(data, productId, input.roles, scenario.isDefault);
+      // The default scenario sets nothing up, so it has no topology either.
+      scenario.segments = scenario.isDefault ? [] : this.normalizeScenarioSegments(data, input.segments === undefined ? scenario.segments : input.segments, scenario.roles);
       scenario.parameters = this.normalizeScenarioParameters(input.parameters ?? []);
-      scenario.setupInstructions = scenario.isDefault ? "" : requiredText(input.setupInstructions, "场景搭建要求", 20_000);
-      scenario.verificationInstructions = scenario.isDefault ? optionalText(input.verificationInstructions, 10_000) : requiredText(input.verificationInstructions, "场景验证要求", 10_000);
-      scenario.cleanupInstructions = optionalText(input.cleanupInstructions, 10_000);
+      if (scenario.isDefault) {
+        scenario.setupInstructions = "";
+        scenario.verificationInstructions = optionalText(input.verificationInstructions, 10_000);
+        scenario.cleanupInstructions = optionalText(input.cleanupInstructions, 10_000);
+      } else Object.assign(scenario, scenarioTexts(input, scenario.segments.length > 0));
       scenario.updatedAt = timestamp;
       if (caseIds) {
         const selectedIds = new Set(caseIds);
@@ -1815,6 +1871,8 @@ export class CatalogStore {
       }
       const cases = caseIds.map((caseId) => data.testCases.find((item) => item.id === caseId && !item.archivedAt));
       if (cases.some((item) => !item)) throw new CatalogError("测试单中存在已删除的测试用例");
+      const labView = this.physicalLabView(data, order.productId);
+      const productDevices = data.deviceResources.filter((device) => device.productId === order.productId && !device.archivedAt);
       const caseRuns: CaseRun[] = [];
       const scenarioRunsById = new Map<string, ScenarioRun>();
       for (const testCase of cases as TestCase[]) {
@@ -1829,6 +1887,8 @@ export class CatalogStore {
           } catch (error) {
             throw new CatalogError(`场景“${scenario.name}”设备角色配置无效：${error instanceof Error ? error.message : "请重新绑定设备"}`);
           }
+          const problems = topologyProblems(analyzeScenarioTopology({ lab: labView, roles: scenario.roles, devices: productDevices, segments: scenario.segments }));
+          if (problems.length) throw new CatalogError(`场景“${scenario.name}”的拓扑还有 ${problems.length} 个问题，需要先处理：${problems[0].text}`);
           scenarioRun = {
             id: randomUUID(),
             testScenarioId: scenario.id,
@@ -1863,7 +1923,7 @@ export class CatalogStore {
       const executionCaseRuns = scenarioRuns.flatMap((scenarioRun) =>
         scenarioRun.caseRunIds.map((caseRunId) => caseRunById.get(caseRunId)!),
       );
-      const physicalLabSnapshot = labSnapshot(this.physicalLabView(data, order.productId));
+      const physicalLabSnapshot = labSnapshot(labView);
       const run: TestRun = {
         id: runId,
         testOrderId,

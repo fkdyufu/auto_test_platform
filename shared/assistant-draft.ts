@@ -40,6 +40,37 @@ function draftControlInterfaces(value: unknown, previous: Record<string, unknown
   });
 }
 
+const draftId = () => `assistant-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+/** Text fields of an object, each optional; anything else is rejected so a typo never passes silently. */
+function textRecord(value: unknown, keys: string[], label: string): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label}格式不正确`);
+  const input = value as Record<string, unknown>;
+  const unknown = Object.keys(input).filter((key) => !keys.includes(key));
+  if (unknown.length) throw new Error(`${label}包含未知字段 ${unknown.join("、")}`);
+  if (keys.some((key) => input[key] !== undefined && typeof input[key] !== "string")) throw new Error(`${label}的字段必须是文本`);
+  return Object.fromEntries(keys.map((key) => [key, typeof input[key] === "string" ? input[key] as string : ""]));
+}
+
+/** Segments proposed for an open scenario form. The server checks names, addresses and ports when it is saved. */
+function draftSegments(value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value) || value.length > 50) throw new Error("字段 segments 必须是数组且不超过 50 项");
+  return value.map((item) => {
+    const interfaces = item && typeof item === "object" && !Array.isArray(item) ? (item as Record<string, unknown>).interfaces : undefined;
+    const { interfaces: _interfaces, ...rest } = item && typeof item === "object" && !Array.isArray(item) ? item as Record<string, unknown> : {};
+    const segment = textRecord(rest, ["id", "name", "vlan", "subnet"], "网段");
+    if (!Array.isArray(interfaces) || interfaces.length > 50) throw new Error(`网段 ${segment.name || "?"} 的 interfaces 必须是数组且不超过 50 项`);
+    return {
+      ...segment,
+      id: segment.id || draftId(),
+      interfaces: interfaces.map((entry) => {
+        const item = textRecord(entry, ["id", "roleId", "name", "address", "portId"], "网段接口");
+        return { ...item, id: item.id || draftId() };
+      }),
+    };
+  });
+}
+
 export function applyDraftPatch(kind: AssetKind, draft: Record<string, unknown>, values: Record<string, unknown>): Record<string, unknown> {
   const next = structuredClone(draft);
   for (const [field, value] of Object.entries(values)) {
@@ -62,15 +93,16 @@ export function applyDraftPatch(kind: AssetKind, draft: Record<string, unknown>,
     } else if (field === "caseIds" && ["scenario", "order"].includes(kind)) {
       if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) throw new Error(`字段 ${field} 必须是文本数组`);
       next[field] = [...value];
+    } else if (field === "segments" && kind === "scenario") {
+      next.segments = draftSegments(value);
     } else if ((field === "roles" || field === "parameters") && kind === "scenario") {
       if (!Array.isArray(value) || value.length > 100) throw new Error(`字段 ${field} 必须是数组且不超过 100 项`);
       const required = field === "roles" ? ["key", "deviceId"] : ["key", "name", "defaultValue"];
       next[field] = value.map((item) => {
         if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error(`字段 ${field} 中的项目格式不正确`);
         const input = item as Record<string, unknown>;
-        const allowed = [...required, "id", ...(field === "roles" ? ["portIds"] : [])];
+        const allowed = [...required, "id"];
         if (Object.keys(input).some((key) => !allowed.includes(key)) || required.some((key) => typeof input[key] !== "string") || input.id !== undefined && typeof input.id !== "string") throw new Error(`字段 ${field} 中的项目缺少字段或类型不正确`);
-        if (input.portIds !== undefined && (!Array.isArray(input.portIds) || input.portIds.some((portId) => typeof portId !== "string"))) throw new Error("角色的 portIds 必须是端口 ID 数组");
         const id = typeof input.id === "string" && input.id ? input.id : `assistant-${Date.now()}-${Math.random().toString(36).slice(2)}`;
         return { ...input, id };
       });

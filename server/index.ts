@@ -9,6 +9,7 @@ import {
   CatalogError,
   catalogStore,
   type CaseRun,
+  type DeviceResource,
   type ScenarioRun,
   type TestScenario,
   type TestOrder,
@@ -23,7 +24,8 @@ import { createAssistantRouter } from "./assistant-routes.js";
 import { createAssistantTools } from "./assistant-tools.js";
 import { buildAssistantPrompt } from "./assistant-context.js";
 import { resolveScenarioDevices } from "./scenario-devices.js";
-import { formatPhysicalLab, formatScenarioLinks } from "./physical-lab-prompt.js";
+import { formatPhysicalLab } from "./physical-lab-prompt.js";
+import { formatScenarioTopology, formatTopologyCleanup, formatTopologySetup, scenarioTransitDeviceIds } from "./scenario-topology-prompt.js";
 import { CONTROL_KINDS, describeControlSettings } from "../shared/control-interfaces.js";
 import { deviceTemplateName } from "../shared/device-templates.js";
 import {
@@ -279,13 +281,8 @@ function buildScenarioDescription(
     (parameter) => `- ${parameter.name}（${parameter.key}）：${scenarioRun.parameterValues[parameter.key] || "未设置"}`,
   );
   const lab = formatPhysicalLab(context.physicalLab, context.devices);
-  // Picked ports belong to the device the role was bound to when the scenario was saved.
-  const links = formatScenarioLinks(context.physicalLab, scenario.roles.map((role) => ({
-    key: role.key,
-    deviceId: role.deviceId,
-    portIds: scenarioRun.roleBindings[role.key] === role.deviceId ? role.portIds : [],
-  })), context.devices);
-  return `测试场景：${scenario.name}${scenario.category ? `（${scenario.category}）` : ""}\n${scenario.description || "无补充说明"}\n\n固定角色绑定：\n${roleLines.join("\n") || "无设备角色"}\n角色已经由平台固定绑定，不得替换设备或重新分配角色。\n\n场景参数：\n${parameterLines.join("\n") || "无场景参数"}${links ? `\n\n${links}` : ""}${lab ? `\n\n${lab}` : ""}`;
+  const topology = formatScenarioTopology(scenario, context.physicalLab, context.labDevices || context.devices);
+  return `测试场景：${scenario.name}${scenario.category ? `（${scenario.category}）` : ""}\n${scenario.description || "无补充说明"}\n\n固定角色绑定：\n${roleLines.join("\n") || "无设备角色"}\n角色已经由平台固定绑定，不得替换设备或重新分配角色。\n\n场景参数：\n${parameterLines.join("\n") || "无场景参数"}${topology ? `\n\n${topology}` : ""}${lab ? `\n\n${lab}` : ""}`;
 }
 
 function buildScenarioSetupRequirement(
@@ -293,7 +290,8 @@ function buildScenarioSetupRequirement(
   scenarioRun: ScenarioRun,
   context: TestOrderExecutionContext,
 ): string {
-  return `为后续测试用例搭建并验证测试场景。${buildDeviceDescription(context)}\n\n${buildScenarioDescription(scenario, scenarioRun, context)}\n\n场景搭建要求：\n${scenario.setupInstructions}\n\n场景验证要求：\n${scenario.verificationInstructions}\n\n请严格按指定设备、接口和步骤执行。先读取相关配置，按搭建要求清除冲突并应用目标配置，然后逐项验证。不允许自行替换设备、选择其他拓扑或省略验证。无法达到要求时提交失败。当前未提供的控制接口不得假装已调用。完成后调用 finish_test 提交结论：headline 一句话说明搭建是否完成，搭建后各设备接口、地址和链路的实际状态写在 log，供后续用例参考；角色绑定由平台提供，不需要提交。`;
+  const topology = formatTopologySetup(scenario, context.physicalLab, context.labDevices || context.devices);
+  return `为后续测试用例搭建并验证测试场景。${buildDeviceDescription(context)}\n\n${buildScenarioDescription(scenario, scenarioRun, context)}${topology ? `\n\n${topology}` : ""}\n\n${topology ? "其他准备" : "场景搭建要求"}：\n${scenario.setupInstructions || "无"}\n\n${topology ? "其他检查" : "场景验证要求"}：\n${scenario.verificationInstructions || "无"}\n\n请严格按指定设备、接口和步骤执行。先读取相关配置，按搭建要求清除冲突并应用目标配置，然后逐项验证。不允许自行替换设备、选择其他拓扑或省略验证。无法达到要求时提交失败。当前未提供的控制接口不得假装已调用。完成后调用 finish_test 提交结论：headline 一句话说明搭建是否完成，搭建后各设备接口、地址和链路的实际状态写在 log，供后续用例参考；角色绑定由平台提供，不需要提交。`;
 }
 
 function caseStepRows(caseRun: CaseRun) {
@@ -324,7 +322,10 @@ function buildScenarioCleanupRequirement(
   context: TestOrderExecutionContext,
   triggerReason: string,
 ): string {
-  return `请清理测试场景。当前执行状态：${triggerReason}。无论此前执行是否成功，都应以恢复环境为目标。${buildDeviceDescription(context)}\n\n${buildScenarioDescription(scenario, scenarioRun, context)}\n\n场景清理要求：\n${scenario.cleanupInstructions}\n\n请使用当前真正可用的工具执行清理并验证。当前未提供的控制接口不得假装已调用。完成后调用 finish_test 提交结论。`;
+  const topology = formatTopologyCleanup(scenario, context.physicalLab, context.labDevices || context.devices);
+  // A scenario with a topology may leave its cleanup text empty; what its preparation set up is then undone too.
+  const other = scenario.cleanupInstructions || (topology && scenario.setupInstructions ? `撤销以下准备所做的配置：\n${scenario.setupInstructions}` : "无");
+  return `请清理测试场景。当前执行状态：${triggerReason}。无论此前执行是否成功，都应以恢复环境为目标。${buildDeviceDescription(context)}\n\n${buildScenarioDescription(scenario, scenarioRun, context)}${topology ? `\n\n${topology}` : ""}\n\n${topology ? "其他清理" : "场景清理要求"}：\n${other}\n\n请使用当前真正可用的工具执行清理并验证。当前未提供的控制接口不得假装已调用。完成后调用 finish_test 提交结论。`;
 }
 
 async function updateStoredCaseRun(runId: string, caseRunId: string, update: Partial<CaseRun>): Promise<void> {
@@ -480,11 +481,17 @@ async function executeTestOrderRun(run: RunRecord, order: TestOrder, testRun: Te
     let modelRequestFailure: ModelRequestError | undefined;
     if (scenario) {
       try {
+        const roleDevices = resolveScenarioDevices(scenario, scenarioRun, productContext.devices);
+        const transit = scenarioTransitDeviceIds(scenario, testRun.physicalLabSnapshot, productContext.devices)
+          .filter((id) => !roleDevices.some((device) => device.id === id))
+          .map((id) => productContext.devices.find((device) => device.id === id))
+          .filter((device): device is DeviceResource => Boolean(device));
         executionContext = {
           productName: productContext.productName,
-          devices: resolveScenarioDevices(scenario, scenarioRun, productContext.devices),
+          devices: [...roleDevices, ...transit],
           scenarios: [scenario],
           physicalLab: testRun.physicalLabSnapshot,
+          labDevices: productContext.devices,
         };
       } catch (error) {
         setupFailure = error instanceof Error ? error.message : "场景设备绑定无效";
@@ -704,7 +711,8 @@ async function executeTestOrderRun(run: RunRecord, order: TestOrder, testRun: Te
       const cleanupDecision = decideScenarioCleanup({
         setupAttempted,
         isDefault: scenario.isDefault,
-        hasCleanupInstructions: Boolean(scenario.cleanupInstructions.trim()),
+        // A topology is always undone, even without a cleanup text.
+        hasCleanupInstructions: Boolean(scenario.cleanupInstructions.trim()) || scenario.segments.length > 0,
         recoveryRequired: Boolean(setupFailure || scenarioHasFailure || unrecovered || run.cancelRequested),
         modelRequestFailed: Boolean(modelRequestFailure),
       });

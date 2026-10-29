@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { CatalogStore, type DeviceResource, type PhysicalLab } from "./catalog-store.js";
-import { formatPhysicalLab, formatScenarioLinks } from "./physical-lab-prompt.js";
+import { formatPhysicalLab } from "./physical-lab-prompt.js";
 import { expandPortNames, resolveControlPath, serialDeviceName } from "../shared/physical-lab.js";
 
 async function createStore(t: test.TestContext): Promise<{ store: CatalogStore; file: string }> {
@@ -64,13 +64,13 @@ test("lists every product device and the platform in a new lab", async (t) => {
   assert.equal(lab.updatedAt, "");
 });
 
-test("saves wiring, resolves control paths and stores the catalog as version 16", async (t) => {
+test("saves wiring, resolves control paths and stores the catalog as version 17", async (t) => {
   const { store, file } = await createStore(t);
   const { tau, sw, lab } = await seedLab(store);
   assert.equal(lab.links.length, 3);
   assert.equal(lab.nodes.find((node) => node.id === sw.id)?.name, "switch");
   const stored = JSON.parse(await readFile(file, "utf8")) as { version: number; physicalLabs: PhysicalLab[] };
-  assert.equal(stored.version, 16);
+  assert.equal(stored.version, 17);
   assert.equal(stored.physicalLabs[0].nodes.some((node) => node.kind === "device"), false, "device nodes are built from the devices on read");
   assert.equal(stored.physicalLabs[0].links.some((link) => "role" in link), false, "a cable's role is worked out on read");
   assert.deepEqual(lab.nodes.find((node) => node.id === tau.id)?.ports.map((item) => item.name), ["fe1", "ge2", "console"]);
@@ -208,37 +208,6 @@ test("formats the wiring of bound devices for the agent", async (t) => {
   assert.doesNotMatch(rulesOnly, /没有列出的连接不要假设存在|未接线的端口/);
 });
 
-test("a scenario names the ports it uses and reads their cables from the lab", async (t) => {
-  const { store } = await createStore(t);
-  const { product, tau, sw, lab } = await seedLab(store);
-  const scenario = await store.createTestScenario(product.id, {
-    name: "端口镜像",
-    category: "镜像",
-    roles: [{ key: "DUT", deviceId: tau.id, portIds: ["ge2-id", "fe1-id", "fe1-id"] }, { key: "SW", deviceId: sw.id, portIds: ["9-id", "10-id"] }],
-    setupInstructions: "配置镜像",
-    verificationInstructions: "检查镜像",
-  });
-  assert.deepEqual(scenario.roles.map((role) => role.portIds), [["ge2-id", "fe1-id"], ["9-id", "10-id"]]);
-  await assert.rejects(store.updateTestScenario(product.id, scenario.id, { ...scenario, roles: [{ key: "DUT", deviceId: tau.id, portIds: ["9-id"] }] }), /选择的端口不属于绑定的设备/);
-
-  const devices = await store.listDeviceResources(product.id);
-  const prompt = formatScenarioLinks(lab, scenario.roles, devices);
-  assert.equal(prompt, [
-    "本场景使用的链路（对端以物理环境登记为准）：",
-    "- DUT（TAU1）ge2 ↔ SW（switch）12 口（控制）",
-    "- DUT（TAU1）fe1 ↔ SW（switch）9 口（业务）",
-    "- SW（switch）10 口：未接线",
-    "TAU1、switch 只使用以上端口；其他端口本场景不使用，不要改动它们的配置。",
-  ].join("\n"), "a cable picked at both ends is listed once");
-  assert.equal(formatScenarioLinks(lab, [{ key: "DUT", deviceId: tau.id }], devices), "");
-
-  // A port removed from the device drops out of the scenario, so the scenario can still be saved.
-  await store.updateDeviceResource(product.id, sw.id, { name: "switch", template: sw.template, description: "", ports: [port("9"), port("12")], controlInterfaces: [] });
-  const [, saved] = await store.listTestScenarios(product.id);
-  assert.deepEqual(saved.roles.map((role) => role.portIds), [["ge2-id", "fe1-id"], ["9-id"]]);
-  await store.updateTestScenario(product.id, scenario.id, { ...saved });
-});
-
 test("moves the device ports a v14 lab kept onto the devices, with a backup", async (t) => {
   const { store, file } = await createStore(t);
   const [product] = await store.listProducts();
@@ -295,7 +264,7 @@ test("a v15 cable's hand-picked role gives way to the worked-out one", async (t)
   assert.equal(JSON.parse(await readFile(`${file}.v15.bak`, "utf8")).version, 15);
   await upgraded.updateDeviceResource(product.id, sw.id, { name: "switch", template: sw.template, description: "", ports: [port("9"), port("10"), port("12")], controlInterfaces: [] });
   const saved = JSON.parse(await readFile(file, "utf8")) as { version: number; physicalLabs: Array<{ links: Array<Record<string, unknown>> }> };
-  assert.equal(saved.version, 16);
+  assert.equal(saved.version, 17);
   assert.equal(saved.physicalLabs[0].links.some((link) => "role" in link), false);
 });
 

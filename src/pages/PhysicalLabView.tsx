@@ -71,6 +71,21 @@ function nodeShortSubtitle(node: LabNode, device?: DeviceResource): string {
   return device?.templateName || "设备";
 }
 
+/** The lab's diagram layout, shared by every page that draws the lab so it always looks the same. */
+export function labLayout(lab: PhysicalLab, deviceById: Map<string, DeviceResource>) {
+  // The most cables a node has to any single neighbour decides how tall its box needs to be.
+  const pairCounts = new Map<string, number>();
+  lab.links.forEach((link) => {
+    const key = [link.a.nodeId, link.b.nodeId].sort().join("\u0000");
+    pairCounts.set(key, (pairCounts.get(key) || 0) + 1);
+  });
+  const parallel = (nodeId: string) => Math.max(1, ...[...pairCounts].filter(([key]) => key.split("\u0000").includes(nodeId)).map(([, count]) => count));
+  return layoutLab(
+    lab.nodes.map((node) => ({ id: node.id, label: node.name, sub: nodeShortSubtitle(node, deviceById.get(node.id)), minHeight: (parallel(node.id) - 1) * 18 + 16 })),
+    lab.links.map((link) => ({ from: link.a.nodeId, to: link.b.nodeId })),
+  );
+}
+
 export function PhysicalLabView({
   product,
   lab,
@@ -107,19 +122,7 @@ export function PhysicalLabView({
   }, [lab, devices]);
   const wiringRef = useRef<HTMLElement | null>(null);
 
-  const layout = useMemo(() => {
-    // The most cables a node has to any single neighbour decides how tall its box needs to be.
-    const pairCounts = new Map<string, number>();
-    lab.links.forEach((link) => {
-      const key = [link.a.nodeId, link.b.nodeId].sort().join("\u0000");
-      pairCounts.set(key, (pairCounts.get(key) || 0) + 1);
-    });
-    const parallel = (nodeId: string) => Math.max(1, ...[...pairCounts].filter(([key]) => key.split("\u0000").includes(nodeId)).map(([, count]) => count));
-    return layoutLab(
-      lab.nodes.map((node) => ({ id: node.id, label: node.name, sub: nodeShortSubtitle(node, deviceById.get(node.id)), minHeight: (parallel(node.id) - 1) * 18 + 16 })),
-      lab.links.map((link) => ({ from: link.a.nodeId, to: link.b.nodeId })),
-    );
-  }, [lab, deviceById]);
+  const layout = useMemo(() => labLayout(lab, deviceById), [lab, deviceById]);
   const focusNode = lab.nodes.find((node) => node.id === focusId) || lab.nodes.find((node) => node.id === layout.hub) || lab.nodes[0];
 
   useEffect(() => {
@@ -567,13 +570,14 @@ function DeviceCards({
   );
 }
 
-function Topology({
+export function Topology({
   lab,
   layout,
   deviceById,
   issues,
   focusId,
   selected,
+  usage,
   onFocus,
   onOpen,
 }: {
@@ -581,11 +585,13 @@ function Topology({
   layout: ReturnType<typeof layoutLab>;
   deviceById: Map<string, DeviceResource>;
   /** Node ID -> problems found in its registration. */
-  issues: Map<string, string[]>;
+  issues?: Map<string, string[]>;
   focusId?: string;
   selected: LabLinkEnd | null;
-  onFocus: (nodeId: string) => void;
-  onOpen: (end: LabLinkEnd) => void;
+  /** Cables a scenario uses: those of the segment being looked at, and the rest. */
+  usage?: { selected: Set<string>; used: Set<string> };
+  onFocus?: (nodeId: string) => void;
+  onOpen?: (end: LabLinkEnd) => void;
 }) {
   const { positions, viewBox, hub } = layout;
   const selectedLink = selected ? findLinkAt(lab, selected) : undefined;
@@ -680,6 +686,9 @@ function Topology({
     highlightedNodes.add(selectedLink.b.nodeId);
   }
   if (focusId) highlightedNodes.add(focusId);
+  for (const link of lab.links) {
+    if (usage?.selected.has(link.id)) [link.a.nodeId, link.b.nodeId].forEach((nodeId) => highlightedNodes.add(nodeId));
+  }
 
   if (!lab.nodes.length) return <p className="lab-hint">当前产品还没有设备。</p>;
   return (
@@ -694,7 +703,7 @@ function Topology({
           style={{ maxWidth: viewBox.width }}
         >
           {edges.map((edge) => (
-            <g key={edge.key} className={`lab-edge ${edge.link.role} ${edge.hl ? "hl" : ""}`} onClick={() => onOpen(edge.open)}>
+            <g key={edge.key} className={`lab-edge ${edge.link.role} ${edge.hl ? "hl" : ""} ${usage?.selected.has(edge.link.id) ? "use-sel" : usage?.used.has(edge.link.id) ? "use" : ""}`} onClick={() => onOpen?.(edge.open)}>
               <title>{`${endLabel(lab, edge.link.a)} ↔ ${endLabel(lab, edge.link.b)}（${LAB_LINK_ROLE_LABELS[edge.link.role]}${edge.link.note ? `，${edge.link.note}` : ""}）`}</title>
               <line className="hit" x1={edge.start.x} y1={edge.start.y} x2={edge.end.x} y2={edge.end.y} />
               <line className="vis" x1={edge.start.x} y1={edge.start.y} x2={edge.end.x} y2={edge.end.y} />
@@ -704,9 +713,9 @@ function Topology({
             const position = positions[node.id];
             if (!position) return null;
             const className = ["lab-node", node.kind, node.id === hub && lab.links.length ? "hub" : "", highlightedNodes.has(node.id) ? "hl" : ""].filter(Boolean).join(" ");
-            const problems = issues.get(node.id);
+            const problems = issues?.get(node.id);
             return (
-              <g key={node.id} className={className} onClick={() => onFocus(node.id)}>
+              <g key={node.id} className={className} onClick={() => onFocus?.(node.id)}>
                 {problems && <title>{problems.join("\n")}</title>}
                 <rect x={position.x - position.w / 2} y={position.y - position.h / 2} width={position.w} height={position.h} rx={8} />
                 {problems && <circle className="flag" cx={position.x + position.w / 2 - 9} cy={position.y - position.h / 2 + 9} r={3.5} />}
@@ -716,7 +725,7 @@ function Topology({
             );
           })}
           {edges.map((edge) => (
-            <g key={`${edge.key}-labels`} className={`lab-edge-labels ${edge.hl ? "hl" : ""}`} onClick={() => onOpen(edge.open)}>
+            <g key={`${edge.key}-labels`} className={`lab-edge-labels ${edge.hl || usage?.selected.has(edge.link.id) ? "hl" : ""}`} onClick={() => onOpen?.(edge.open)}>
               {edge.pills.map((pill, index) => {
                 const width = pillWidth(pill.text);
                 return (

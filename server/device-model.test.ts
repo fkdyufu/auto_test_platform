@@ -70,7 +70,7 @@ test("upgrades stored devices to type cards and structured interfaces with a bac
   // Saving writes the new shape; a later read does not migrate again.
   await upgraded.updateDeviceResource(product.id, "tau1", { name: "TAU1", template: "product", description: "", controlInterfaces: byName.get("TAU1")!.controlInterfaces });
   const stored = JSON.parse(await readFile(file, "utf8")) as { version: number; deviceResources: Record<string, unknown>[] };
-  assert.equal(stored.version, 16);
+  assert.equal(stored.version, 17);
   const storedSwitch = stored.deviceResources.find((device) => device.id === "sw")!;
   assert.equal("types" in storedSwitch || "model" in storedSwitch, false);
   assert.equal(JSON.parse(await readFile(`${file}.v13.bak`, "utf8")).version, 13);

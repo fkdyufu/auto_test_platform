@@ -8,7 +8,6 @@ import {
   type LabLinkEnd,
 } from "../shared/physical-lab.js";
 import { CONTROL_KINDS } from "../shared/control-interfaces.js";
-import { scenarioPortUse, type ScenarioPortRole } from "../shared/scenario-ports.js";
 
 const MAX_LINES = 300;
 
@@ -69,25 +68,3 @@ export function formatPhysicalLab(lab: PhysicalLab | undefined, devices: PromptD
   return sections.filter(Boolean).join("\n\n");
 }
 
-/**
- * The cables the scenario picked, with their far ends read from the lab, and the ports it leaves alone. Empty when the
- * scenario picked no ports.
- */
-export function formatScenarioLinks(lab: PhysicalLab | undefined, roles: ScenarioPortRole[], devices: Pick<DeviceResource, "id" | "name" | "ports">[]): string {
-  const { links, restricted } = scenarioPortUse(lab, roles);
-  if (!links.length) return "";
-  const roleByDevice = new Map(roles.map((role) => [role.deviceId, role.key]));
-  const deviceById = new Map(devices.map((device) => [device.id, device]));
-  const label = (end: LabLinkEnd) => {
-    const device = deviceById.get(end.nodeId);
-    const port = device?.ports?.find((item) => item.id === end.portId);
-    const role = roleByDevice.get(end.nodeId);
-    if (role && device && port) return `${role}（${device.name}）${/^\d+$/.test(port.name) ? `${port.name} 口` : port.name}`;
-    return lab ? endLabel(lab, end) : "未知端口";
-  };
-  const lines = links.map(({ end, link, peer }) => link && peer
-    ? `- ${label(end)} ↔ ${label(peer)}（${LAB_LINK_ROLE_LABELS[link.role]}${link.note ? `；${link.note}` : ""}）`
-    : `- ${label(end)}：未接线`);
-  const names = [...restricted].map((id) => deviceById.get(id)?.name).filter(Boolean);
-  return `本场景使用的链路（对端以物理环境登记为准）：\n${lines.join("\n")}\n${names.join("、")} 只使用以上端口；其他端口本场景不使用，不要改动它们的配置。`;
-}
