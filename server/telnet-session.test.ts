@@ -14,6 +14,7 @@ async function fakeSwitch(t: test.TestContext) {
     let buffer = "";
     let view = "user";
     let paging = false;
+    let confirming = false;
     const prompt = () => view === "user" ? "<FutureMatrix>" : view === "system" ? "[FutureMatrix]" : "[FutureMatrix-GigabitEthernet0/0/11]";
     socket.write("\r\n<FutureMatrix>");
     socket.on("data", (data) => {
@@ -28,6 +29,16 @@ async function fakeSwitch(t: test.TestContext) {
         const command = buffer.slice(0, end).replace(/\r$/, "");
         buffer = buffer.slice(end + 1);
         commands.push(command);
+        if (confirming) {
+          confirming = false;
+          socket.write(`${command}\r\n${command === "y" ? "Info: Succeeded in clearing the interface configuration." : "Info: Cancelled."}\r\n${prompt()}`);
+          continue;
+        }
+        if (command.startsWith("clear configuration interface")) {
+          confirming = true;
+          socket.write(`${command}\r\nWarning: All configurations of the interface will be cleared, and its state will be shutdown. Continue? [Y/N] :`);
+          continue;
+        }
         if (command === "hang") continue;
         if (command === "disconnect") { socket.destroy(); continue; }
         if (command === "invalid") { socket.write(`invalid\r\nError: Unrecognized command found at '^' position.\r\n${prompt()}`); continue; }
@@ -57,6 +68,7 @@ async function fakeSwitch(t: test.TestContext) {
 
 test("recognizes shell, user and Huawei/H3C configuration prompts", () => {
   for (const prompt of ["<FutureMatrix>", "[FutureMatrix]", "[FutureMatrix-GigabitEthernet0/0/11]", "root@tau:/# ", "router(config)#", "router>"]) assert.ok(TELNET_PROMPT.test(`output\r\n${prompt}`), prompt);
+  for (const confirm of ["Continue? [Y/N] :", "Are you sure to continue?[Y/N]:", "Save the configuration (y/n)[n]:", "Overwrite? [yes/no]:"]) assert.ok(TELNET_PROMPT.test(`output\r\n${confirm}`), confirm);
   assert.equal(TELNET_PROMPT.test("!Software Version V200\r\n"), false);
   assert.equal(TELNET_PROMPT.test("some output [not a prompt] more text"), false);
 });
@@ -73,6 +85,18 @@ test("retains Telnet views across tool calls and serializes multiline and parall
   assert.equal(interfaceResult.sessionReused, true);
   assert.match(String(display.stdout), /\[FutureMatrix-GigabitEthernet0\/0\/11\]/);
   assert.deepEqual(f.commands, ["system-view", "interface GigabitEthernet0/0/11", "mac-address learning disable", "display this"]);
+  assert.equal(f.getConnections(), 1);
+});
+
+test("a confirmation prompt ends the command, and the next line or call answers it", async (t) => {
+  const f = await fakeSwitch(t);
+  const asked = await f.pool.execute("switch", f.control, f.target, "system-view\nclear configuration interface GigabitEthernet0/0/9", 2000);
+  assert.match(String(asked.stdout), /Continue\? \[Y\/N\] :$/);
+  const answered = await f.pool.execute("switch", f.control, f.target, "y", 2000);
+  assert.match(String(answered.stdout), /Succeeded in clearing[\s\S]*\[FutureMatrix\]/);
+  assert.equal(answered.sessionReused, true);
+  const inOneCall = await f.pool.execute("switch", f.control, f.target, "clear configuration interface GigabitEthernet0/0/11\ny", 2000);
+  assert.match(String(inOneCall.stdout), /Succeeded in clearing/);
   assert.equal(f.getConnections(), 1);
 });
 

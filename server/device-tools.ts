@@ -454,7 +454,7 @@ export function createDeviceTools(options: DeviceToolsOptions) {
   const telnetTool = defineTool({
     name: "device_telnet_exec",
     label: "Telnet 执行命令",
-    description: "通过已配置的 Telnet 接口执行 CLI 命令。当前 Agent 内保留连接和配置视图，同一接口命令串行执行；多条命令用换行分隔、每行一条，不要用分号连接，逐条等待提示符，报错后停止后续命令。输出保留提示符。连接中断不会自动重发命令，下次调用须确认并重新进入所需视图。",
+    description: "通过已配置的 Telnet 接口执行 CLI 命令。当前 Agent 内保留连接和配置视图，同一接口命令串行执行；多条命令用换行分隔、每行一条，不要用分号连接，逐条等待提示符，报错后停止后续命令。遇到 [Y/N] 等确认提示时该条命令即返回，在下一行（或下一次调用）发送 y 或 n 作答。输出保留提示符。连接中断不会自动重发命令，下次调用须确认并重新进入所需视图。",
     parameters: Type.Object({
       ...commonParameters("telnet"),
       command: Type.String({ minLength: 1, maxLength: 20_000, description: SECRET_PLACEHOLDER_HINT }),

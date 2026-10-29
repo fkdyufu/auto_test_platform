@@ -4,7 +4,8 @@ export interface TelnetCredentials {
   password: string;
 }
 
-export const TELNET_PROMPT = /(?:^|\r?\n)(?:[^\r\n]*[#$>]|\[[^\r\n\]]+\])\s*$/;
+// A confirmation such as "Continue? [Y/N]:" also ends a command, so the next command can answer it.
+export const TELNET_PROMPT = /(?:^|\r?\n)(?:[^\r\n]*[#$>]|\[[^\r\n\]]+\]|[^\r\n]*(?:\[\s*[Yy](?:es)?\s*\/\s*[Nn]o?\s*\]|\(\s*[Yy](?:es)?\s*\/\s*[Nn]o?\s*\))(?:\s*\[[YyNn]\])?\s*:?)\s*$/;
 const CLI_ERROR = /(?:^|\n)\s*(?:Error:\s*(?:Unrecognized command|Wrong parameter|Incomplete command|Too many parameters|Ambiguous command|The command|Permission|Invalid)|%\s*(?:Invalid input|Unknown command|Incomplete command|Ambiguous command|Error))/i;
 
 class TelnetCommandError extends Error {}
