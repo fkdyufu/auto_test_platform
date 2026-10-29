@@ -16,7 +16,7 @@ function draftControlInterfaces(value: unknown, previous: Record<string, unknown
   return value.map((item) => {
     if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error("控制接口格式不正确");
     const input = item as Record<string, unknown>;
-    if (Object.keys(input).some((key) => !["id", "name", "kind", "settings", "secretsSet"].includes(key))) throw new Error("控制接口包含未知字段");
+    if (Object.keys(input).some((key) => !["id", "name", "kind", "portId", "settings", "secretsSet"].includes(key))) throw new Error("控制接口包含未知字段");
     if (!isControlKind(input.kind)) throw new Error("控制方式不正确");
     if (input.id !== undefined && typeof input.id !== "string" || input.name !== undefined && typeof input.name !== "string") throw new Error("控制接口格式不正确");
     const settings = input.settings === undefined ? {} : input.settings;
@@ -25,12 +25,14 @@ function draftControlInterfaces(value: unknown, previous: Record<string, unknown
     if (Object.keys(settings).some((key) => !known.has(key))) throw new Error(`控制接口包含 ${CONTROL_KINDS[input.kind].label} 不支持的字段`);
     const id = typeof input.id === "string" && input.id ? input.id : `assistant-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const old = previous.find((control) => control.id === id && control.kind === input.kind);
+    if (input.portId !== undefined && typeof input.portId !== "string") throw new Error("关联端口 ID 必须是文本");
     const oldSettings = old?.settings && typeof old.settings === "object" ? old.settings as Record<string, string> : {};
     const kept = Object.fromEntries(secretKeys(input.kind).filter((key) => !(settings as Record<string, string>)[key] && oldSettings[key]).map((key) => [key, oldSettings[key]]));
     return {
       id,
       name: typeof input.name === "string" ? input.name : "",
       kind: input.kind,
+      ...(typeof input.portId === "string" ? { portId: input.portId } : old?.portId ? { portId: old.portId } : {}),
       settings: { ...settings as Record<string, string>, ...kept },
       secretsSet: Array.isArray(old?.secretsSet) ? old.secretsSet : [],
     };

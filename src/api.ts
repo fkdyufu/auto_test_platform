@@ -4,6 +4,8 @@ import type { TestCaseStep } from "../shared/test-case-steps";
 import type { PhysicalLab } from "../shared/physical-lab";
 import type { ControlKind, PublicControlInterface } from "../shared/control-interfaces";
 import type { DeviceTemplateId } from "../shared/device-templates";
+import type { DevicePort } from "../shared/device-ports";
+export type { DevicePort } from "../shared/device-ports";
 export type { ControlKind, PublicControlInterface } from "../shared/control-interfaces";
 export type { DeviceTemplateId } from "../shared/device-templates";
 export type { LabLink, LabLinkEnd, LabLinkRole, LabNode, LabPort, LabPortKind, PhysicalLab } from "../shared/physical-lab";
@@ -139,6 +141,7 @@ export interface DeviceResource {
   template: DeviceTemplateId;
   templateName: string;
   description: string;
+  ports?: DevicePort[];
   controlInterfaces: PublicControlInterface[];
   createdAt: string;
   updatedAt: string;
@@ -149,6 +152,7 @@ export interface ControlInterfaceInput {
   id: string;
   name: string;
   kind: ControlKind;
+  portId?: string;
   settings: Record<string, string>;
   secretsSet: string[];
 }
@@ -294,6 +298,7 @@ export interface DeviceResourceInput {
   name: string;
   template: DeviceTemplateId;
   description: string;
+  ports?: DevicePort[];
   controlInterfaces: ControlInterfaceInput[];
 }
 export type PhysicalLabInput = Pick<PhysicalLab, "rules" | "nodes" | "links"> & { baseUpdatedAt: string };

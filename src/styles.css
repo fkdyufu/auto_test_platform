@@ -4815,7 +4815,7 @@ body.assistant-resizing { cursor: ew-resize; user-select: none; }
   }
 }
 
-/* Device dialog: type tiles, then name, description and control interface cards */
+/* Device dialog: type tiles, then name, description, port panel and control method cards */
 .modal-subtitle {
   margin-left: 10px;
   color: var(--muted);
@@ -5272,4 +5272,200 @@ body.assistant-resizing { cursor: ew-resize; user-select: none; }
   body:has(.modal-backdrop) .assistant-launcher {
     bottom: 92px;
   }
+}
+
+/* Device ports: a front panel of small tiles; a lock marks a port a control method goes through. */
+.device-section-title small {
+  margin-left: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.device-port-panel {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+  gap: 6px;
+  border: 1px solid var(--gray-300);
+  border-radius: 10px;
+  background: var(--gray-100);
+  padding: 8px;
+}
+
+.device-port {
+  display: grid;
+  min-width: 0;
+  min-height: 48px;
+  align-content: start;
+  gap: 2px;
+  border: 1px solid var(--gray-300);
+  border-radius: var(--radius-sm);
+  background: var(--gray-0);
+  color: var(--gray-800);
+  padding: 6px 7px;
+  text-align: left;
+}
+
+.device-port:hover {
+  border-color: var(--gray-500);
+}
+
+.device-port.selected {
+  border-color: var(--primary-600);
+  box-shadow: 0 0 0 2px var(--primary-100);
+}
+
+.device-port.invalid {
+  border-color: var(--danger-600);
+}
+
+.device-port-head {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.device-port-head em {
+  overflow: hidden;
+  font-style: normal;
+  text-overflow: ellipsis;
+}
+
+.device-port-head em.empty {
+  color: var(--gray-400);
+  font-weight: 400;
+}
+
+.device-port-head span,
+.device-port-head svg {
+  flex: 0 0 auto;
+  color: var(--gray-500);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.device-port-use {
+  min-height: 16px;
+  overflow: hidden;
+  color: var(--gray-500);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.device-port.add {
+  place-items: center;
+  align-content: center;
+  border-style: dashed;
+  background: transparent;
+  color: var(--gray-500);
+}
+
+.device-port.add:hover,
+.device-port.add.selected {
+  color: var(--gray-900);
+}
+
+.device-port.add.selected {
+  border-style: solid;
+  background: var(--gray-0);
+}
+
+.device-port-add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.device-port-add input,
+.device-port-add select {
+  min-height: 32px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  outline: 0;
+  background-color: var(--gray-0);
+  color: var(--gray-800);
+  padding: 0 8px;
+  font-size: 13px;
+}
+
+.device-port-add input {
+  width: min(240px, 100%);
+}
+
+.device-port-add select {
+  padding-right: 30px;
+}
+
+.device-port-add input:focus,
+.device-port-add select:focus {
+  border-color: var(--primary-500);
+  box-shadow: 0 0 0 3px var(--ring);
+}
+
+.device-port-error {
+  color: var(--danger-600);
+  font-size: 12px;
+}
+
+.control-panel-head input.invalid {
+  border-color: var(--danger-600);
+}
+
+.control-card-port {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--gray-500);
+  font-size: 12px;
+}
+
+.device-port-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.device-port-tag {
+  display: inline-flex;
+  min-height: 20px;
+  align-items: center;
+  gap: 3px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--gray-600);
+  padding: 0 6px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.device-port-tag svg {
+  color: var(--gray-500);
+}
+
+.data-table.device-table th:nth-child(1) {
+  width: 18%;
+}
+
+.data-table.device-table th:nth-child(2) {
+  width: 11%;
+}
+
+.data-table.device-table th:nth-child(3) {
+  width: 22%;
+}
+
+.data-table.device-table th:nth-child(4) {
+  width: 27%;
+}
+
+.device-port-tags .cell-subtext {
+  margin-top: 0;
 }

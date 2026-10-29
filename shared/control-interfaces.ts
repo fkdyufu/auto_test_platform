@@ -33,6 +33,8 @@ export interface ControlInterface {
   id: string;
   name: string;
   kind: ControlKind;
+  /** Device-resource port used for this access method; independent of lab wiring. */
+  portId?: string;
   settings: Record<string, string>;
 }
 

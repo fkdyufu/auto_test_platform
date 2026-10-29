@@ -1,5 +1,5 @@
 import { useEffect, useRef, type KeyboardEvent } from "react";
-import { Box, ChevronLeft, Network, PlugZap, Plus, Router, SquareTerminal, Trash2 } from "lucide-react";
+import { Box, ChevronLeft, Lock, Network, PlugZap, Plus, Router, SquareTerminal, Trash2 } from "lucide-react";
 import type { ControlInterfaceInput, ControlKind, DeviceResource, DeviceResourceInput, DeviceTemplateId } from "../api";
 import {
   CONTROL_GROUPS,
@@ -13,6 +13,8 @@ import {
 } from "../../shared/control-interfaces";
 import { DEVICE_TEMPLATES, deviceTemplate, deviceTemplateName, type TemplateInterface } from "../../shared/device-templates";
 import { AutoResizeTextarea } from "./ui";
+import { DevicePortsEditor } from "./DevicePortsEditor";
+import { DEVICE_PORT_LABELS, parseDevicePorts } from "../../shared/device-ports";
 
 export interface DeviceEditorUi {
   step: "pick" | "form";
@@ -44,7 +46,7 @@ function interfaceFrom(item: TemplateInterface): ControlInterfaceInput {
 const freshUi = (step: DeviceEditorUi["step"], touched: boolean): DeviceEditorUi => ({ step, touched, adding: false, query: "", showErrors: false });
 
 export function newDeviceDialog(): DeviceDialogState {
-  return { kind: "device", form: { name: "", template: "custom", description: "", controlInterfaces: [] }, editor: freshUi("pick", false) };
+  return { kind: "device", form: { name: "", template: "custom", description: "", ports: [], controlInterfaces: [] }, editor: freshUi("pick", false) };
 }
 
 export function editDeviceDialog(device: DeviceResource): DeviceDialogState {
@@ -55,10 +57,12 @@ export function editDeviceDialog(device: DeviceResource): DeviceDialogState {
       name: device.name,
       template: device.template,
       description: device.description,
+      ports: structuredClone(device.ports || []),
       controlInterfaces: device.controlInterfaces.map((control) => ({
         id: control.id,
         name: control.name,
         kind: control.kind,
+        portId: control.portId || "",
         settings: { ...control.settings },
         secretsSet: [...control.secretsSet],
       })),
@@ -68,10 +72,13 @@ export function editDeviceDialog(device: DeviceResource): DeviceDialogState {
 }
 
 /** Problems that stop saving: an empty name, or interfaces with required fields left blank. */
-export function deviceFormProblems(form: DeviceResourceInput): { name: boolean; incomplete: string[] } | null {
+export function deviceFormProblems(form: DeviceResourceInput): { name: boolean; incomplete: string[]; ports?: string } | null {
   const incomplete = form.controlInterfaces.filter((control) => missingControlFields(control, control.secretsSet).length).map((control) => control.id);
   const name = !form.name.trim();
-  return name || incomplete.length ? { name, incomplete } : null;
+  let ports: string | undefined;
+  try { parseDevicePorts(form.ports || []); }
+  catch (error) { ports = error instanceof Error ? error.message : "请检查端口信息"; }
+  return name || incomplete.length || ports ? { name, incomplete, ports } : null;
 }
 
 /** The request body: secret boxes left empty keep the stored secret on the server. */
@@ -150,6 +157,7 @@ function DeviceForm({
   const panelRef = useRef<HTMLDivElement>(null);
   const focusNewInterface = useRef(false);
   const selected = form.controlInterfaces.find((control) => control.id === editor.selectedId);
+  const ports = form.ports || [];
 
   useEffect(() => {
     if (!focusNewInterface.current || !panelRef.current) return;
@@ -223,11 +231,19 @@ function DeviceForm({
         />
       </label>
 
-      <div className="device-section-title">控制接口</div>
+      <DevicePortsEditor
+        ports={ports}
+        controls={form.controlInterfaces}
+        showErrors={editor.showErrors}
+        onChange={(nextPorts, controlInterfaces) => setDialog({ ...dialog, form: { ...form, ports: nextPorts, controlInterfaces } })}
+      />
+
+      <div className="device-section-title">控制方式</div>
       <div className="control-cards">
         {form.controlInterfaces.map((control) => {
           const missing = missingControlFields(control, control.secretsSet).length > 0;
           const summary = missing ? "" : controlSummary(control);
+          const port = ports.find((item) => item.id === control.portId);
           const className = [
             "control-card",
             control.id === editor.selectedId && !editor.adding ? "selected" : "",
@@ -246,14 +262,15 @@ function DeviceForm({
                 {control.name && <span>{control.name}</span>}
               </span>
               <span className={summary ? "control-card-summary" : "control-card-summary empty"}>{summary || "未填写"}</span>
+              {port && <span className="control-card-port"><Lock size={11} />{port.name}</span>}
             </button>
           );
         })}
         <button
           type="button"
           className={editor.adding ? "control-card add selected" : "control-card add"}
-          title="添加控制接口"
-          aria-label="添加控制接口"
+          title="添加控制方式"
+          aria-label="添加控制方式"
           aria-expanded={editor.adding}
           onClick={() => setEditor({ adding: !editor.adding, query: "" })}
         >
@@ -300,6 +317,17 @@ function DeviceForm({
                 onChange={(value) => updateInterface(selected.id, { settings: { ...selected.settings, [field.key]: value } })}
               />
             ))}
+            {ports.length > 0 && (
+              <label className="control-field">
+                <span>物理端口</span>
+                <select value={selected.portId || ""} onChange={(event) => updateInterface(selected.id, { portId: event.target.value })}>
+                  <option value="">无</option>
+                  {ports.map((port) => (
+                    <option key={port.id} value={port.id}>{port.name.trim() || "未命名"}{port.kind === "ethernet" ? "" : ` · ${DEVICE_PORT_LABELS[port.kind]}`}</option>
+                  ))}
+                </select>
+              </label>
+            )}
           </div>
         </div>
       ) : null}

@@ -4,6 +4,7 @@ import {
   ChevronLeft,
   Layers3,
   Library,
+  Lock,
   Network,
   Pencil,
   Plus,
@@ -144,7 +145,7 @@ export function ResourcesPage({ product }: { product: ProductSummary }) {
       if (problems) {
         // Open the first unfinished interface so its red fields are visible.
         setDialog({ ...dialog, editor: { ...dialog.editor, showErrors: true, adding: false, selectedId: problems.incomplete[0] ?? dialog.editor.selectedId } });
-        setDialogError(problems.name && !problems.incomplete.length ? "请填写设备名称" : "请补全标红的内容");
+        setDialogError(problems.ports || (problems.name && !problems.incomplete.length ? "请填写设备名称" : "请补全标红的内容"));
         return;
       }
     }
@@ -231,13 +232,26 @@ export function ResourcesPage({ product }: { product: ProductSummary }) {
       ) : <div className="list-surface resource-list-surface">
         {tab === "devices" ? (
           <div className="table-wrap">
-            <table className="data-table">
-              <thead><tr><th>设备</th><th>类型</th><th>控制接口</th><th>说明</th><th aria-label="操作" /></tr></thead>
+            <table className="data-table device-table">
+              <thead><tr><th>设备</th><th>类型</th><th>端口</th><th>控制方式</th><th>说明</th><th aria-label="操作" /></tr></thead>
               <tbody>
                 {devices.map((device) => (
                   <tr key={device.id}>
                     <td><div className="device-name-cell"><span className="device-type-icon"><DeviceTypeIcon template={device.template} /></span><strong>{device.name}</strong></div></td>
                     <td>{device.templateName}</td>
+                    <td>
+                      {device.ports?.length ? (
+                        <div className="device-port-tags">
+                          {device.ports.slice(0, 8).map((port) => (
+                            <span key={port.id} className="device-port-tag">
+                              {device.controlInterfaces.some((control) => control.portId === port.id) && <Lock size={10} aria-label="控制" />}
+                              {port.name}
+                            </span>
+                          ))}
+                          {device.ports.length > 8 && <span className="cell-subtext">+{device.ports.length - 8}</span>}
+                        </div>
+                      ) : <span className="cell-subtext">-</span>}
+                    </td>
                     <td>
                       <div className="control-lines">
                         {device.controlInterfaces.map((item) => (
@@ -253,7 +267,7 @@ export function ResourcesPage({ product }: { product: ProductSummary }) {
                     </div></td>
                   </tr>
                 ))}
-                {!devices.length && <tr><td colSpan={5} className="table-empty"><Server size={24} />暂无设备资源</td></tr>}
+                {!devices.length && <tr><td colSpan={6} className="table-empty"><Server size={24} />暂无设备资源</td></tr>}
               </tbody>
             </table>
           </div>

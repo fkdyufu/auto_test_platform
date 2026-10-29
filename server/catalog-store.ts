@@ -34,6 +34,7 @@ import {
   type PublicControlInterface,
 } from "../shared/control-interfaces.js";
 import { deviceTemplateName, isDeviceTemplateId, templateFromLegacyTypes, type DeviceTemplateId } from "../shared/device-templates.js";
+import { parseDevicePorts, type DevicePort } from "../shared/device-ports.js";
 
 export type { PhysicalLab } from "../shared/physical-lab.js";
 export type { ControlInterface, ControlKind, PublicControlInterface } from "../shared/control-interfaces.js";
@@ -76,6 +77,7 @@ export interface DeviceResource {
   /** The type card picked when the device was added. */
   template: DeviceTemplateId;
   description: string;
+  ports?: DevicePort[];
   controlInterfaces: ControlInterface[];
   createdAt: string;
   updatedAt: string;
@@ -558,8 +560,9 @@ export class CatalogStore {
         productId,
         name: device.name,
         ...identity,
+        ports: device.ports || [],
         controlInterfaces: (device.controlInterfaces || []).map((control) => isControlKind(control.kind) && control.settings && typeof control.settings === "object"
-          ? { id: String(control.id), name: control.name || "", kind: control.kind, settings: Object.fromEntries(Object.entries(control.settings).map(([key, value]) => [key, String(value ?? "")])) }
+          ? { id: String(control.id), name: control.name || "", kind: control.kind, ...(control.portId ? { portId: String(control.portId) } : {}), settings: Object.fromEntries(Object.entries(control.settings).map(([key, value]) => [key, String(value ?? "")])) }
           : controlFromLegacy({
               id: String(control.id),
               name: control.name || "",
@@ -1063,7 +1066,8 @@ export class CatalogStore {
       }
       const missing = missingControlFields({ kind, settings });
       if (missing.length) throw new CatalogError(`控制接口“${label}”缺少${missing.map((field) => field.label).join("、")}`);
-      return { id, name, kind, settings };
+      const portId = Object.hasOwn(input, "portId") ? optionalText(input.portId, 100) : previous?.portId;
+      return { id, name, kind, settings, ...(portId ? { portId } : {}) };
     });
     if (new Set(controls.map((control) => control.id)).size !== controls.length) throw new CatalogError("控制接口 ID 重复");
     return controls;
@@ -1080,6 +1084,7 @@ export class CatalogStore {
           id: control.id,
           name: control.name,
           kind: control.kind,
+          ...(control.portId ? { portId: control.portId } : {}),
           settings: Object.fromEntries(Object.entries(control.settings).filter(([key]) => !secrets.includes(key))),
           secretsSet: secrets.filter((key) => Boolean(control.settings[key])),
         };
@@ -1130,10 +1135,12 @@ export class CatalogStore {
         productId,
         name,
         ...this.deviceIdentity(data, productId, input),
+        ports: this.normalizeDevicePorts(input.ports ?? []),
         controlInterfaces: this.normalizeControlInterfaces(input.controlInterfaces ?? []),
         createdAt: timestamp,
         updatedAt: timestamp,
       };
+      this.validateDevicePortBindings(device);
       data.deviceResources.push(device);
       return this.publicDevice(data, device);
     });
@@ -1149,10 +1156,24 @@ export class CatalogStore {
       device.name = name;
       device.template = identity.template;
       device.description = identity.description;
+      device.ports = input.ports === undefined ? device.ports || [] : this.normalizeDevicePorts(input.ports);
       device.controlInterfaces = this.normalizeControlInterfaces(input.controlInterfaces ?? [], device.controlInterfaces);
+      this.validateDevicePortBindings(device);
       device.updatedAt = new Date().toISOString();
       return this.publicDevice(data, device);
     });
+  }
+
+  private normalizeDevicePorts(value: unknown): DevicePort[] {
+    try { return parseDevicePorts(value); }
+    catch (error) { throw new CatalogError(error instanceof Error ? error.message : "设备端口格式不正确"); }
+  }
+
+  private validateDevicePortBindings(device: DeviceResource): void {
+    const ids = new Set((device.ports || []).map((port) => port.id));
+    for (const control of device.controlInterfaces) {
+      if (control.portId && !ids.has(control.portId)) throw new CatalogError(`控制方式“${control.name || CONTROL_KINDS[control.kind].label}”关联的设备端口不存在`);
+    }
   }
 
   async archiveDeviceResource(productId: string, id: string): Promise<void> {
