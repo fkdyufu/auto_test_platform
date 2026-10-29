@@ -63,6 +63,15 @@ export function formatTopologySetup(scenario: TopologyScenario, lab: PhysicalLab
   ].filter(Boolean).join("\n\n");
 }
 
+/**
+ * What the cleanup must do besides the topology. A scenario described by text keeps its cleanup text as written; with a
+ * topology, what the other preparation set up is undone too, so the cleanup text only adds what goes beyond it.
+ */
+export function formatOtherCleanup(scenario: Pick<TestScenario, "segments" | "setupInstructions" | "cleanupInstructions">): string {
+  const undo = scenario.segments.length && scenario.setupInstructions.trim() ? `撤销其他准备所做的配置：\n${scenario.setupInstructions.trim()}` : "";
+  return [scenario.cleanupInstructions.trim(), undo].filter(Boolean).join("\n\n") || "无";
+}
+
 /** What the cleanup must undo for the segments. */
 export function formatTopologyCleanup(scenario: TopologyScenario, lab: PhysicalLab | undefined, devices: DeviceResource[]): string {
   if (!scenario.segments.length) return "";

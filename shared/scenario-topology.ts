@@ -245,8 +245,8 @@ export function planScenarioTopology({ lab, devices, roles }: PlanContext, analy
       const label = `${entry.role?.key || "?"} ${entry.item.name}`;
       const physical = entry.device && entry.portName ? `（${entry.device.name} ${entry.portName}）` : "";
       const range = parseSubnet(segment.subnet);
-      if (!entry.item.address) plan.addresses.push(`${label}${physical}：清除地址，不配地址`);
-      else if (range) plan.addresses.push(`${label}${physical}：${entry.item.address}/${range.bits}`);
+      if (!entry.item.address) plan.addresses.push(`${label}${physical}：开启，清除地址，不配地址`);
+      else if (range) plan.addresses.push(`${label}${physical}：开启，${entry.item.address}/${range.bits}`);
       const path = entry.path;
       if (!path || direct || !segment.vlan) continue;
       if (path.kind === "switch") {

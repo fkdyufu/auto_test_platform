@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { CatalogStore } from "./catalog-store.js";
-import { formatScenarioTopology, formatTopologyCleanup, formatTopologySetup, scenarioTransitDeviceIds } from "./scenario-topology-prompt.js";
+import { formatOtherCleanup, formatScenarioTopology, formatTopologyCleanup, formatTopologySetup, scenarioTransitDeviceIds } from "./scenario-topology-prompt.js";
 import { analyzeScenarioTopology, planScenarioTopology, topologyProblems, type ScenarioSegment } from "../shared/scenario-topology.js";
 
 const port = (name: string, kind = "ethernet") => ({ id: `${name}-id`, name, kind, specification: "", note: "" });
@@ -72,8 +72,8 @@ test("the platform works out switch VLANs, addresses, checks and cleanup from th
   ] }]);
   assert.deepEqual(plan.passThrough, ["vswitch 2 口须已在 VLAN 181（源侧，平台不配置 vswitch）", "vswitch 4 口须已在 VLAN 182（目的侧，平台不配置 vswitch）"]);
   assert.deepEqual(plan.direct, ["镜像：TAU fe2 ↔ observer fe2 直连，不经过交换机"]);
-  assert.ok(plan.addresses.includes("TAU fe1（TAU1 FE1）：192.168.181.2/24"));
-  assert.ok(plan.addresses.includes("observer fe2（TAU2 FE2）：清除地址，不配地址"));
+  assert.ok(plan.addresses.includes("TAU fe1（TAU1 FE1）：开启，192.168.181.2/24"));
+  assert.ok(plan.addresses.includes("observer fe2（TAU2 FE2）：开启，清除地址，不配地址"));
   // Unused ports of role devices lose their addresses; management ports never do.
   assert.equal(plan.addresses.at(-1), "observer（TAU2）FE1、GE1：清除地址（本场景不用）");
   assert.ok(!plan.addresses.some((line) => /GE2|ens256/.test(line)));
@@ -147,6 +147,12 @@ test("prompts describe the topology, what to set up and undo, and bring the swit
   assert.match(setup, /拓扑验证：\n- 源侧：TAU fe1、src ens224 之间互相 ping 通/);
   assert.match(formatTopologyCleanup(scenario, lab, devices), /- switch 16 口 trunk 移除放行 VLAN 181、182/);
   assert.equal(formatScenarioTopology({ roles: f.roles, segments: [] }, lab, devices), "");
+
+  // Cleanup undoes the other preparation as well as doing what the cleanup text adds; a text-only scenario is unchanged.
+  const texts = { setupInstructions: "src 的默认网关指向 TAU 的 fe1。", cleanupInstructions: "删除 TAU 中的镜像配置。" };
+  assert.equal(formatOtherCleanup({ segments: f.segments, ...texts }), "删除 TAU 中的镜像配置。\n\n撤销其他准备所做的配置：\nsrc 的默认网关指向 TAU 的 fe1。");
+  assert.equal(formatOtherCleanup({ segments: [], ...texts }), "删除 TAU 中的镜像配置。");
+  assert.equal(formatOtherCleanup({ segments: [], setupInstructions: "", cleanupInstructions: "" }), "无");
 });
 
 test("upgrading to version 17 gives every scenario a topology and drops the ports roles used to pick", async (t) => {

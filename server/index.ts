@@ -25,7 +25,7 @@ import { createAssistantTools } from "./assistant-tools.js";
 import { buildAssistantPrompt } from "./assistant-context.js";
 import { resolveScenarioDevices } from "./scenario-devices.js";
 import { formatPhysicalLab } from "./physical-lab-prompt.js";
-import { formatScenarioTopology, formatTopologyCleanup, formatTopologySetup, scenarioTransitDeviceIds } from "./scenario-topology-prompt.js";
+import { formatOtherCleanup, formatScenarioTopology, formatTopologyCleanup, formatTopologySetup, scenarioTransitDeviceIds } from "./scenario-topology-prompt.js";
 import { CONTROL_KINDS, describeControlSettings } from "../shared/control-interfaces.js";
 import { deviceTemplateName } from "../shared/device-templates.js";
 import {
@@ -323,8 +323,7 @@ function buildScenarioCleanupRequirement(
   triggerReason: string,
 ): string {
   const topology = formatTopologyCleanup(scenario, context.physicalLab, context.labDevices || context.devices);
-  // A scenario with a topology may leave its cleanup text empty; what its preparation set up is then undone too.
-  const other = scenario.cleanupInstructions || (topology && scenario.setupInstructions ? `撤销以下准备所做的配置：\n${scenario.setupInstructions}` : "无");
+  const other = formatOtherCleanup(scenario);
   return `请清理测试场景。当前执行状态：${triggerReason}。无论此前执行是否成功，都应以恢复环境为目标。${buildDeviceDescription(context)}\n\n${buildScenarioDescription(scenario, scenarioRun, context)}${topology ? `\n\n${topology}` : ""}\n\n${topology ? "其他清理" : "场景清理要求"}：\n${other}\n\n请使用当前真正可用的工具执行清理并验证。当前未提供的控制接口不得假装已调用。完成后调用 finish_test 提交结论。`;
 }
 
