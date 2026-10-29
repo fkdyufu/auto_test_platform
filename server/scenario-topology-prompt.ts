@@ -19,7 +19,7 @@ function describePath(lab: PhysicalLab | undefined, path: TopologyPath | undefin
 }
 
 // Each setup writes the switches out in full again, so saving their configuration only costs time.
-const SWITCH_RULE = "交换机上只改动以上列出的端口和 VLAN，只改运行配置，不执行 save：每个场景搭建时都会重新写全交换机配置。";
+const SWITCH_RULE = "交换机上只改动以上列出的端口和 VLAN，只改运行配置，不执行 save：每个场景搭建时都会重新写全交换机配置。清除端口原有配置时用设备对应的命令，例如华为先 shutdown 再 clear configuration interface，然后重新配置并开启。";
 
 /** Managed switches the segments run through. The agent gets their tools although they are not scenario roles. */
 export function scenarioTransitDeviceIds(scenario: TopologyScenario, lab: PhysicalLab | undefined, devices: DeviceResource[]): string[] {

@@ -454,7 +454,7 @@ export function createDeviceTools(options: DeviceToolsOptions) {
   const telnetTool = defineTool({
     name: "device_telnet_exec",
     label: "Telnet 执行命令",
-    description: "通过已配置的 Telnet 接口执行 CLI 命令。当前 Agent 内保留连接和配置视图，同一接口命令串行执行；多行命令逐条等待提示符，报错后停止后续命令。输出保留提示符。连接中断不会自动重发命令，下次调用须确认并重新进入所需视图。",
+    description: "通过已配置的 Telnet 接口执行 CLI 命令。当前 Agent 内保留连接和配置视图，同一接口命令串行执行；多条命令用换行分隔、每行一条，不要用分号连接，逐条等待提示符，报错后停止后续命令。输出保留提示符。连接中断不会自动重发命令，下次调用须确认并重新进入所需视图。",
     parameters: Type.Object({
       ...commonParameters("telnet"),
       command: Type.String({ minLength: 1, maxLength: 20_000, description: SECRET_PLACEHOLDER_HINT }),
@@ -469,7 +469,7 @@ export function createDeviceTools(options: DeviceToolsOptions) {
     parameters: Type.Object({
       ...commonParameters("serial"),
       input: Type.String({ maxLength: 20_000, description: `发送内容；留空且 appendNewline=true 可发送回车，留空且 false 仅读取。${SECRET_PLACEHOLDER_HINT}` }),
-      waitMs: Type.Optional(Type.Number({ minimum: 100, maximum: 10_000 })),
+      waitMs: Type.Optional(Type.Number({ minimum: 100, maximum: 30_000, description: "发送后等待多久再读取，默认 1000 毫秒；重载网络等较慢的命令可加长，最多 30000" })),
       appendNewline: Type.Optional(Type.Boolean({ description: "是否自动追加 CRLF，默认 true" })),
     }),
     execute: async (_id, params, signal) => driver.serial(params, signal),

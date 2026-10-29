@@ -65,8 +65,8 @@ test("the platform works out switch VLANs, addresses, checks and cleanup from th
   const plan = planScenarioTopology({ lab, devices, roles: f.roles }, analysis);
   // The switch is written out in full: unused business ports shut, the uplink carries only what this scenario needs.
   assert.deepEqual(plan.switches, [{ deviceId: f.sw.id, name: "switch", lines: [
-    "VLAN 181（源侧）：9 口 access 并开启",
-    "VLAN 182（目的侧）：11 口 access 并开启",
+    "VLAN 181（源侧）：9 口清除原有配置后设为 access 并开启",
+    "VLAN 182（目的侧）：11 口清除原有配置后设为 access 并开启",
     "16 口 trunk：只放行控制所用的 VLAN 和 181、182，移除其他业务 VLAN",
     "10 口、13 口、14 口关闭（本场景不用的业务口）",
   ] }]);
@@ -141,7 +141,7 @@ test("prompts describe the topology, what to set up and undo, and bring the swit
   assert.match(description, /- 镜像（直连）\n  - TAU fe2 = TAU1 FE2（直连 TAU2 FE2），不配地址/);
   assert.match(description, /平台提供 switch 的控制工具用于搭建这些网段，它们不是场景角色/);
   const setup = formatTopologySetup(scenario, lab, devices);
-  assert.match(setup, /在 switch 上：\n- VLAN 181（源侧）：9 口 access 并开启\n- VLAN 182（目的侧）：11 口 access 并开启\n- 16 口 trunk：只放行控制所用的 VLAN 和 181、182，移除其他业务 VLAN\n- 10 口、13 口、14 口关闭（本场景不用的业务口）/);
+  assert.match(setup, /在 switch 上：\n- VLAN 181（源侧）：9 口清除原有配置后设为 access 并开启\n- VLAN 182（目的侧）：11 口清除原有配置后设为 access 并开启\n- 16 口 trunk：只放行控制所用的 VLAN 和 181、182，移除其他业务 VLAN\n- 10 口、13 口、14 口关闭（本场景不用的业务口）/);
   assert.match(setup, /- observer（TAU2）FE1、GE1：清除地址（本场景不用）/);
   assert.match(setup, /需要确认（平台不配置的设备）：\n- vswitch 2 口须已在 VLAN 181/);
   assert.match(setup, /拓扑验证：\n- 源侧：TAU fe1、src ens224 之间互相 ping 通/);

@@ -281,7 +281,7 @@ export function planScenarioTopology({ lab, devices, roles }: PlanContext, analy
     const accessPorts = new Set([...vlans.values()].flatMap((use) => [...use.ports]));
     const idle = ports.filter((port) => !accessPorts.has(port.id) && !uplinks.includes(port) && linkAt(device.id, port.id)?.role !== "control"
       && !device.controlInterfaces.some((control) => control.portId === port.id));
-    const lines = [...vlans].sort(([left], [right]) => byNumber(left, right)).map(([vlan, use]) => `VLAN ${vlan}（${use.segments.join("、")}）：${portList(device.id, use.ports)} access 并开启`);
+    const lines = [...vlans].sort(([left], [right]) => byNumber(left, right)).map(([vlan, use]) => `VLAN ${vlan}（${use.segments.join("、")}）：${portList(device.id, use.ports)}清除原有配置后设为 access 并开启`);
     for (const uplink of uplinks) {
       const carried = [...(uplinkVlans.get(`${device.id}\u0000${uplink.id}`) || [])].sort(byNumber);
       lines.push(`${portLabel(uplink.name)} trunk：只放行控制所用的 VLAN${carried.length ? ` 和 ${carried.join("、")}` : ""}，移除其他业务 VLAN`);
