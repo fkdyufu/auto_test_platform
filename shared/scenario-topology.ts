@@ -33,8 +33,8 @@ export interface TopologyDevice {
   id: string;
   name: string;
   template: string;
-  controlInterfaces: readonly unknown[];
-  ports?: readonly { id: string; name: string }[];
+  controlInterfaces: readonly { kind: string; portId?: string }[];
+  ports?: readonly { id: string; name: string; kind?: string }[];
 }
 
 /** Where a problem is fixed in the scenario editor. */
@@ -215,22 +215,33 @@ export interface TopologyPlan {
   cleanup: string[];
 }
 
-/** What the platform will set up, check and undo for the scenario's segments. */
-export function planScenarioTopology(lab: Pick<PhysicalLab, "nodes"> | undefined, analysis: readonly AnalyzedSegment[]): TopologyPlan {
-  const name = (nodeId: string) => (lab ? nodeName(lab, nodeId) : nodeId);
-  const port = (end: LabLinkEnd) => portLabel(lab?.nodes.find((node) => node.id === end.nodeId)?.ports.find((item) => item.id === end.portId)?.name || "?");
-  const switches = new Map<string, Map<string, { segments: string[]; access: string[]; trunk: string[] }>>();
-  const vlanOn = (deviceId: string, vlan: string, segment: string) => {
-    if (!switches.has(deviceId)) switches.set(deviceId, new Map());
-    const vlans = switches.get(deviceId)!;
-    if (!vlans.has(vlan)) vlans.set(vlan, { segments: [], access: [], trunk: [] });
-    const use = vlans.get(vlan)!;
-    if (!use.segments.includes(segment)) use.segments.push(segment);
-    return use;
-  };
+export interface PlanContext {
+  lab?: Pick<PhysicalLab, "nodes" | "links">;
+  devices: readonly TopologyDevice[];
+  roles: readonly TopologyRole[];
+}
+
+/**
+ * What the platform will set up, check and undo for the scenario's segments. Switches and addresses are written out
+ * in full, so a scenario starts the same whatever the one before it left: business ports a scenario does not use are
+ * shut, uplinks carry only control and this scenario's VLANs, and unused ports of role devices lose their addresses.
+ */
+export function planScenarioTopology({ lab, devices, roles }: PlanContext, analysis: readonly AnalyzedSegment[]): TopologyPlan {
+  const deviceById = new Map(devices.map((device) => [device.id, device]));
+  const linkAt = (nodeId: string, portId: string) => (lab && "links" in lab ? findLinkAt(lab, { nodeId, portId }) : undefined);
+  const portName = (deviceId: string, portId: string) => deviceById.get(deviceId)?.ports?.find((port) => port.id === portId)?.name || "?";
+  const byNumber = (left: string, right: string) => left.localeCompare(right, "zh-CN", { numeric: true });
+  const portList = (deviceId: string, portIds: Iterable<string>) => [...portIds].map((portId) => portName(deviceId, portId)).sort(byNumber).map(portLabel).join("、");
   const plan: TopologyPlan = { switches: [], passThrough: [], direct: [], addresses: [], verify: [], cleanup: [] };
+  if (!analysis.length) return plan;
+
+  // Access ports per switch and VLAN, and VLANs each uplink to an unmanaged switch must carry.
+  const access = new Map<string, Map<string, { segments: string[]; ports: Set<string> }>>();
+  const uplinkVlans = new Map<string, Set<string>>();
+  const usedPorts = new Set<string>();
   for (const { segment, interfaces, direct } of analysis) {
     for (const entry of interfaces) {
+      if (entry.device && entry.item.portId) usedPorts.add(`${entry.device.id}\u0000${entry.item.portId}`);
       const label = `${entry.role?.key || "?"} ${entry.item.name}`;
       const physical = entry.device && entry.portName ? `（${entry.device.name} ${entry.portName}）` : "";
       const range = parseSubnet(segment.subnet);
@@ -239,12 +250,17 @@ export function planScenarioTopology(lab: Pick<PhysicalLab, "nodes"> | undefined
       const path = entry.path;
       if (!path || direct || !segment.vlan) continue;
       if (path.kind === "switch") {
-        const use = vlanOn(path.access.nodeId, segment.vlan, segment.name);
-        if (!use.access.includes(port(path.access))) use.access.push(port(path.access));
+        if (!access.has(path.access.nodeId)) access.set(path.access.nodeId, new Map());
+        const vlans = access.get(path.access.nodeId)!;
+        if (!vlans.has(segment.vlan)) vlans.set(segment.vlan, { segments: [], ports: new Set() });
+        const use = vlans.get(segment.vlan)!;
+        if (!use.segments.includes(segment.name)) use.segments.push(segment.name);
+        use.ports.add(path.access.portId);
       } else if (path.kind === "via") {
-        const use = vlanOn(path.trunk.nodeId, segment.vlan, segment.name);
-        if (!use.trunk.includes(port(path.trunk))) use.trunk.push(port(path.trunk));
-        plan.passThrough.push(`${name(path.via.nodeId)} ${port(path.via)}须已在 VLAN ${segment.vlan}（${segment.name}，平台不配置 ${name(path.via.nodeId)}）`);
+        const key = `${path.trunk.nodeId}\u0000${path.trunk.portId}`;
+        if (!uplinkVlans.has(key)) uplinkVlans.set(key, new Set());
+        uplinkVlans.get(key)!.add(segment.vlan);
+        plan.passThrough.push(`${deviceById.get(path.via.nodeId)?.name || "?"} ${portLabel(portName(path.via.nodeId, path.via.portId))}须已在 VLAN ${segment.vlan}（${segment.name}，平台不配置 ${deviceById.get(path.via.nodeId)?.name || "?"}）`);
       }
     }
     if (direct) plan.direct.push(`${segment.name}：${interfaces.map((entry) => `${entry.role?.key} ${entry.item.name}`).join(" ↔ ")} 直连，不经过交换机`);
@@ -252,17 +268,39 @@ export function planScenarioTopology(lab: Pick<PhysicalLab, "nodes"> | undefined
     if (addressed.length >= 2) plan.verify.push(`${segment.name}：${addressed.map((entry) => `${entry.role?.key} ${entry.item.name}`).join("、")} 之间互相 ping 通`);
     else if (interfaces.length >= 2 && !addressed.length) plan.verify.push(`${segment.name}：没有地址，不做连通性验证`);
   }
-  const byNumber = (left: string, right: string) => left.localeCompare(right, "zh-CN", { numeric: true });
-  for (const [deviceId, vlans] of switches) {
-    const lines = [...vlans].map(([vlan, use]) => [
-      `VLAN ${vlan}（${use.segments.join("、")}）：`,
-      [use.access.length ? `${use.access.sort(byNumber).join("、")} access` : "", use.trunk.length ? `${use.trunk.sort(byNumber).join("、")} trunk 增加放行` : ""].filter(Boolean).join("；"),
-    ].join(""));
-    plan.switches.push({ deviceId, name: name(deviceId), lines });
-    const access = [...new Set([...vlans.values()].flatMap((use) => use.access))].sort(byNumber);
-    const trunk = [...new Set([...vlans.values()].flatMap((use) => use.trunk))].sort(byNumber);
-    if (access.length) plan.cleanup.push(`${name(deviceId)} ${access.join("、")}恢复为默认 VLAN`);
-    if (trunk.length) plan.cleanup.push(`${name(deviceId)} ${trunk.join("、")} trunk 移除放行 VLAN ${[...vlans.keys()].join("、")}`);
+
+  for (const device of devices.filter(isManagedSwitch)) {
+    const vlans = access.get(device.id) || new Map<string, { segments: string[]; ports: Set<string> }>();
+    const ports = device.ports || [];
+    const uplinks = ports.filter((port) => {
+      const link = linkAt(device.id, port.id);
+      const far = link ? otherEnd(link, { nodeId: device.id, portId: port.id }) : undefined;
+      const peer = far ? deviceById.get(far.nodeId) : undefined;
+      return isSwitch(peer) && !isManagedSwitch(peer);
+    });
+    const accessPorts = new Set([...vlans.values()].flatMap((use) => [...use.ports]));
+    const idle = ports.filter((port) => !accessPorts.has(port.id) && !uplinks.includes(port) && linkAt(device.id, port.id)?.role !== "control"
+      && !device.controlInterfaces.some((control) => control.portId === port.id));
+    const lines = [...vlans].sort(([left], [right]) => byNumber(left, right)).map(([vlan, use]) => `VLAN ${vlan}（${use.segments.join("、")}）：${portList(device.id, use.ports)} access 并开启`);
+    for (const uplink of uplinks) {
+      const carried = [...(uplinkVlans.get(`${device.id}\u0000${uplink.id}`) || [])].sort(byNumber);
+      lines.push(`${portLabel(uplink.name)} trunk：只放行控制所用的 VLAN${carried.length ? ` 和 ${carried.join("、")}` : ""}，移除其他业务 VLAN`);
+      if (carried.length) plan.cleanup.push(`${device.name} ${portLabel(uplink.name)} trunk 移除放行 VLAN ${carried.join("、")}`);
+    }
+    if (idle.length) lines.push(`${portList(device.id, idle.map((port) => port.id))}关闭（本场景不用的业务口）`);
+    if (accessPorts.size) plan.cleanup.unshift(`${device.name} ${portList(device.id, accessPorts)}关闭并恢复默认 VLAN`);
+    if (lines.length) plan.switches.push({ deviceId: device.id, name: device.name, lines });
+  }
+
+  // Unused ports of role devices lose their addresses. A device whose network control port is unknown is left alone,
+  // since clearing its management address would cut the platform off.
+  for (const role of roles) {
+    const device = deviceById.get(role.deviceId);
+    if (!device || isSwitch(device)) continue;
+    if (device.controlInterfaces.some((control) => control.kind !== "serial" && !control.portId)) continue;
+    const idle = (device.ports || []).filter((port) => (port.kind || "ethernet") === "ethernet" && !usedPorts.has(`${device.id}\u0000${port.id}`)
+      && linkAt(device.id, port.id)?.role !== "control" && !device.controlInterfaces.some((control) => control.portId === port.id));
+    if (idle.length) plan.addresses.push(`${role.key}（${device.name}）${idle.map((port) => port.name).join("、")}：清除地址（本场景不用）`);
   }
   if (plan.addresses.some((line) => /\/\d+$/.test(line))) plan.cleanup.push("删除以上接口地址");
   return plan;

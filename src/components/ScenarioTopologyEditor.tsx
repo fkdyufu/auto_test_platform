@@ -245,7 +245,7 @@ export function ScenarioTopologyEditor({
             )}
           </>}
 
-          {tab === "steps" && <Steps lab={lab} analysis={analysis} />}
+          {tab === "steps" && <Steps lab={lab} devices={devices} roles={form.roles} analysis={analysis} />}
 
           {tab === "cases" && cases}
         </div>
@@ -284,7 +284,7 @@ function MappingTab({
     const control = link?.role === "control";
     return { port, control, label: `${port.name}${link && lab ? ` → ${endLabel(lab, otherEnd(link, end))}` : "（未接线）"}${control ? "（控制）" : ""}` };
   });
-  const transit = [...new Set(planScenarioTopology(lab || undefined, analysis).switches.map((item) => item.name))];
+  const transit = [...new Set(planScenarioTopology({ lab: lab || undefined, devices, roles: form.roles }, analysis).switches.map((item) => item.name))];
   const segmentIssues = analysis.flatMap((item) => item.problems).filter((problem) => problem.area === "mapping");
   return <>
     {form.roles.map((role) => {
@@ -330,9 +330,9 @@ function MappingTab({
   </>;
 }
 
-function Steps({ lab, analysis }: { lab: PhysicalLab | null; analysis: AnalyzedSegment[] }) {
+function Steps({ lab, devices, roles, analysis }: { lab: PhysicalLab | null; devices: DeviceResource[]; roles: ScenarioRole[]; analysis: AnalyzedSegment[] }) {
   if (!analysis.length) return <p className="scn-muted">没有网段时，按其他准备执行。</p>;
-  const plan = planScenarioTopology(lab || undefined, analysis);
+  const plan = planScenarioTopology({ lab: lab || undefined, devices, roles }, analysis);
   const group = (title: string, items: string[], note?: string) => items.length ? (
     <div className="scn-steps" key={title}>
       <h4>{title}{note && <small>{note}</small>}</h4>

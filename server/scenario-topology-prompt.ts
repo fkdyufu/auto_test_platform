@@ -21,7 +21,7 @@ function describePath(lab: PhysicalLab | undefined, path: TopologyPath | undefin
 /** Managed switches the segments run through. The agent gets their tools although they are not scenario roles. */
 export function scenarioTransitDeviceIds(scenario: TopologyScenario, lab: PhysicalLab | undefined, devices: DeviceResource[]): string[] {
   if (!scenario.segments.length) return [];
-  return planScenarioTopology(lab, analyze(scenario, lab, devices)).switches.map((item) => item.deviceId);
+  return planScenarioTopology({ lab, devices, roles: scenario.roles }, analyze(scenario, lab, devices)).switches.map((item) => item.deviceId);
 }
 
 /** The logical topology for every phase: segments, the role interfaces in them, their addresses and device ports. */
@@ -39,7 +39,7 @@ export function formatScenarioTopology(scenario: TopologyScenario, lab: Physical
     `- ${segment.name}（${[direct && !segment.vlan ? "直连" : `VLAN ${segment.vlan}`, segment.subnet].filter(Boolean).join("，")}）`,
     ...interfaces.map((entry) => line(segment.subnet, entry)),
   ].join("\n"));
-  const switches = planScenarioTopology(lab, analysis).switches.map((item) => item.name);
+  const switches = planScenarioTopology({ lab, devices, roles: scenario.roles }, analysis).switches.map((item) => item.name);
   return [
     "场景拓扑（同一网段的接口二层互通；用例中的接口名指这里的接口）：",
     ...segments,
@@ -50,7 +50,7 @@ export function formatScenarioTopology(scenario: TopologyScenario, lab: Physical
 /** What the setup must do and check for the segments; empty for a scenario described by text only. */
 export function formatTopologySetup(scenario: TopologyScenario, lab: PhysicalLab | undefined, devices: DeviceResource[]): string {
   if (!scenario.segments.length) return "";
-  const plan = planScenarioTopology(lab, analyze(scenario, lab, devices));
+  const plan = planScenarioTopology({ lab, devices, roles: scenario.roles }, analyze(scenario, lab, devices));
   const list = (items: string[]) => items.map((item) => `- ${item}`).join("\n");
   return [
     "拓扑搭建（平台根据网段推导）：",
@@ -66,6 +66,6 @@ export function formatTopologySetup(scenario: TopologyScenario, lab: PhysicalLab
 /** What the cleanup must undo for the segments. */
 export function formatTopologyCleanup(scenario: TopologyScenario, lab: PhysicalLab | undefined, devices: DeviceResource[]): string {
   if (!scenario.segments.length) return "";
-  const plan = planScenarioTopology(lab, analyze(scenario, lab, devices));
+  const plan = planScenarioTopology({ lab, devices, roles: scenario.roles }, analyze(scenario, lab, devices));
   return plan.cleanup.length ? `拓扑清理（平台根据网段推导）：\n${plan.cleanup.map((item) => `- ${item}`).join("\n")}` : "";
 }

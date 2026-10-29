@@ -62,14 +62,27 @@ test("the platform works out switch VLANs, addresses, checks and cleanup from th
   const analysis = analyzeScenarioTopology({ lab, roles: f.roles, devices, segments: f.segments });
   assert.deepEqual(topologyProblems(analysis), []);
   assert.deepEqual(analysis.map((item) => item.direct), [false, false, true]);
-  const plan = planScenarioTopology(lab, analysis);
-  assert.deepEqual(plan.switches, [{ deviceId: f.sw.id, name: "switch", lines: ["VLAN 181（源侧）：9 口 access；16 口 trunk 增加放行", "VLAN 182（目的侧）：11 口 access；16 口 trunk 增加放行"] }]);
+  const plan = planScenarioTopology({ lab, devices, roles: f.roles }, analysis);
+  // The switch is written out in full: unused business ports shut, the uplink carries only what this scenario needs.
+  assert.deepEqual(plan.switches, [{ deviceId: f.sw.id, name: "switch", lines: [
+    "VLAN 181（源侧）：9 口 access 并开启",
+    "VLAN 182（目的侧）：11 口 access 并开启",
+    "16 口 trunk：只放行控制所用的 VLAN 和 181、182，移除其他业务 VLAN",
+    "10 口、13 口、14 口关闭（本场景不用的业务口）",
+  ] }]);
   assert.deepEqual(plan.passThrough, ["vswitch 2 口须已在 VLAN 181（源侧，平台不配置 vswitch）", "vswitch 4 口须已在 VLAN 182（目的侧，平台不配置 vswitch）"]);
   assert.deepEqual(plan.direct, ["镜像：TAU fe2 ↔ observer fe2 直连，不经过交换机"]);
   assert.ok(plan.addresses.includes("TAU fe1（TAU1 FE1）：192.168.181.2/24"));
   assert.ok(plan.addresses.includes("observer fe2（TAU2 FE2）：清除地址，不配地址"));
+  // Unused ports of role devices lose their addresses; management ports never do.
+  assert.equal(plan.addresses.at(-1), "observer（TAU2）FE1、GE1：清除地址（本场景不用）");
+  assert.ok(!plan.addresses.some((line) => /GE2|ens256/.test(line)));
   assert.deepEqual(plan.verify, ["源侧：TAU fe1、src ens224 之间互相 ping 通", "目的侧：TAU ge1、dst ens224 之间互相 ping 通", "镜像：没有地址，不做连通性验证"]);
-  assert.deepEqual(plan.cleanup, ["switch 9 口、11 口恢复为默认 VLAN", "switch 16 口 trunk 移除放行 VLAN 181、182", "删除以上接口地址"]);
+  assert.deepEqual(plan.cleanup, ["switch 9 口、11 口关闭并恢复默认 VLAN", "switch 16 口 trunk 移除放行 VLAN 181、182", "删除以上接口地址"]);
+
+  // Without a known management port the device's addresses are left alone rather than risk cutting it off.
+  const unknown = devices.map((device) => device.id === f.tau2.id ? { ...device, controlInterfaces: device.controlInterfaces.map(({ portId: _portId, ...control }) => control) } : device);
+  assert.ok(!planScenarioTopology({ lab, devices: unknown, roles: f.roles }, analysis).addresses.some((line) => line.startsWith("observer（TAU2）")));
 });
 
 test("topology problems say what is wrong and where it is fixed", async (t) => {
@@ -128,7 +141,8 @@ test("prompts describe the topology, what to set up and undo, and bring the swit
   assert.match(description, /- 镜像（直连）\n  - TAU fe2 = TAU1 FE2（直连 TAU2 FE2），不配地址/);
   assert.match(description, /平台提供 switch 的控制工具用于搭建这些网段，它们不是场景角色/);
   const setup = formatTopologySetup(scenario, lab, devices);
-  assert.match(setup, /在 switch 上：\n- VLAN 181（源侧）：9 口 access；16 口 trunk 增加放行/);
+  assert.match(setup, /在 switch 上：\n- VLAN 181（源侧）：9 口 access 并开启\n- VLAN 182（目的侧）：11 口 access 并开启\n- 16 口 trunk：只放行控制所用的 VLAN 和 181、182，移除其他业务 VLAN\n- 10 口、13 口、14 口关闭（本场景不用的业务口）/);
+  assert.match(setup, /- observer（TAU2）FE1、GE1：清除地址（本场景不用）/);
   assert.match(setup, /需要确认（平台不配置的设备）：\n- vswitch 2 口须已在 VLAN 181/);
   assert.match(setup, /拓扑验证：\n- 源侧：TAU fe1、src ens224 之间互相 ping 通/);
   assert.match(formatTopologyCleanup(scenario, lab, devices), /- switch 16 口 trunk 移除放行 VLAN 181、182/);
