@@ -145,7 +145,8 @@ test("prompts describe the topology, what to set up and undo, and bring the swit
   assert.match(setup, /- observer（TAU2）FE1、GE1：清除地址（本场景不用）/);
   assert.match(setup, /需要确认（平台不配置的设备）：\n- vswitch 2 口须已在 VLAN 181/);
   assert.match(setup, /拓扑验证：\n- 源侧：TAU fe1、src ens224 之间互相 ping 通/);
-  assert.match(formatTopologyCleanup(scenario, lab, devices), /- switch 16 口 trunk 移除放行 VLAN 181、182/);
+  assert.match(setup, /只改运行配置，不执行 save/);
+  assert.match(formatTopologyCleanup(scenario, lab, devices), /- switch 16 口 trunk 移除放行 VLAN 181、182\n- 删除以上接口地址\n交换机只改运行配置，不执行 save。/);
   assert.equal(formatScenarioTopology({ roles: f.roles, segments: [] }, lab, devices), "");
 
   // Cleanup undoes the other preparation as well as doing what the cleanup text adds; a text-only scenario is unchanged.

@@ -123,6 +123,22 @@ test("registers only tools available on the bound devices", () => {
   assert.deepEqual(createDeviceTools({ devices: [browserOnly], evidence: createToolEvidence() }).toolNames, []);
 });
 
+test("a tool only offers devices with its kind of interface, and a wrong pick says what the device has", () => {
+  const tau1: DeviceResource = { ...testDevice(), id: "tau1", name: "TAU1", controlInterfaces: [
+    { id: "web-1", name: "", kind: "web", settings: { url: "http://192.0.2.2/", username: "", password: "" } },
+    { id: "serial-1", name: "", kind: "serial", settings: { device: "/dev/ttyUSB0", baudRate: "115200", frame: "8N1", username: "", password: "" } },
+  ] };
+  const tau2 = { ...testDevice(), id: "tau2", name: "TAU2" };
+  const { tools } = createDeviceTools({ devices: [tau1, tau2], evidence: createToolEvidence() });
+  const ssh = tools.find((tool) => tool.name === "device_ssh_exec")!;
+  const deviceId = (ssh.parameters as { properties: { deviceId: { description: string; const?: string; anyOf?: { const: string }[] } } }).properties.deviceId;
+  assert.deepEqual(deviceId.anyOf?.map((item) => item.const) ?? [deviceId.const], ["tau2"]);
+  assert.match(deviceId.description, /只能是：TAU2（tau2）/);
+
+  const driver = new DeviceToolDriver([tau1, tau2], createToolEvidence(), mockAdapters([]));
+  assert.throws(() => driver.resolve("tau1", undefined, "ssh"), /设备“TAU1”未配置 SSH 控制接口；它可用的控制接口：Web\[web-1\]（browser_\* 工具）、串口\[serial-1\]（device_serial_exec）/);
+});
+
 test("aborts active device operations when the driver closes", async () => {
   const evidence = createToolEvidence();
   const adapters = mockAdapters([]);

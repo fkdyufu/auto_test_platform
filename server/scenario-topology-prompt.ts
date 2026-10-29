@@ -18,6 +18,9 @@ function describePath(lab: PhysicalLab | undefined, path: TopologyPath | undefin
   return `直连 ${end(path.peer.nodeId, path.peer.portId)}`;
 }
 
+// Each setup writes the switches out in full again, so saving their configuration only costs time.
+const SWITCH_RULE = "交换机上只改动以上列出的端口和 VLAN，只改运行配置，不执行 save：每个场景搭建时都会重新写全交换机配置。";
+
 /** Managed switches the segments run through. The agent gets their tools although they are not scenario roles. */
 export function scenarioTransitDeviceIds(scenario: TopologyScenario, lab: PhysicalLab | undefined, devices: DeviceResource[]): string[] {
   if (!scenario.segments.length) return [];
@@ -59,7 +62,7 @@ export function formatTopologySetup(scenario: TopologyScenario, lab: PhysicalLab
     plan.direct.length ? list(plan.direct) : "",
     plan.addresses.length ? `接口地址：\n${list(plan.addresses)}` : "",
     plan.verify.length ? `拓扑验证：\n${list(plan.verify)}` : "",
-    plan.switches.length ? `交换机上只改动以上列出的端口和 VLAN。` : "",
+    plan.switches.length ? SWITCH_RULE : "",
   ].filter(Boolean).join("\n\n");
 }
 
@@ -76,5 +79,6 @@ export function formatOtherCleanup(scenario: Pick<TestScenario, "segments" | "se
 export function formatTopologyCleanup(scenario: TopologyScenario, lab: PhysicalLab | undefined, devices: DeviceResource[]): string {
   if (!scenario.segments.length) return "";
   const plan = planScenarioTopology({ lab, devices, roles: scenario.roles }, analyze(scenario, lab, devices));
-  return plan.cleanup.length ? `拓扑清理（平台根据网段推导）：\n${plan.cleanup.map((item) => `- ${item}`).join("\n")}` : "";
+  if (!plan.cleanup.length) return "";
+  return `拓扑清理（平台根据网段推导）：\n${plan.cleanup.map((item) => `- ${item}`).join("\n")}${plan.switches.length ? "\n交换机只改运行配置，不执行 save。" : ""}`;
 }

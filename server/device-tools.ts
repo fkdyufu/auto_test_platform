@@ -313,12 +313,15 @@ export class DeviceToolDriver {
     if (!device) throw new Error(`设备不在当前 Agent 可用范围中：${deviceId}`);
     const label = CONTROL_KINDS[kind].label;
     const controls = device.controlInterfaces.filter((item) => item.kind === kind);
+    // Say what the device does have, so the agent switches tools instead of looking it up again.
+    const others = device.controlInterfaces.map((item) => `${item.name || CONTROL_KINDS[item.kind].label}[${item.id}]（${CONTROL_TOOL[item.kind]}）`).join("、");
+    const alternatives = others ? `；它可用的控制接口：${others}` : "；它没有任何控制接口";
     if (interfaceId) {
       const control = controls.find((item) => item.id === interfaceId);
-      if (!control) throw new Error(`设备“${device.name}”不存在指定的 ${label} 控制接口`);
+      if (!control) throw new Error(`设备“${device.name}”不存在指定的 ${label} 控制接口${alternatives}`);
       return { device, control };
     }
-    if (!controls.length) throw new Error(`设备“${device.name}”未配置 ${label} 控制接口`);
+    if (!controls.length) throw new Error(`设备“${device.name}”未配置 ${label} 控制接口${alternatives}`);
     if (controls.length > 1) {
       throw new Error(`设备“${device.name}”有多个 ${label} 控制接口，请提供 interfaceId：${controls.map((item) => `${item.name || label}[${item.id}]`).join("、")}`);
     }
@@ -416,19 +419,33 @@ export class DeviceToolDriver {
   }
 }
 
-const commonParameters = {
-  deviceId: Type.String({ description: "当前 Agent 可用范围内的设备 ID；必须先通过平台上下文提供的工具查询，不能猜测" }),
-  interfaceId: Type.Optional(Type.String({ description: "控制接口 ID；设备只有一个同类型接口时可省略" })),
+/** The tool, or tools, the agent uses for each kind of control interface. */
+const CONTROL_TOOL: Record<ControlKind, string> = {
+  ssh: "device_ssh_exec",
+  telnet: "device_telnet_exec",
+  serial: "device_serial_exec",
+  api: "device_http_request",
+  web: "browser_* 工具",
+  other: "无对应工具",
 };
 
 export function createDeviceTools(options: DeviceToolsOptions) {
   const driver = new DeviceToolDriver(options.devices, options.evidence, options.adapters);
+  // Each tool only accepts the devices that have its kind of interface, and names them, so a device without it is never tried.
+  const commonParameters = (kind: ControlKind) => {
+    const devices = options.devices.filter((device) => device.controlInterfaces.some((item) => item.kind === kind));
+    const description = `有${CONTROL_KINDS[kind].label}控制接口的设备 ID，只能是：${devices.map((device) => `${device.name}（${device.id}）`).join("、") || "无"}`;
+    return {
+      deviceId: devices.length ? Type.Union(devices.map((device) => Type.Literal(device.id)), { description }) : Type.String({ description }),
+      interfaceId: Type.Optional(Type.String({ description: "控制接口 ID；设备只有一个同类型接口时可省略" })),
+    };
+  };
   const sshTool = defineTool({
     name: "device_ssh_exec",
     label: "SSH 执行命令",
     description: "通过设备已配置的 SSH 控制接口执行命令。地址和凭据由平台根据设备 ID 获取。",
     parameters: Type.Object({
-      ...commonParameters,
+      ...commonParameters("ssh"),
       command: Type.String({ minLength: 1, maxLength: 20_000, description: SECRET_PLACEHOLDER_HINT }),
       timeoutMs: Type.Optional(Type.Number({ minimum: 1_000, maximum: 120_000 })),
     }),
@@ -439,7 +456,7 @@ export function createDeviceTools(options: DeviceToolsOptions) {
     label: "Telnet 执行命令",
     description: "通过已配置的 Telnet 接口执行 CLI 命令。当前 Agent 内保留连接和配置视图，同一接口命令串行执行；多行命令逐条等待提示符，报错后停止后续命令。输出保留提示符。连接中断不会自动重发命令，下次调用须确认并重新进入所需视图。",
     parameters: Type.Object({
-      ...commonParameters,
+      ...commonParameters("telnet"),
       command: Type.String({ minLength: 1, maxLength: 20_000, description: SECRET_PLACEHOLDER_HINT }),
       timeoutMs: Type.Optional(Type.Number({ minimum: 1_000, maximum: 120_000 })),
     }),
@@ -450,7 +467,7 @@ export function createDeviceTools(options: DeviceToolsOptions) {
     label: "串口交互",
     description: "向设备已配置的本地串口发送内容并读取响应。串口设备、波特率和数据格式按接口配置使用。",
     parameters: Type.Object({
-      ...commonParameters,
+      ...commonParameters("serial"),
       input: Type.String({ maxLength: 20_000, description: `发送内容；留空且 appendNewline=true 可发送回车，留空且 false 仅读取。${SECRET_PLACEHOLDER_HINT}` }),
       waitMs: Type.Optional(Type.Number({ minimum: 100, maximum: 10_000 })),
       appendNewline: Type.Optional(Type.Boolean({ description: "是否自动追加 CRLF，默认 true" })),
@@ -462,7 +479,7 @@ export function createDeviceTools(options: DeviceToolsOptions) {
     label: "设备 API 请求",
     description: "向设备已配置的 API 控制接口发送同源 HTTP 请求。平台按接口配置自动使用账号密码（Basic）或 Token（Bearer）认证。",
     parameters: Type.Object({
-      ...commonParameters,
+      ...commonParameters("api"),
       method: Type.Union([
         Type.Literal("GET"),
         Type.Literal("POST"),
