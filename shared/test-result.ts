@@ -31,3 +31,11 @@ export interface TestResultDetails {
   actual?: string;
   evidence?: string;
 }
+
+export type CaseRecoveryStatus = "restored" | "not_needed" | "failed";
+
+/** How the agent undid a case's own changes after its conclusion, so the next case starts from the scenario's state. */
+export interface CaseRecovery {
+  status: CaseRecoveryStatus;
+  summary: string;
+}

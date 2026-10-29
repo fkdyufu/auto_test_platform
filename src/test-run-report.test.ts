@@ -101,6 +101,19 @@ test("surfaces possible residual configuration in scenario cleanup issues", () =
   assert.match(report.scenarioIssues[0].reason, /环境可能残留配置/);
 });
 
+test("lists cases whose changes could not be undone before the cleanup issue", () => {
+  const unrecoveredRun = structuredClone(run);
+  unrecoveredRun.caseRuns[0].recovery = { status: "restored", summary: "已删除镜像规则" };
+  unrecoveredRun.caseRuns[1].recovery = { status: "failed", summary: "ge1 仍处于 shutdown" };
+
+  const report = buildTestRunReport(unrecoveredRun);
+
+  assert.deepEqual(report.scenarioIssues.map((issue) => [issue.phase, issue.reason]), [
+    ["用例恢复", "用例二：ge1 仍处于 shutdown"],
+    ["场景清理", "交换机配置恢复失败"],
+  ]);
+});
+
 test("keeps historical conclusions and includes structured fields on new failures", () => {
   const detailedRun = structuredClone(run);
   detailedRun.caseRuns[1].summary = "未观察到接管\n查看接口状态";

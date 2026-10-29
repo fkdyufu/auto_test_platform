@@ -341,6 +341,57 @@ async function updateStoredScenarioRun(
   });
 }
 
+/** Sets the scenario up. `failure` is empty once it is set up, or when the run was cancelled meanwhile. */
+async function executeScenarioSetup(
+  run: RunRecord,
+  testRunId: string,
+  scenario: TestScenario,
+  scenarioRun: ScenarioRun,
+  context: TestOrderExecutionContext,
+  settings: ModelSettings,
+  attempt = 1,
+): Promise<{ failure: string; modelRequestFailure?: ModelRequestError }> {
+  try {
+    const execution = await executePiRun({
+      runId: attempt > 1 ? `${scenarioRun.id}-setup-${attempt}` : `${scenarioRun.id}-setup`,
+      phase: "setup",
+      requirement: buildScenarioSetupRequirement(scenario, scenarioRun, context),
+      settings,
+      devices: context.devices,
+      onEvent: (event) => publish(run, {
+        ...event,
+        scenarioRunId: scenarioRun.id,
+        scenarioName: scenario.name,
+      }),
+      onAbortReady: (abort) => {
+        run.abort = abort;
+        if (run.cancelRequested) void abort();
+      },
+    });
+    if (run.cancelRequested) return { failure: "" };
+    const result = resolveRunResult(execution);
+    if (result.outcome === "failed") return { failure: result.fullText };
+    scenarioRun.summary = result.fullText;
+    await updateStoredScenarioRun(testRunId, scenarioRun.id, {
+      summary: scenarioRun.summary,
+    });
+    publish(run, {
+      type: "scenario_state",
+      status: "running",
+      message: `${scenario.name}：场景搭建及验证完成`,
+      scenarioRunId: scenarioRun.id,
+      scenarioName: scenario.name,
+    });
+    return { failure: "" };
+  } catch (error) {
+    if (run.cancelRequested) return { failure: "" };
+    return {
+      failure: error instanceof Error ? error.message : "场景搭建失败",
+      ...(isModelRequestError(error) ? { modelRequestFailure: error } : {}),
+    };
+  }
+}
+
 async function executeScenarioCleanup(
   run: RunRecord,
   scenario: TestScenario,
@@ -448,74 +499,33 @@ async function executeTestOrderRun(run: RunRecord, order: TestOrder, testRun: Te
       });
     } else if (!setupFailure && scenario) {
       setupAttempted = true;
-      try {
-        const execution = await executePiRun({
-          runId: `${scenarioRun.id}-setup`,
-          phase: "setup",
-          requirement: buildScenarioSetupRequirement(scenario, scenarioRun, executionContext),
-          settings,
-          devices: executionContext.devices,
-          onEvent: (event) => publish(run, {
-            ...event,
-            scenarioRunId: scenarioRun.id,
-            scenarioName: scenario.name,
-          }),
-          onAbortReady: (abort) => {
-            run.abort = abort;
-            if (run.cancelRequested) void abort();
-          },
-        });
-        if (!run.cancelRequested) {
-          const result = resolveRunResult(execution);
-          if (result.outcome === "failed") setupFailure = result.fullText;
-          else {
-            scenarioRun.summary = result.fullText;
-            await updateStoredScenarioRun(testRun.id, scenarioRun.id, {
-              summary: scenarioRun.summary,
-            });
-            publish(run, {
-              type: "scenario_state",
-              status: "running",
-              message: `${scenario.name}：场景搭建及验证完成`,
-              scenarioRunId: scenarioRun.id,
-              scenarioName: scenario.name,
-            });
-          }
-        }
-      } catch (error) {
-        if (!run.cancelRequested) {
-          setupFailure = error instanceof Error ? error.message : "场景搭建失败";
-          if (isModelRequestError(error)) modelRequestFailure = error;
-        }
-      }
+      ({ failure: setupFailure, modelRequestFailure } = await executeScenarioSetup(run, testRun.id, scenario, scenarioRun, executionContext, settings));
     }
 
-    if (setupFailure) {
+    // Cases that cannot run because the scenario could not be set up.
+    const failCases = async (caseRuns: CaseRun[], reason: string, detail: string) => {
       const finishedAt = new Date().toISOString();
-      failedCount += scenarioCaseRuns.length;
+      failedCount += caseRuns.length;
       scenarioFailure = true;
       scenarioHasFailure = true;
+      const ids = new Set(caseRuns.map((item) => item.id));
       await catalogStore.updateTestRun(testRun.id, (storedRun) => {
-        const storedScenarioRun = storedRun.scenarioRuns.find((item) => item.id === scenarioRun.id);
-        if (storedScenarioRun) Object.assign(storedScenarioRun, {
-          summary: setupFailure,
-        });
         storedRun.caseRuns
-          .filter((item) => scenarioRun.caseRunIds.includes(item.id))
+          .filter((item) => ids.has(item.id))
           .forEach((item) => Object.assign(item, {
             status: "failed",
             outcome: "failed",
-            summary: `场景搭建失败：${setupFailure}`,
+            summary: `${reason}：${detail}`,
             finishedAt,
           }));
       });
-      for (const caseRun of scenarioCaseRuns) {
+      for (const caseRun of caseRuns) {
         publish(run, {
           type: "case_result",
           status: "failed",
           outcome: "failed",
           error: true,
-          message: `${caseRun.caseNameSnapshot}：场景搭建失败，未执行用例；${setupFailure}`,
+          message: `${caseRun.caseNameSnapshot}：${reason}，未执行用例；${detail}`,
           testCaseId: caseRun.testCaseId,
           caseRunId: caseRun.id,
           caseName: caseRun.caseNameSnapshot,
@@ -523,11 +533,38 @@ async function executeTestOrderRun(run: RunRecord, order: TestOrder, testRun: Te
           scenarioName: scenarioRun.scenarioNameSnapshot,
         });
       }
+    };
+
+    if (setupFailure) {
+      await updateStoredScenarioRun(testRun.id, scenarioRun.id, { summary: setupFailure });
+      await failCases(scenarioCaseRuns, "场景搭建失败", setupFailure);
     }
 
+    // The last case's changes that could not be undone; the scenario is set up again before the next case.
+    let unrecovered = "";
+    let setupAttempts = 1;
     if (!setupFailure && !run.cancelRequested) {
-      for (const caseRun of scenarioCaseRuns) {
+      for (const [index, caseRun] of scenarioCaseRuns.entries()) {
         if (run.cancelRequested) break;
+        if (unrecovered && scenario && !scenario.isDefault) {
+          publish(run, {
+            type: "scenario_state",
+            status: "running",
+            message: `${scenario.name}：上一条用例未能恢复，重新搭建场景`,
+            scenarioRunId: scenarioRun.id,
+            scenarioName: scenario.name,
+          });
+          setupAttempts += 1;
+          const resetup = await executeScenarioSetup(run, testRun.id, scenario, scenarioRun, executionContext, settings, setupAttempts);
+          if (run.cancelRequested) break;
+          if (resetup.failure) {
+            modelRequestFailure = resetup.modelRequestFailure;
+            setupFailure = `上一条用例未能恢复，重新搭建时失败：${resetup.failure}`;
+            await failCases(scenarioCaseRuns.slice(index), "上一条用例未能恢复，场景重新搭建失败", resetup.failure);
+            break;
+          }
+        }
+        unrecovered = "";
         const caseStartedAt = new Date().toISOString();
         await updateStoredCaseRun(testRun.id, caseRun.id, { status: "running", startedAt: caseStartedAt });
         publish(run, {
@@ -547,6 +584,7 @@ async function executeTestOrderRun(run: RunRecord, order: TestOrder, testRun: Te
             phase: "case",
             requirement: buildCaseRequirement(caseRun, scenario!, scenarioRun, executionContext),
             stepCount: caseStepRows(caseRun).length,
+            recovery: true,
             settings,
             devices: executionContext.devices,
             onEvent: (event) =>
@@ -584,6 +622,7 @@ async function executeTestOrderRun(run: RunRecord, order: TestOrder, testRun: Te
             outcome: result.outcome,
             summary: result.message,
             resultDetails: result.details,
+            ...(execution.recovery ? { recovery: execution.recovery } : {}),
             finishedAt: new Date().toISOString(),
           });
           publish(run, {
@@ -598,6 +637,19 @@ async function executeTestOrderRun(run: RunRecord, order: TestOrder, testRun: Te
             scenarioRunId: scenarioRun.id,
             scenarioName: scenarioRun.scenarioNameSnapshot,
           });
+          if (execution.recovery?.status === "failed") {
+            unrecovered = execution.recovery.summary;
+            publish(run, {
+              type: "status",
+              error: true,
+              message: `${caseRun.caseNameSnapshot}：未能恢复本用例的改动，${scenario?.isDefault ? "默认场景无法重新搭建，后续用例可能受影响" : "下一条用例前会重新搭建场景"}；${unrecovered}`,
+              testCaseId: caseRun.testCaseId,
+              caseRunId: caseRun.id,
+              caseName: caseRun.caseNameSnapshot,
+              scenarioRunId: scenarioRun.id,
+              scenarioName: scenarioRun.scenarioNameSnapshot,
+            });
+          }
         } catch (error) {
           if (run.cancelRequested) {
             await updateStoredCaseRun(testRun.id, caseRun.id, {
@@ -611,10 +663,13 @@ async function executeTestOrderRun(run: RunRecord, order: TestOrder, testRun: Te
           failedCount += 1;
           scenarioHasFailure = true;
           const message = error instanceof Error ? error.message : "用例执行失败";
+          // The case stopped before it could undo its own changes.
+          unrecovered = "用例执行中断，没有恢复本用例的改动";
           await updateStoredCaseRun(testRun.id, caseRun.id, {
             status: "failed",
             outcome: "failed",
             summary: message,
+            recovery: { status: "failed", summary: unrecovered },
             finishedAt: new Date().toISOString(),
           });
           publish(run, {
@@ -644,7 +699,7 @@ async function executeTestOrderRun(run: RunRecord, order: TestOrder, testRun: Te
         setupAttempted,
         isDefault: scenario.isDefault,
         hasCleanupInstructions: Boolean(scenario.cleanupInstructions.trim()),
-        recoveryRequired: Boolean(setupFailure || scenarioHasFailure || run.cancelRequested),
+        recoveryRequired: Boolean(setupFailure || scenarioHasFailure || unrecovered || run.cancelRequested),
         modelRequestFailed: Boolean(modelRequestFailure),
       });
       if (cleanupDecision.action === "run") {
@@ -652,9 +707,11 @@ async function executeTestOrderRun(run: RunRecord, order: TestOrder, testRun: Te
           ? "用户已取消测试"
           : setupFailure
             ? `场景搭建失败：${setupFailure}`
-            : scenarioHasFailure
-              ? "场景内存在失败用例"
-              : "场景内用例已经执行完毕";
+            : unrecovered
+              ? `最后一条用例未能恢复：${unrecovered}`
+              : scenarioHasFailure
+                ? "场景内存在失败用例"
+                : "场景内用例已经执行完毕";
         const cleanup = await executeScenarioCleanup(
           run,
           scenario,

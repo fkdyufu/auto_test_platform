@@ -1,5 +1,5 @@
 import type { AssistantConversation, AssistantPageContext } from "../shared/assistant";
-import type { TestResultDetails } from "../shared/test-result";
+import type { CaseRecovery, TestResultDetails } from "../shared/test-result";
 import type { TestCaseStep } from "../shared/test-case-steps";
 import type { LabCable, PhysicalLab } from "../shared/physical-lab";
 import type { ControlKind, PublicControlInterface } from "../shared/control-interfaces";
@@ -199,6 +199,7 @@ export interface CaseRun {
   outcome?: TestOutcome;
   summary?: string;
   resultDetails?: TestResultDetails;
+  recovery?: CaseRecovery;
   startedAt?: string;
   finishedAt?: string;
 }

@@ -1,4 +1,4 @@
-import type { FailureType, StepCheckResult, TestResultDetails } from "./test-result.js";
+import type { CaseRecovery, FailureType, StepCheckResult, TestResultDetails } from "./test-result.js";
 import { stepRowsFromLegacy, type TestCaseStep } from "./test-case-steps.js";
 
 type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
@@ -15,6 +15,7 @@ interface CaseRun {
   outcome?: "passed" | "failed";
   summary?: string;
   resultDetails?: TestResultDetails;
+  recovery?: CaseRecovery;
   startedAt?: string;
   finishedAt?: string;
 }
@@ -59,7 +60,7 @@ export interface ReportCaseResult {
 export interface ReportScenarioIssue {
   id: string;
   scenarioName: string;
-  phase: "场景执行" | "场景清理";
+  phase: "场景执行" | "用例恢复" | "场景清理";
   reason: string;
 }
 
@@ -167,6 +168,15 @@ export function buildTestRunReport(run: ReportRunSource): TestRunReport {
         scenarioName: scenario.scenarioNameSnapshot,
         phase: "场景执行",
         reason: "测试执行已取消，场景内仍有用例未完成",
+      });
+    }
+    for (const caseRun of run.caseRuns) {
+      if (caseRun.scenarioRunId !== scenario.id || caseRun.recovery?.status !== "failed") continue;
+      scenarioIssues.push({
+        id: `${caseRun.id}-recovery`,
+        scenarioName: scenario.scenarioNameSnapshot,
+        phase: "用例恢复",
+        reason: `${caseRun.caseNameSnapshot}：${caseRun.recovery.summary}`,
       });
     }
     if (scenario.cleanupOutcome === "failed") {

@@ -66,6 +66,42 @@ test("diagnostic model requests require explicit current-turn device access and 
   assert.match(result.finalText, /根据历史记录/);
 });
 
+const recoveryCall = (status: string, summary: string) => ({ role: "assistant", tool_calls: [{ index: 0, id: "recovered", type: "function", function: { name: "finish_recovery", arguments: JSON.stringify({ status, summary }) } }] });
+const toolNames = (body: Record<string, unknown>) => (body.tools as { function: { name: string } }[]).map((tool) => tool.function.name);
+
+test("a case undoes its own changes in the same session once its conclusion is in", async (t) => {
+  const f = await fixture(t, (index) => ({
+    delta: index === 1 ? finishCall : index === 3 ? recoveryCall("not_needed", "") : { role: "assistant", content: "完成" },
+    finish: index === 1 || index === 3 ? "tool_calls" : "stop",
+  }));
+  const result = await executePiRun({ runId: "case-recovery", phase: "case", requirement: "检查镜像配置", settings: f.settings, onEvent: (event) => f.events.push(event), onAbortReady: () => {}, recovery: true });
+  assert.equal(result.result?.status, "failed");
+  assert.deepEqual(result.recovery, { status: "not_needed", summary: "本用例没有需要恢复的改动" });
+  assert.ok(toolNames(f.requests[0]).includes("finish_test"));
+  assert.ok(!toolNames(f.requests[0]).includes("finish_recovery"), "recovery is not offered before the conclusion");
+  assert.ok(toolNames(f.requests[2]).includes("finish_recovery"));
+  assert.ok(!toolNames(f.requests[2]).includes("finish_test"), "the conclusion cannot be changed during recovery");
+  assert.ok(toolNames(f.requests[2]).includes("browser_open"), "recovery can use the case's tools");
+  assert.match(JSON.stringify(f.requests[2].messages), /恢复本用例执行期间做出的改动/);
+  assert.ok(f.events.some((event) => event.message === "结论已提交，开始恢复本用例的改动"));
+});
+
+test("a recovery that is not reported gets one report-only turn, and an unreported one counts as failed", async (t) => {
+  const reported = await fixture(t, (index) => ({
+    delta: index === 1 ? finishCall : index === 4 ? recoveryCall("restored", "已删除镜像规则并确认") : { role: "assistant", content: "已恢复" },
+    finish: index === 1 || index === 4 ? "tool_calls" : "stop",
+  }));
+  const result = await executePiRun({ runId: "case-recovery", phase: "case", requirement: "配置镜像", settings: reported.settings, onEvent: () => {}, onAbortReady: () => {}, recovery: true });
+  assert.deepEqual(toolNames(reported.requests[3]), ["finish_recovery"]);
+  assert.deepEqual(result.recovery, { status: "restored", summary: "已删除镜像规则并确认" });
+
+  const silent = await fixture(t, (index) => ({ delta: index === 1 ? finishCall : { role: "assistant", content: "已恢复" }, finish: index === 1 ? "tool_calls" : "stop" }));
+  const unreported = await executePiRun({ runId: "case-recovery", phase: "case", requirement: "配置镜像", settings: silent.settings, onEvent: () => {}, onAbortReady: () => {}, recovery: true });
+  assert.equal(unreported.result?.status, "failed", "the conclusion is kept");
+  assert.equal(unreported.recovery?.status, "failed");
+  assert.match(unreported.recovery?.summary || "", /未提交恢复结果/);
+});
+
 test("unfinished runs get exactly one finish-only recovery without repeating device actions", async (t) => {
   const f = await fixture(t, (index) => ({ delta: index === 1 ? { role: "assistant", content: "准备继续分析" } : index === 2 ? finishCall : { role: "assistant", content: "已提交失败结论" }, finish: index === 2 ? "tool_calls" : "stop" }));
   const result = await f.execute();

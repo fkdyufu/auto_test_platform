@@ -3,7 +3,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AssetChange, AssetDifference, AssetKind, AssetPreview, LabChange, LabOperation, LabPreview } from "../shared/assistant.js";
 import { applyLabOperations, diffPhysicalLab } from "./lab-changes.js";
-import type { TestResultDetails } from "../shared/test-result.js";
+import type { CaseRecovery, TestResultDetails } from "../shared/test-result.js";
 import { parseStepRows, stepRowsFromLegacy, stepRowsToText, type TestCaseStep } from "../shared/test-case-steps.js";
 import {
   DEFAULT_PLATFORM_NAME,
@@ -168,6 +168,8 @@ export interface CaseRun {
   outcome?: TestOutcome;
   summary?: string;
   resultDetails?: TestResultDetails;
+  /** How the case's own changes were undone after its conclusion. */
+  recovery?: CaseRecovery;
   startedAt?: string;
   finishedAt?: string;
 }
