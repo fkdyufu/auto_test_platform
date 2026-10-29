@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { Bot, Lock, Pencil, Plus, Trash2, X } from "lucide-react";
+import { Lock, Pencil, Plus, Trash2, X } from "lucide-react";
 import {
   api,
   type DeviceResource,
@@ -27,9 +27,7 @@ import {
   sameEnd,
 } from "../../shared/physical-lab";
 import { CONTROL_KINDS, controlSummary } from "../../shared/control-interfaces";
-import { checkPhysicalLab, describeLabIssue, type LabIssue } from "../../shared/lab-checks";
-import { useAssistantAsk } from "../components/AssistantContext";
-import { deviceRequest, editDeviceDialog } from "../components/DeviceEditor";
+import { checkPhysicalLab } from "../../shared/lab-checks";
 import { labelWidth, layoutLab, type PlacedNode } from "../lab-layout";
 import { AutoResizeTextarea, Modal, type Notice } from "../components/ui";
 
@@ -85,7 +83,6 @@ export function PhysicalLabView({
   lab,
   devices,
   onLabChange,
-  onReload,
   onEditDevice,
   onNotice,
   onFocusChange,
@@ -94,8 +91,6 @@ export function PhysicalLabView({
   lab: PhysicalLab;
   devices: DeviceResource[];
   onLabChange: (lab: PhysicalLab) => void;
-  /** Reads devices and the lab again after a device was saved from here. */
-  onReload: () => Promise<void>;
   /** Device ports are edited with the device, so the lab only links to its editor. */
   onEditDevice: (deviceId: string) => void;
   onNotice: (notice: Notice) => void;
@@ -111,8 +106,12 @@ export function PhysicalLabView({
   const [nodeDialogError, setNodeDialogError] = useState("");
   const [busy, setBusy] = useState(false);
   const deviceById = useMemo(() => new Map(devices.map((device) => [device.id, device])), [devices]);
-  const issues = useMemo(() => checkPhysicalLab(lab, devices), [lab, devices]);
-  const ask = useAssistantAsk();
+  // Gaps in the registration, shown as a mark on the node they belong to.
+  const issues = useMemo(() => {
+    const byNode = new Map<string, string[]>();
+    for (const issue of checkPhysicalLab(lab, devices)) byNode.set(issue.nodeId, [...byNode.get(issue.nodeId) || [], issue.text]);
+    return byNode;
+  }, [lab, devices]);
   const wiringRef = useRef<HTMLElement | null>(null);
 
   const layout = useMemo(() => {
@@ -202,36 +201,6 @@ export function PhysicalLabView({
     }
   };
 
-  const showIssue = (issue: LabIssue) => {
-    setFocusId(issue.nodeId);
-    setView("panel");
-    setSelected(issue.portId ? { nodeId: issue.nodeId, portId: issue.portId } : null);
-    wiringRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-  };
-
-  const applySuggestion = async (issue: LabIssue) => {
-    const device = deviceById.get(issue.nodeId);
-    if (!issue.suggestion || !device) return;
-    const { controlId, portId, portName } = issue.suggestion;
-    // The port a control method goes through is part of the device, so the device is saved.
-    const { form } = editDeviceDialog(device);
-    form.controlInterfaces = form.controlInterfaces.map((control) => control.id === controlId ? { ...control, portId } : control);
-    try {
-      setBusy(true);
-      await api.updateDeviceResource(product.id, device.id, deviceRequest(form));
-      await onReload();
-      onNotice({ kind: "success", message: `已指定经 ${portName}` });
-    } catch (error) {
-      onNotice({ kind: "error", message: error instanceof Error ? error.message : "保存失败" });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const askAssistant = () => {
-    ask?.(`物理环境检查发现以下问题，请读取物理环境后处理，能确定的直接提出修改，不能确定的先问我：\n${issues.map((issue, index) => `${index + 1}. ${describeLabIssue(issue)}`).join("\n")}`);
-  };
-
   const removeExternal = async (node: LabNode) => {
     const linkCount = lab.links.filter((link) => touches(link, node.id)).length;
     if (!window.confirm(`确定删除“${node.name}”吗？${linkCount ? `它的 ${linkCount} 条接线会一起删除。` : ""}`)) return;
@@ -243,34 +212,6 @@ export function PhysicalLabView({
 
   return (
     <div className="lab-view">
-      {issues.length > 0 && (
-        <section className="lab-card lab-checks">
-          <header className="lab-card-head">
-            <div><h2>接线检查</h2><span>{issues.length} 项待完善</span></div>
-            {ask && (
-              <button type="button" className="button secondary compact" onClick={askAssistant}>
-                <Bot size={15} />交给助手
-              </button>
-            )}
-          </header>
-          <ul className="lab-check-list">
-            {issues.map((issue) => (
-              <li key={issue.key}>
-                <button type="button" className="lab-check-text" onClick={() => showIssue(issue)}>{issue.text}</button>
-                {issue.suggestion && (
-                  <>
-                    <span className="lab-check-reason">{issue.suggestion.reason}</span>
-                    <button type="button" className="button secondary compact" disabled={busy} onClick={() => void applySuggestion(issue)}>
-                      设为 {issue.suggestion.portName}
-                    </button>
-                  </>
-                )}
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
       <section className="lab-card">
         <header className="lab-card-head">
           <div><h2>环境规则</h2><span>所有场景的搭建、用例、清理和诊断都会带上</span></div>
@@ -318,6 +259,7 @@ export function PhysicalLabView({
             lab={lab}
             layout={layout}
             deviceById={deviceById}
+            issues={issues}
             focusId={view === "panel" ? focusNode?.id : undefined}
             selected={selected}
             onFocus={(nodeId) => {
@@ -336,7 +278,7 @@ export function PhysicalLabView({
 
       <section className="lab-card" ref={wiringRef}>
         <header className="lab-card-head">
-          <div><h2>接线登记</h2><span>{lab.nodes.length} 个节点 · {portCount} 个端口 · {lab.links.length} 条连线{lab.links.length > 0 && !issues.length ? " · 检查通过" : ""}</span></div>
+          <div><h2>接线登记</h2><span>{lab.nodes.length} 个节点 · {portCount} 个端口 · {lab.links.length} 条连线</span></div>
           <div className="lab-segmented" role="tablist" aria-label="登记方式">
             <button type="button" role="tab" aria-selected={view === "panel"} className={view === "panel" ? "active" : ""} onClick={() => setView("panel")}>端口面板</button>
             <button type="button" role="tab" aria-selected={view === "device"} className={view === "device" ? "active" : ""} onClick={() => setView("device")}>按设备</button>
@@ -636,6 +578,7 @@ function Topology({
   lab,
   layout,
   deviceById,
+  issues,
   focusId,
   selected,
   onFocus,
@@ -644,6 +587,8 @@ function Topology({
   lab: PhysicalLab;
   layout: ReturnType<typeof layoutLab>;
   deviceById: Map<string, DeviceResource>;
+  /** Node ID -> problems found in its registration. */
+  issues: Map<string, string[]>;
   focusId?: string;
   selected: LabLinkEnd | null;
   onFocus: (nodeId: string) => void;
@@ -766,9 +711,12 @@ function Topology({
             const position = positions[node.id];
             if (!position) return null;
             const className = ["lab-node", node.kind, node.id === hub && lab.links.length ? "hub" : "", highlightedNodes.has(node.id) ? "hl" : ""].filter(Boolean).join(" ");
+            const problems = issues.get(node.id);
             return (
               <g key={node.id} className={className} onClick={() => onFocus(node.id)}>
+                {problems && <title>{problems.join("\n")}</title>}
                 <rect x={position.x - position.w / 2} y={position.y - position.h / 2} width={position.w} height={position.h} rx={8} />
+                {problems && <circle className="flag" cx={position.x + position.w / 2 - 9} cy={position.y - position.h / 2 + 9} r={3.5} />}
                 <text className="name" x={position.x} y={position.y - 3} textAnchor="middle">{node.name}</text>
                 <text className="sub" x={position.x} y={position.y + 13} textAnchor="middle">{nodeShortSubtitle(node, deviceById.get(node.id))}</text>
               </g>

@@ -229,7 +229,6 @@ export function ResourcesPage({ product }: { product: ProductSummary }) {
             lab={lab}
             devices={devices}
             onLabChange={setLab}
-            onReload={reload}
             onEditDevice={(deviceId) => {
               const device = devices.find((item) => item.id === deviceId);
               if (!device) return;

@@ -4423,64 +4423,6 @@ body.assistant-resizing { cursor: ew-resize; user-select: none; }
   white-space: nowrap;
 }
 
-.lab-check-list {
-  display: grid;
-  margin: 0;
-  padding: 6px 18px 10px;
-  list-style: none;
-}
-
-.lab-check-list li {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 4px 12px;
-  border-bottom: 1px solid var(--gray-150);
-  padding: 8px 0;
-}
-
-.lab-check-list li:last-child {
-  border-bottom: 0;
-}
-
-.lab-check-text {
-  display: inline-flex;
-  min-width: 0;
-  align-items: center;
-  gap: 8px;
-  border: 0;
-  background: none;
-  padding: 0;
-  color: var(--gray-800);
-  font: inherit;
-  font-size: 13px;
-  text-align: left;
-  cursor: pointer;
-}
-
-.lab-check-text::before {
-  flex-shrink: 0;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--warning-600);
-  content: "";
-}
-
-.lab-check-text:hover {
-  color: var(--primary-700);
-}
-
-.lab-check-reason {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.lab-check-list .button {
-  margin-left: auto;
-}
-
 .lab-edge-labels rect {
   fill: var(--gray-0);
   stroke: var(--gray-300);
@@ -4542,6 +4484,10 @@ body.assistant-resizing { cursor: ew-resize; user-select: none; }
 .lab-node text.sub {
   fill: var(--gray-500);
   font-size: 11px;
+}
+
+.lab-node .flag {
+  fill: var(--danger-600);
 }
 
 .lab-edge,
