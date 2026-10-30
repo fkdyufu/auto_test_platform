@@ -11,6 +11,7 @@ import {
   type TopologyProblem,
 } from "../../shared/scenario-topology";
 import { labLayout, Topology } from "../pages/PhysicalLabView";
+import { layoutScenario } from "../scenario-layout";
 import { AutoResizeTextarea } from "./ui";
 
 type Tab = TopologyArea | "other" | "steps" | "cases";
@@ -379,7 +380,7 @@ function exitPoint(center: { x: number; y: number }, halfW: number, halfH: numbe
   return { x: center.x + dx * t, y: center.y + dy * t };
 }
 
-/** Roles in several segments sit in the middle, each segment around them, and a segment's other roles beyond it. */
+/** The logical topology, laid out by how its roles and segments connect (see `layoutScenario`). */
 function LogicalDiagram({ roles, devices, analysis, selectedId, onSelect }: {
   roles: ScenarioRole[];
   devices: DeviceResource[];
@@ -387,39 +388,26 @@ function LogicalDiagram({ roles, devices, analysis, selectedId, onSelect }: {
   selectedId: string;
   onSelect: (id: string) => void;
 }) {
-  const W = 720;
-  const C = { x: 360, y: 240 };
-  const count = new Map(roles.map((role) => [role.id, 0]));
-  const rolesIn = (segment: ScenarioSegment) => [...new Set(segment.interfaces.map((item) => item.roleId))];
-  analysis.forEach(({ segment }) => rolesIn(segment).forEach((id) => count.set(id, (count.get(id) || 0) + 1)));
-  const hubs = roles.filter((role) => (count.get(role.id) || 0) >= 2);
-  const preferred: Record<number, number[]> = { 1: [-90], 2: [-90, 90], 3: [180, 0, 90], 4: [180, 0, -90, 90] };
-  const angles = preferred[analysis.length] || analysis.map((_, index) => -90 + (360 * index) / analysis.length);
-  const rad = (deg: number) => (deg * Math.PI) / 180;
-  const rolePos = new Map<string, { x: number; y: number }>();
-  hubs.forEach((role, index) => rolePos.set(role.id, { x: C.x + (index - (hubs.length - 1) / 2) * 150, y: C.y }));
-  const pills = analysis.map(({ segment, direct }, index) => {
-    const angle = rad(angles[index]);
-    const sub = direct && !segment.vlan ? "直连" : `VLAN ${segment.vlan || "?"}`;
-    const pill = { segment, sub, x: C.x + Math.cos(angle) * 218, y: C.y + Math.sin(angle) * 125, w: Math.max(textWidth(segment.name, 12), textWidth(sub, 10.5)) + 26, h: 36 };
-    const leaves = rolesIn(segment).filter((id) => count.get(id) === 1);
-    const sideways = Math.abs(Math.cos(angle)) > 0.7;
-    leaves.forEach((id, j) => {
-      const spread = (j - (leaves.length - 1) / 2) * 112;
-      rolePos.set(id, sideways ? { x: pill.x + spread, y: pill.y - 100 } : { x: pill.x + spread, y: pill.y + (Math.sign(Math.sin(angle)) || -1) * 90 });
-    });
-    return pill;
-  });
-  roles.filter((role) => !rolePos.has(role.id)).forEach((role, index) => rolePos.set(role.id, { x: 64 + index * 108, y: 30 }));
   if (!roles.length) return <p className="scn-muted scn-empty">先在「拓扑」里添加角色。</p>;
-
+  const layout = layoutScenario(roles.map((role) => role.id), analysis.map(({ segment }) => ({ id: segment.id, roleIds: [...new Set(segment.interfaces.map((item) => item.roleId))] })));
+  const rolePos = layout.roles;
+  const pills = analysis.map(({ segment, direct }) => {
+    const sub = direct && !segment.vlan ? "直连" : `VLAN ${segment.vlan || "?"}`;
+    const at = layout.segments.get(segment.id)!;
+    return { segment, sub, x: at.x, y: at.y, w: Math.max(textWidth(segment.name, 12), textWidth(sub, 10.5)) + 26, h: 36 };
+  });
+  // The drawing is as large as what is in it, with room for interface labels at the sides.
+  const xs = [...rolePos.values()].flatMap((p) => [p.x - ROLE_W / 2, p.x + ROLE_W / 2]).concat(pills.flatMap((p) => [p.x - p.w / 2, p.x + p.w / 2]));
   const ys = [...rolePos.values()].flatMap((p) => [p.y - ROLE_H / 2, p.y + ROLE_H / 2]).concat(pills.flatMap((p) => [p.y - p.h / 2, p.y + p.h / 2]));
+  const left = Math.min(...xs) - 80;
   const top = Math.min(...ys) - 24;
+  const width = Math.max(...xs) + 80 - left;
   const height = Math.max(...ys) + 24 - top;
+  const C = { x: left + width / 2, y: top + height / 2 };
   const deviceName = (id: string) => devices.find((device) => device.id === id)?.name || "未绑定";
   return (
     <div className="scn-logic">
-      <svg viewBox={`0 ${top} ${W} ${height}`} role="img" aria-label="逻辑拓扑">
+      <svg viewBox={`${left} ${top} ${width} ${height}`} role="img" aria-label="逻辑拓扑">
         {analysis.flatMap(({ segment, interfaces }, index) => {
           const pill = pills[index];
           const selected = segment.id === selectedId;
